@@ -47,6 +47,7 @@ def _format_for(track: Track) -> str:
 
 class TrackTableModel(QAbstractTableModel):
     check_changed = Signal()
+    check_toggled = Signal(int)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -139,6 +140,7 @@ class TrackTableModel(QAbstractTableModel):
             else:
                 self.checked.discard(track_id)
             self.dataChanged.emit(index, index, [Qt.CheckStateRole])
+            self.check_toggled.emit(track_id)
             self.check_changed.emit()
             return True
         return False

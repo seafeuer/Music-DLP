@@ -14,6 +14,16 @@ from pathlib import Path
 from musicdlp import APP_NAME
 
 
+def _home_override() -> Path | None:
+    """Isolated home for tests, demos, and parallel runs.
+
+    Setting MUSICDLP_HOME keeps a test run from touching the real user
+    configuration, library, or logs.
+    """
+    value = os.environ.get("MUSICDLP_HOME")
+    return Path(value).expanduser() if value else None
+
+
 def is_frozen() -> bool:
     """True when running from a PyInstaller build."""
     return bool(getattr(sys, "frozen", False))
@@ -33,6 +43,9 @@ def is_portable() -> bool:
 
 def data_dir() -> Path:
     """Persistent data (config, database)."""
+    override = _home_override()
+    if override is not None:
+        return override / "data"
     if is_portable():
         return app_root() / "data"
     base = os.environ.get("APPDATA")
@@ -41,6 +54,9 @@ def data_dir() -> Path:
 
 def local_dir() -> Path:
     """Machine-local data (logs, caches)."""
+    override = _home_override()
+    if override is not None:
+        return override / "local"
     if is_portable():
         return app_root() / "data"
     base = os.environ.get("LOCALAPPDATA")
@@ -68,8 +84,13 @@ def art_cache_dir() -> Path:
 
 
 def default_output_dir() -> Path:
-    """Where converted files go unless the user chooses otherwise."""
-    return Path.home() / "Music" / "MusicDLP"
+    """Where converted files go unless the user chooses otherwise.
+
+    Kept outside the user's Music and Downloads folders on purpose:
+    Spotify scans both of those by default, and mixing these songs in with
+    everything else there makes Local Files confusing.
+    """
+    return Path.home() / "MusicDLP"
 
 
 def default_spotify_dir() -> Path:

@@ -299,6 +299,10 @@ class Database:
         ).fetchone()
         return Track.from_row(row) if row else None
 
+    def get_all_tracks(self) -> list[Track]:
+        rows = self._conn().execute("SELECT * FROM tracks ORDER BY id").fetchall()
+        return [Track.from_row(row) for row in rows]
+
     def update_track(self, track_id: int, **fields: Any) -> None:
         values = {k: v for k, v in fields.items() if k in TRACK_UPDATABLE}
         if not values:

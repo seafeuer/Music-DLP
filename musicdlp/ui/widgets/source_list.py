@@ -30,6 +30,7 @@ class SourceListModel(QAbstractListModel):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.rows: list[tuple[Source, dict[str, int]]] = []
+        self.duplicate_titles: set[str] = set()
 
     def rowCount(self, parent=QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self.rows)
@@ -53,6 +54,13 @@ class SourceListModel(QAbstractListModel):
     ) -> None:
         self.beginResetModel()
         self.rows = [(source, counts.get(source.id, {})) for source in sources]
+        # Two links can carry the same text (for example two tweets from the
+        # same account). Remember which titles repeat so the list can tell
+        # them apart.
+        seen: dict[str, int] = {}
+        for source, _counts in self.rows:
+            seen[source.title] = seen.get(source.title, 0) + 1
+        self.duplicate_titles = {title for title, n in seen.items() if n > 1}
         self.endResetModel()
 
     def source_at(self, row: int) -> Optional[Source]:
@@ -134,15 +142,21 @@ class SourceDelegate(QStyledItemDelegate):
         title_font.setBold(True)
         painter.setFont(title_font)
         painter.setPen(option.palette.text().color())
+
+        title = source.title
+        if title in source_model.duplicate_titles:
+            marker = (source.external_id or source.url)[-4:]
+            title = f"{title}  ·{marker}"
         title = QFontMetrics(title_font).elidedText(
-            source.title, Qt.ElideRight, text_rect.width()
+            title, Qt.ElideRight, text_rect.width()
         )
         painter.drawText(text_rect, Qt.AlignLeft | Qt.AlignTop, title)
 
         total = sum(counts.values())
         downloaded = _downloaded_count(counts)
         errors = counts.get(ERROR, 0)
-        subtitle = f"{total} tracks · {downloaded} downloaded"
+        track_word = "song" if total == 1 else "songs"
+        subtitle = f"{total} {track_word} · {downloaded} downloaded"
         if errors:
             subtitle += f" · {errors} error" + ("" if errors == 1 else "s")
 

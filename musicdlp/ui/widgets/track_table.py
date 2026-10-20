@@ -7,8 +7,8 @@ from typing import Iterable, Optional
 from PySide6.QtCore import QModelIndex, Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QHBoxLayout, QHeaderView, QLabel,
-    QLineEdit, QMenu, QPushButton, QStackedWidget, QTableView, QVBoxLayout,
-    QWidget,
+    QLineEdit, QMenu, QPushButton, QStackedWidget, QTableView, QToolButton,
+    QVBoxLayout, QWidget,
 )
 
 from musicdlp.core.models import ERROR, NEW, Source, Track, TrackRow
@@ -85,21 +85,26 @@ class TrackTableWidget(QWidget):
         self.edit_button.setEnabled(False)
         filter_row.addWidget(self.edit_button)
 
-        for text, handler in [
-            ("Select all", self.model.check_all),
-            ("Select new", lambda: self.model.check_status(NEW)),
-            ("Select failed", lambda: self.model.check_status(ERROR)),
-            ("Clear", self.model.clear_checks),
-        ]:
-            button = QPushButton(text)
-            button.clicked.connect(handler)
-            filter_row.addWidget(button)
+        # Selection lives in one menu so the row stays readable when the
+        # window is narrow.
+        self.select_button = QToolButton()
+        self.select_button.setText("Select")
+        self.select_button.setPopupMode(QToolButton.InstantPopup)
+        select_menu = QMenu(self.select_button)
+        select_menu.addAction("All songs", self.model.check_all)
+        select_menu.addAction("Not downloaded", lambda: self.model.check_status(NEW))
+        select_menu.addAction("Failed", lambda: self.model.check_status(ERROR))
+        select_menu.addSeparator()
+        select_menu.addAction("Clear selection", self.model.clear_checks)
+        self.select_button.setMenu(select_menu)
+        filter_row.addWidget(self.select_button)
 
         layout.addLayout(filter_row)
 
         # Table ------------------------------------------------------------
         self.stack = QStackedWidget()
         self.table = QTableView()
+        self.mode = "easy"
         self.table.setModel(self.proxy)
         self.table.setSortingEnabled(True)
         self.table.sortByColumn(COL_POSITION, Qt.AscendingOrder)
@@ -135,8 +140,8 @@ class TrackTableWidget(QWidget):
         self.table.setColumnWidth(COL_ARTIST, 130)
         self.table.setColumnWidth(COL_DURATION, 58)
         self.table.setColumnWidth(COL_FORMAT, 72)
-        self.table.setColumnWidth(COL_STATUS, 142)
-        self.table.setColumnWidth(COL_PROGRESS, 92)
+        self.table.setColumnWidth(COL_STATUS, 132)
+        self.table.setColumnWidth(COL_PROGRESS, 84)
 
         self.stack.addWidget(self.table)
         self.empty_label = QLabel("Nothing here yet.")
@@ -148,7 +153,9 @@ class TrackTableWidget(QWidget):
         layout.addWidget(self.stack, 1)
 
         self.model.check_changed.connect(self._on_checks_changed)
+        self.model.check_toggled.connect(self._select_by_track_id)
         self.table.selectionModel().selectionChanged.connect(self._on_selection_changed)
+        self._apply_column_visibility()
 
     # ------------------------------------------------------------------ data
 
@@ -157,6 +164,7 @@ class TrackTableWidget(QWidget):
         source: Optional[Source],
         rows: Iterable[TrackRow],
         checked: Optional[Iterable[int]] = None,
+        selected_track_id: Optional[int] = None,
     ) -> None:
         self.source = source
         self.search.clear()
@@ -170,12 +178,31 @@ class TrackTableWidget(QWidget):
         else:
             self.title_label.setText(source.title)
             uploader = source.uploader or "Unknown channel"
+            count = len(self.model.rows)
             self.subtitle_label.setText(
-                f"{uploader} · {len(self.model.rows)} tracks"
+                f"{uploader} · {count} song{'' if count == 1 else 's'}"
             )
+
+        # Keep the highlighted song across a refresh, so the details panel
+        # does not lose the song the user was working on.
+        if selected_track_id is not None:
+            self._select_by_track_id(selected_track_id)
+
         self._update_counts()
         self._update_empty_state()
         self.edit_button.setEnabled(self.current_row() is not None)
+
+    def _select_by_track_id(self, track_id: int) -> None:
+        row = self.model.row_for_id(track_id)
+        if row is None:
+            return
+        source_index = self.model.index(row, COL_TITLE)
+        proxy_index = self.proxy.mapFromSource(source_index)
+        if proxy_index.isValid():
+            self.table.setCurrentIndex(proxy_index)
+            self.table.scrollTo(
+                proxy_index, QAbstractItemView.PositionAtCenter
+            )
 
     def update_track(self, track: Track) -> None:
         self.model.replace_track(track)
@@ -204,7 +231,29 @@ class TrackTableWidget(QWidget):
         return None
 
     def set_mode(self, mode: str) -> None:
-        self.table.setColumnHidden(COL_FORMAT, mode == "easy")
+        self.mode = mode
+        self._apply_column_visibility()
+
+    def _apply_column_visibility(self) -> None:
+        """Hide optional columns when there is not enough width for them.
+
+        This keeps the Status column readable instead of forcing a
+        horizontal scrollbar and clipping it.
+        """
+        width = self.table.viewport().width()
+        mode = getattr(self, "mode", "easy")
+
+        show_format = mode == "pro" and width >= 620
+        show_progress = width >= 520
+        show_channel = width >= 430
+
+        self.table.setColumnHidden(COL_FORMAT, not show_format)
+        self.table.setColumnHidden(COL_PROGRESS, not show_progress)
+        self.table.setColumnHidden(COL_ARTIST, not show_channel)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._apply_column_visibility()
 
     # --------------------------------------------------------------- helpers
 

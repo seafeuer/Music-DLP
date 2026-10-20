@@ -365,7 +365,7 @@ class MainWindow(QMainWindow):
 
         self.inspector_action = QAction("Show details panel", self)
         self.inspector_action.setCheckable(True)
-        self.inspector_action.setChecked(self.settings.mode == "pro")
+        self.inspector_action.setChecked(True)
         self.inspector_action.toggled.connect(
             lambda visible: self.inspector_scroll.setVisible(visible)
         )
@@ -466,6 +466,11 @@ class MainWindow(QMainWindow):
         source = self.db.get_source(source_id)
         if source is None:
             return
+        current = self.track_table.current_row()
+        keep_selected = current.track.id if current is not None else None
+        if self._current_source_id != source_id:
+            keep_selected = None
+
         self._current_source_id = source_id
         self.settings.last_source_id = source_id
         rows = self.db.get_tracks_for_source(source_id)
@@ -473,8 +478,13 @@ class MainWindow(QMainWindow):
         if checked is None:
             checked = {row.track.id for row in rows if row.track.status == "new"}
         self._checked_by_source[source_id] = set(checked)
-        self.track_table.set_source(source, rows, checked)
-        self.inspector.set_row(None)
+        self.track_table.set_source(
+            source, rows, checked, selected_track_id=keep_selected
+        )
+        if keep_selected is None:
+            self.inspector.set_row(None)
+        else:
+            self.inspector.set_row(self.track_table.current_row())
         self._update_actions()
 
     def _reload_current_source(self) -> None:
@@ -482,9 +492,7 @@ class MainWindow(QMainWindow):
             self._load_source(self._current_source_id)
 
     def _on_selection_changed(self, *_args) -> None:
-        row = self.track_table.current_row()
-        if self.settings.mode == "pro":
-            self.inspector.set_row(row)
+        self.inspector.set_row(self.track_table.current_row())
 
     def _on_checked_changed(self) -> None:
         if self._current_source_id is not None:
@@ -705,15 +713,20 @@ class MainWindow(QMainWindow):
             return
         stages = summary.get("stages") or []
         index_by_stage = {"download": 0, "convert": 1, "sync": 2}
-        last_index = -1
-        for stage in stages:
-            index = index_by_stage.get(stage)
-            if index is not None:
-                last_index = max(last_index, index)
-        for stage in stages:
-            index = index_by_stage.get(stage)
-            if index is None:
-                continue
+        indexes = [
+            index_by_stage[stage] for stage in stages
+            if stage in index_by_stage
+        ]
+        if not indexes:
+            return
+        last_index = max(indexes)
+
+        # Steps before the first one that ran were already complete, so show
+        # them as done rather than leaving a confusing gap.
+        for index in range(min(indexes)):
+            self.steps.set_step(index, DONE, "Already done")
+
+        for index in indexes:
             if summary.get("failed") and index == last_index:
                 self.steps.set_step(index, STEP_ERROR, "Finished with errors")
             else:
@@ -1171,12 +1184,10 @@ class MainWindow(QMainWindow):
 
     def _apply_mode(self) -> None:
         self.track_table.set_mode(self.settings.mode)
-        show_inspector = self.settings.mode == "pro"
-        self.inspector_scroll.setVisible(show_inspector)
-        self.inspector_action.setChecked(show_inspector)
-        # Switching to Pro should show the highlighted song immediately.
-        if show_inspector:
-            self.inspector.set_row(self.track_table.current_row())
+        # The details panel stays visible in both modes: it is where a song
+        # is understood and edited, and hiding it made editing undiscoverable.
+        self.inspector_scroll.setVisible(self.inspector_action.isChecked())
+        self.inspector.set_row(self.track_table.current_row())
 
     def _open_spotify(self) -> None:
         dialog = SpotifyDialog(self.settings.spotify_dir, self.ctx.spotify, self)
@@ -1300,6 +1311,18 @@ class MainWindow(QMainWindow):
             pass
 
     # ---------------------------------------------------------------- events
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._apply_responsive_layout()
+
+    def _apply_responsive_layout(self) -> None:
+        """Give the song list room on smaller windows."""
+        width = self.width()
+        if width < 1200:
+            self.splitter.setSizes([210, max(420, width - 210 - 300), 300])
+        else:
+            self.splitter.setSizes([260, max(520, width - 260 - 340), 340])
 
     def dragEnterEvent(self, event) -> None:
         if event.mimeData().hasUrls() or event.mimeData().hasText():

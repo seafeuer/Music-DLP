@@ -14,6 +14,7 @@ from musicdlp import APP_NAME, __version__
 from musicdlp.core.config import Settings
 from musicdlp.core.db import Database
 from musicdlp.core.logging import setup_logging
+from musicdlp.core.maintenance import repair_library
 from musicdlp.core.paths import db_path, ensure_app_dirs, log_dir
 from musicdlp.services.legacy_import import find_legacy_db, import_legacy
 from musicdlp.ui.dialogs.setup import SetupDialog
@@ -97,6 +98,15 @@ def main() -> int:
 
     db = Database(db_path())
     ctx = build_context(settings, db, logger)
+
+    # Recover files that were left in an old or temporary folder.
+    try:
+        notes = repair_library(db, settings)
+        for note in notes:
+            logger.info(note)
+        ctx.rebuild(settings)
+    except Exception as exc:
+        logger.warning("Library repair skipped: %s", exc)
 
     if not settings.first_run_done:
         wizard = SetupDialog(settings, ctx.ffmpeg, ctx.spotify)

@@ -72,7 +72,8 @@ def test_rows_and_default_selection(window):
     assert main.track_table.checked_count() == 2
     assert main.settings.mode == "easy"
     assert main.action_layout.count() == 1
-    assert main.inspector_scroll.isHidden()
+    # The details panel is visible in both modes so editing stays discoverable.
+    assert not main.inspector_scroll.isHidden()
 
 
 def test_pro_mode_and_inspector(window):
