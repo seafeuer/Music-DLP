@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QApplication
 
 from musicdlp.core.models import (
     CANCELLED, CONVERTED, CONVERTING, DOWNLOADED, DOWNLOADING, ERROR,
-    NEW, QUEUED, SYNCED, SYNCING,
+    NEEDS_UPDATE, NEW, QUEUED, SYNCED, SYNCING,
 )
 
 # (background, foreground) for status pills. Light pills with dark text read
@@ -24,6 +24,7 @@ STATUS_COLORS: dict[str, tuple[str, str]] = {
     SYNCED: ("#bbf7d0", "#14532d"),
     ERROR: ("#fee2e2", "#991b1b"),
     CANCELLED: ("#e5e7eb", "#4b5563"),
+    NEEDS_UPDATE: ("#ffedd5", "#9a3412"),
 }
 
 ACCENT = "#3b82f6"

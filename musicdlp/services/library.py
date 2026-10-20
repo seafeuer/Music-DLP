@@ -10,7 +10,9 @@ from typing import Callable, Iterable, Optional
 from musicdlp.core.config import Settings
 from musicdlp.core.db import Database
 from musicdlp.core.errors import AppError, Cancelled
-from musicdlp.core.models import is_downloaded
+from musicdlp.core.models import is_converted, is_downloaded
+from musicdlp.core.paths import art_cache_dir
+from musicdlp.services.filenames import safe_stem
 from musicdlp.services.ytdlp import YtDlpService
 
 logger = logging.getLogger("musicdlp.library")
@@ -177,12 +179,78 @@ class LibraryService:
         album: str = "",
         track_number: Optional[int] = None,
     ) -> None:
+        """Save edited metadata and flag the written file as out of date."""
+        track = self.db.get_track(track_id)
         self.db.update_track(
             track_id,
             meta_title=(title or "").strip() or None,
             meta_artist=(artist or "").strip() or None,
             meta_album=(album or "").strip() or None,
             meta_track=track_number,
+            # A converted file still holds the old tags and filename.
+            needs_update=1 if track and is_converted(track.status) else 0,
+        )
+
+    def set_cover(self, track_id: int, image_path: Optional[Path]) -> Optional[Path]:
+        """Use a user-chosen image as the cover art for a track.
+
+        The image is copied into the app cache so it survives the original
+        file being moved or deleted.
+        """
+        track = self.db.get_track(track_id)
+        if track is None:
+            return None
+
+        if image_path is None:
+            self.db.update_track(
+                track_id,
+                cover_path=None,
+                needs_update=1 if is_converted(track.status) else 0,
+            )
+            return None
+
+        source = Path(image_path)
+        if not source.exists():
+            raise AppError("That image could not be found.", kind="file")
+
+        destination = art_cache_dir() / f"custom_{track.platform}_{safe_stem(track.media_id, 60)}.jpg"
+        try:
+            from PIL import Image, ImageOps
+
+            image = Image.open(source)
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+            image = ImageOps.fit(
+                image, (640, 640),
+                method=Image.Resampling.LANCZOS,
+                centering=(0.5, 0.5),
+            )
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            image.save(destination, "JPEG", quality=92, optimize=True)
+        except Exception as exc:
+            raise AppError(
+                "That file could not be used as an image.",
+                "Choose a JPG or PNG picture.",
+                kind="file",
+                cause=exc,
+            ) from exc
+
+        self.db.update_track(
+            track_id,
+            cover_path=str(destination),
+            needs_update=1 if is_converted(track.status) else 0,
+        )
+        return destination
+
+    def restore_video_cover(self, track_id: int) -> None:
+        """Drop a custom cover so the next conversion re-fetches the video's."""
+        track = self.db.get_track(track_id)
+        if track is None:
+            return
+        self.db.update_track(
+            track_id,
+            cover_path=None,
+            needs_update=1 if is_converted(track.status) else 0,
         )
 
     # ------------------------------------------------------------- cleanup

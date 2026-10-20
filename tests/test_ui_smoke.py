@@ -83,8 +83,9 @@ def test_pro_mode_and_inspector(window):
     assert main.action_layout.count() == 3
 
     main.track_table.table.selectRow(0)
-    assert main.inspector.title_edit.text() == "Song 1"
-    assert main.inspector.artist_edit.text() == "Test channel"
+    assert main.inspector.title_label.text() == "Song 1"
+    assert main.inspector.artist_label.text() == "Test channel"
+    assert main.track_table.edit_button.isEnabled()
 
 
 def test_progress_filter_and_search(window):

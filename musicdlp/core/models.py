@@ -17,10 +17,11 @@ SYNCING = "syncing"
 SYNCED = "synced"
 ERROR = "error"
 CANCELLED = "cancelled"
+NEEDS_UPDATE = "needs_update"
 
 STATUSES = (
     NEW, QUEUED, DOWNLOADING, DOWNLOADED, CONVERTING, CONVERTED,
-    SYNCING, SYNCED, ERROR, CANCELLED,
+    SYNCING, SYNCED, ERROR, CANCELLED, NEEDS_UPDATE,
 )
 
 DOWNLOADED_STATES = (DOWNLOADED, CONVERTING, CONVERTED, SYNCING, SYNCED)
@@ -40,7 +41,17 @@ def status_label(status: str) -> str:
         SYNCED: "In Spotify",
         ERROR: "Error",
         CANCELLED: "Cancelled",
+        NEEDS_UPDATE: "Needs update",
     }.get(status, status.title())
+
+
+def display_status(track: "Track") -> str:
+    """The status a person should see, including pending metadata edits."""
+    if track.needs_update and is_converted(track.status):
+        return NEEDS_UPDATE
+    if track.sync_error and track.status in CONVERTED_STATES:
+        return ERROR
+    return track.status
 
 
 def is_downloaded(status: str) -> bool:
@@ -126,6 +137,7 @@ class Track:
     converted_at: Optional[str]
     synced_at: Optional[str]
     sync_error: Optional[str] = None
+    needs_update: bool = False
 
     @classmethod
     def from_row(cls, row: Mapping[str, Any]) -> "Track":
@@ -154,6 +166,9 @@ class Track:
             converted_at=row["converted_at"],
             synced_at=row["synced_at"],
             sync_error=row["sync_error"] if "sync_error" in row.keys() else None,
+            needs_update=bool(
+                row["needs_update"] if "needs_update" in row.keys() else 0
+            ),
         )
 
     @property

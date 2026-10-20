@@ -22,7 +22,7 @@ from musicdlp.ui.models.track_model import (
 
 class TrackTableWidget(QWidget):
     checked_changed = Signal()
-    row_activated = Signal(int)
+    edit_details_requested = Signal(int)
     retry_requested = Signal(int)
     reconvert_requested = Signal(int)
     remove_requested = Signal(int)
@@ -59,10 +59,11 @@ class TrackTableWidget(QWidget):
 
         self.filter_combo = QComboBox()
         for label, value in [
-            ("All tracks", "all"),
+            ("All songs", "all"),
             ("Not downloaded", "new"),
             ("Downloaded", "downloaded"),
             ("Converted", "converted"),
+            ("Needs update", "needs_update"),
             ("Errors", "errors"),
         ]:
             self.filter_combo.addItem(label, value)
@@ -74,6 +75,15 @@ class TrackTableWidget(QWidget):
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self.proxy.set_search)
         filter_row.addWidget(self.search, 1)
+
+        self.edit_button = QPushButton("Edit details…")
+        self.edit_button.setToolTip(
+            "Change the title, artist, album, track number, or picture "
+            "for the highlighted song"
+        )
+        self.edit_button.clicked.connect(self._edit_current)
+        self.edit_button.setEnabled(False)
+        filter_row.addWidget(self.edit_button)
 
         for text, handler in [
             ("Select all", self.model.check_all),
@@ -132,6 +142,8 @@ class TrackTableWidget(QWidget):
         self.empty_label = QLabel("Nothing here yet.")
         self.empty_label.setAlignment(Qt.AlignCenter)
         self.empty_label.setObjectName("muted")
+        self.empty_label.setTextFormat(Qt.RichText)
+        self.empty_label.setWordWrap(True)
         self.stack.addWidget(self.empty_label)
         layout.addWidget(self.stack, 1)
 
@@ -163,6 +175,7 @@ class TrackTableWidget(QWidget):
             )
         self._update_counts()
         self._update_empty_state()
+        self.edit_button.setEnabled(self.current_row() is not None)
 
     def update_track(self, track: Track) -> None:
         self.model.replace_track(track)
@@ -205,6 +218,7 @@ class TrackTableWidget(QWidget):
 
     def _on_selection_changed(self, *_args) -> None:
         self._update_counts()
+        self.edit_button.setEnabled(self.current_row() is not None)
 
     def _update_counts(self) -> None:
         if self.source is None:
@@ -219,13 +233,26 @@ class TrackTableWidget(QWidget):
     def _update_empty_state(self) -> None:
         if self.model.rowCount() == 0:
             if self.source is None:
-                self.empty_label.setText("Paste a YouTube, X, or other link above.")
+                self.empty_label.setText(
+                    "<div style='line-height:150%'>"
+                    "<div style='font-size:18px; font-weight:700'>"
+                    "Nothing added yet</div><br>"
+                    "<b>1.</b> Paste a link in the bar at the top "
+                    "(YouTube, X, or another site).<br>"
+                    "<b>2.</b> Press <b>Add</b>.<br>"
+                    "<b>3.</b> Pick the songs you want, then press "
+                    "<b>Download to Spotify</b>."
+                    "</div>"
+                )
             else:
-                self.empty_label.setText("This source has no tracks yet.")
+                self.empty_label.setText(
+                    "This link has no songs yet.<br>"
+                    "Press <b>Refresh</b> on the left to check it again."
+                )
             self.stack.setCurrentWidget(self.empty_label)
             return
         if self.proxy.rowCount() == 0:
-            self.empty_label.setText("No tracks match this filter.")
+            self.empty_label.setText("No songs match this filter.")
             self.stack.setCurrentWidget(self.empty_label)
             return
         self.stack.setCurrentWidget(self.table)
@@ -234,7 +261,12 @@ class TrackTableWidget(QWidget):
         source_index = self.proxy.mapToSource(index)
         row = source_index.row()
         if 0 <= row < len(self.model.rows):
-            self.row_activated.emit(self.model.rows[row].track.id)
+            self.edit_details_requested.emit(self.model.rows[row].track.id)
+
+    def _edit_current(self) -> None:
+        row = self.current_row()
+        if row is not None:
+            self.edit_details_requested.emit(row.track.id)
 
     def _context_menu(self, position) -> None:
         index = self.table.indexAt(position)
@@ -248,6 +280,11 @@ class TrackTableWidget(QWidget):
         track = track_row.track
 
         menu = QMenu(self)
+        menu.addAction(
+            "Edit details…",
+            lambda: self.edit_details_requested.emit(track.id),
+        )
+        menu.addSeparator()
         menu.addAction(
             "Open source link",
             lambda: self.open_source_requested.emit(track.url),

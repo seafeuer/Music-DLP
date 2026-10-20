@@ -1,4 +1,8 @@
-"""Right-hand inspector: artwork, metadata editing, paths, actions."""
+"""Right-hand inspector: artwork, a summary, and actions.
+
+Editing happens in the "Edit details" dialog so there is one obvious place
+to change a song's title, artist, album, track number, or picture.
+"""
 
 from __future__ import annotations
 
@@ -8,11 +12,10 @@ from typing import Optional
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
-    QFormLayout, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QSpinBox, QVBoxLayout, QWidget,
+    QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
 )
 
-from musicdlp.core.models import TrackRow, status_label
+from musicdlp.core.models import TrackRow, display_status, status_label
 from musicdlp.services.thumbnails import ThumbnailService, youtube_fallbacks
 
 
@@ -21,12 +24,7 @@ class ArtworkSignals(QObject):
 
 
 class ArtworkTask(QRunnable):
-    def __init__(
-        self,
-        thumbnails: ThumbnailService,
-        track,
-        signals: ArtworkSignals,
-    ) -> None:
+    def __init__(self, thumbnails: ThumbnailService, track, signals) -> None:
         super().__init__()
         self.thumbnails = thumbnails
         self.track = track
@@ -48,7 +46,7 @@ class ArtworkTask(QRunnable):
 
 
 class Inspector(QWidget):
-    metadata_applied = Signal(int, str, str, str, int)
+    edit_details_requested = Signal(int)
     reconvert_requested = Signal(int)
     retry_requested = Signal(int)
     open_source_requested = Signal(str)
@@ -66,41 +64,41 @@ class Inspector(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
 
-        heading = QLabel("Details")
+        heading = QLabel("Song details")
         heading.setStyleSheet("font-size: 14px; font-weight: 600;")
         layout.addWidget(heading)
 
-        self.artwork = QLabel("No artwork")
-        self.artwork.setFixedSize(240, 240)
+        self.artwork = QLabel("No picture")
+        self.artwork.setFixedSize(200, 200)
         self.artwork.setAlignment(Qt.AlignCenter)
+        self.artwork.setObjectName("muted")
         self.artwork.setStyleSheet(
             "border: 1px solid palette(mid); border-radius: 8px;"
         )
-        self.artwork.setObjectName("artwork")
         layout.addWidget(self.artwork, 0, Qt.AlignHCenter)
 
-        self.form = QFormLayout()
-        self.form.setLabelAlignment(Qt.AlignLeft)
-        self.form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-        self.form.setRowWrapPolicy(QFormLayout.DontWrapRows)
-        self.title_edit = QLineEdit()
-        self.artist_edit = QLineEdit()
-        self.album_edit = QLineEdit()
-        for edit in (self.title_edit, self.artist_edit, self.album_edit):
-            edit.setMinimumWidth(120)
-        self.track_spin = QSpinBox()
-        self.track_spin.setRange(0, 999)
-        self.track_spin.setSpecialValueText("—")
-        self.track_spin.setFixedWidth(90)
-        self.form.addRow("Title", self.title_edit)
-        self.form.addRow("Artist", self.artist_edit)
-        self.form.addRow("Album", self.album_edit)
-        self.form.addRow("Track", self.track_spin)
-        layout.addLayout(self.form)
+        self.title_label = QLabel("")
+        self.title_label.setWordWrap(True)
+        self.title_label.setStyleSheet("font-size: 15px; font-weight: 700;")
+        layout.addWidget(self.title_label)
+
+        self.artist_label = QLabel("")
+        self.artist_label.setWordWrap(True)
+        layout.addWidget(self.artist_label)
+
+        self.album_label = QLabel("")
+        self.album_label.setWordWrap(True)
+        self.album_label.setObjectName("muted")
+        layout.addWidget(self.album_label)
 
         self.status_label = QLabel("")
         self.status_label.setStyleSheet("font-weight: 600;")
         layout.addWidget(self.status_label)
+
+        self.hint_label = QLabel("")
+        self.hint_label.setWordWrap(True)
+        self.hint_label.setObjectName("muted")
+        layout.addWidget(self.hint_label)
 
         self.error_label = QLabel("")
         self.error_label.setWordWrap(True)
@@ -110,21 +108,24 @@ class Inspector(QWidget):
         self.paths_label = QLabel("")
         self.paths_label.setWordWrap(True)
         self.paths_label.setObjectName("mutedSmall")
+        self.paths_label.setTextFormat(Qt.PlainText)
+        self.paths_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.paths_label.setMinimumWidth(0)
         layout.addWidget(self.paths_label)
 
-        button_row = QGridLayout()
-        button_row.setSpacing(6)
-        self.apply_button = QPushButton("Apply metadata")
-        self.apply_button.setObjectName("primary")
-        self.apply_button.clicked.connect(self._apply)
+        buttons = QGridLayout()
+        buttons.setSpacing(6)
+        self.edit_button = QPushButton("Edit details…")
+        self.edit_button.setObjectName("primary")
+        self.edit_button.clicked.connect(self._edit)
         self.reconvert_button = QPushButton("Re-convert")
         self.reconvert_button.clicked.connect(self._reconvert)
         self.retry_button = QPushButton("Retry")
         self.retry_button.clicked.connect(self._retry)
-        button_row.addWidget(self.apply_button, 0, 0, 1, 2)
-        button_row.addWidget(self.reconvert_button, 1, 0)
-        button_row.addWidget(self.retry_button, 1, 1)
-        layout.addLayout(button_row)
+        buttons.addWidget(self.edit_button, 0, 0, 1, 2)
+        buttons.addWidget(self.reconvert_button, 1, 0)
+        buttons.addWidget(self.retry_button, 1, 1)
+        layout.addLayout(buttons)
 
         link_row = QHBoxLayout()
         self.source_button = QPushButton("Open source")
@@ -142,41 +143,74 @@ class Inspector(QWidget):
         self.current_row = row
         self.setEnabled(row is not None)
         if row is None:
-            self.title_edit.clear()
-            self.artist_edit.clear()
-            self.album_edit.clear()
-            self.track_spin.setValue(0)
+            self.title_label.setText("No song selected")
+            self.artist_label.clear()
+            self.album_label.clear()
             self.status_label.clear()
+            self.hint_label.clear()
             self.error_label.clear()
             self.paths_label.clear()
             self.artwork.setPixmap(QPixmap())
-            self.artwork.setText("No artwork")
+            self.artwork.setText("No picture")
             return
 
         track = row.track
-        self.title_edit.setText(track.display_title)
-        self.artist_edit.setText(track.display_artist)
-        self.album_edit.setText(track.display_album)
-        self.track_spin.setValue(track.display_track or 0)
+        self.title_label.setText(track.display_title)
+        self.artist_label.setText(track.display_artist or "Unknown artist")
 
-        self.status_label.setText(status_label(track.status))
-        message = track.error or track.sync_error or ""
+        album = track.display_album
+        track_no = track.display_track
+        bits = []
+        if album:
+            bits.append(album)
+        if track_no:
+            bits.append(f"Track {track_no}")
+        self.album_label.setText(" · ".join(bits))
+        self.album_label.setVisible(bool(bits))
+
+        status = display_status(track)
+        self.status_label.setText(status_label(status))
+        if track.needs_update:
+            self.hint_label.setText(
+                "The details were changed but the file still has the old "
+                "ones. Open “Edit details” and tick “Update the audio file "
+                "now”, or press Re-convert."
+            )
+        elif status == "error" and track.sync_error:
+            self.hint_label.setText(
+                "The file is fine; only the Spotify copy failed. Press Retry."
+            )
+        else:
+            self.hint_label.clear()
+        self.hint_label.setVisible(bool(self.hint_label.text()))
+
+        message = track.error or ""
         self.error_label.setText(message)
         self.error_label.setVisible(bool(message))
 
         paths = [p for p in (track.mp3_path, track.m4a_path) if p]
-        self.paths_label.setText(
-            "\n".join(paths) if paths else "Not converted yet."
-        )
+        if paths:
+            names = ", ".join(Path(p).name for p in paths)
+            self.paths_label.setText(f"Saved as: {names}")
+            self.paths_label.setToolTip("\n".join(paths))
+        else:
+            self.paths_label.setText("Not converted yet.")
+            self.paths_label.setToolTip("")
 
-        self.reconvert_button.setEnabled(bool(track.raw_path or track.output_paths))
-        self.retry_button.setEnabled(track.status in ("error", "cancelled"))
+        self.reconvert_button.setEnabled(
+            bool(track.raw_path or track.output_paths)
+        )
+        self.retry_button.setEnabled(
+            status in ("error", "cancelled", "needs_update")
+            or bool(track.sync_error)
+        )
+        self.reveal_button.setEnabled(bool(paths))
 
         if track.cover_path and Path(track.cover_path).exists():
             self._set_pixmap(track.cover_path)
         else:
             self.artwork.setPixmap(QPixmap())
-            self.artwork.setText("Loading…" if track.thumbnail_url else "No artwork")
+            self.artwork.setText("Loading…" if track.thumbnail_url else "No picture")
             if track.thumbnail_url:
                 QThreadPool.globalInstance().start(
                     ArtworkTask(self.thumbnails, track, self._art_signals)
@@ -185,29 +219,20 @@ class Inspector(QWidget):
     def _set_pixmap(self, path: str) -> None:
         pixmap = QPixmap(path)
         if pixmap.isNull():
-            self.artwork.setText("No artwork")
+            self.artwork.setText("No picture")
             return
         self.artwork.setText("")
         self.artwork.setPixmap(
-            pixmap.scaled(
-                240, 240, Qt.KeepAspectRatio, Qt.SmoothTransformation
-            )
+            pixmap.scaled(200, 200, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         )
 
     def _on_artwork(self, track_id: int, path: str) -> None:
         if self.current_row and self.current_row.track.id == track_id:
             self._set_pixmap(path)
 
-    def _apply(self) -> None:
-        if not self.current_row:
-            return
-        self.metadata_applied.emit(
-            self.current_row.track.id,
-            self.title_edit.text().strip(),
-            self.artist_edit.text().strip(),
-            self.album_edit.text().strip(),
-            self.track_spin.value(),
-        )
+    def _edit(self) -> None:
+        if self.current_row:
+            self.edit_details_requested.emit(self.current_row.track.id)
 
     def _reconvert(self) -> None:
         if self.current_row:

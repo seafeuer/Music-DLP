@@ -9,17 +9,19 @@ track number per song before converting.
 
 ## What it does
 
-- **One click in Easy mode** — download, convert, and copy into your Spotify
-  folder in a single action.
-- **Pro mode** — separate Download, Convert, and Spotify steps, plus metadata
-  editing, per-stage retry, and an activity log.
+- **Three clear steps**, always visible at the top: Download → Convert → Send
+  to Spotify. In Easy mode one button does all three; in Pro mode you can run
+  them separately.
 - **Any link** — YouTube playlists, YouTube videos (watch / youtu.be / shorts),
   X/Twitter posts, and other yt-dlp sites. Paste several at once or drag them in.
 - **Real progress** — per-track bytes, speed, and ETA; cancellation that works.
 - **Duplicate-aware** — the same video in two playlists is downloaded once.
 - **Resume** — interrupted downloads and conversions continue where they stopped.
-- **Manual metadata** — edit title, artist, album, and track number; re-convert
-  writes the new tags into the files.
+- **Edit any song** — title, artist, album, track number, and cover picture,
+  with a live preview of the file name. "Update the audio file now" rewrites
+  the file and refreshes the Spotify copy in one step.
+- **Guided setup** — Help → Set up Music DLP installs FFmpeg for you and walks
+  through the Spotify steps in plain language, with a "Check again" button.
 - **Browser cookies** — use Chrome/Edge/Firefox cookies directly, or a
   `cookies.txt` file, for sign-in checks and protected posts.
 - **Import old library** — brings sources, tracks, and output paths over from
@@ -51,9 +53,12 @@ the app (or in a `ffmpeg\` subfolder). The first-run wizard can also locate it.
 ## Using it
 
 1. Paste a link into the bar and press **Add** (or drop links onto the window).
-2. Pick the tracks you want. New tracks are selected automatically.
+2. Tick the songs you want. New songs are ticked automatically.
 3. **Easy mode:** click **Download to Spotify (n)**.
    **Pro mode:** use **Download**, **Convert**, and **Spotify** separately.
+
+The three steps at the top always show where you are. To change a song's
+details, highlight it and click **Edit details…** (or double-click the row).
 
 Converted files go to `Music\MusicDLP\MP3` (and `M4A` if enabled). Files sent to
 Spotify are copied to `Music\MusicDLP\Spotify` by default.
@@ -65,6 +70,10 @@ playlist. Music DLP does the part that can be automated:
 
 1. Writes correctly tagged MP3s into a folder.
 2. Optionally restarts Spotify so it rescans that folder.
+
+The first time you open the app, **Set up Music DLP** shows four steps with a
+green tick for each one. If Spotify still does not know your folder later, an
+amber bar appears at the top of the window with a **Show me how** button.
 
 One-time setup in Spotify:
 

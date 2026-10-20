@@ -16,7 +16,7 @@ from musicdlp.core.db import Database
 from musicdlp.core.logging import setup_logging
 from musicdlp.core.paths import db_path, ensure_app_dirs, log_dir
 from musicdlp.services.legacy_import import find_legacy_db, import_legacy
-from musicdlp.ui.dialogs.first_run import FirstRunWizard
+from musicdlp.ui.dialogs.setup import SetupDialog
 from musicdlp.ui.main_window import MainWindow, build_context
 from musicdlp.ui.theme import apply_theme
 
@@ -99,11 +99,16 @@ def main() -> int:
     ctx = build_context(settings, db, logger)
 
     if not settings.first_run_done:
-        wizard = FirstRunWizard(settings, ctx.ffmpeg, ctx.spotify)
-        if wizard.exec() == QDialog.Accepted:
-            settings = wizard.settings
-            ctx.rebuild(settings)
-            apply_theme(app, settings.theme)
+        wizard = SetupDialog(settings, ctx.ffmpeg, ctx.spotify)
+        wizard.exec()
+        settings.first_run_done = True
+        settings.validate()
+        try:
+            settings.save()
+        except OSError:
+            pass
+        ctx.rebuild(settings)
+        apply_theme(app, settings.theme)
 
     if not db.get_sources():
         legacy = find_legacy_db()

@@ -405,18 +405,28 @@ class Pipeline(QObject):
                 out_dir = settings.output_path / fmt.upper()
                 out_dir.mkdir(parents=True, exist_ok=True)
 
-                if existing and Path(existing).exists():
-                    output = Path(existing)
+                stem = render_template(
+                    settings.filename_template,
+                    title=track.display_title,
+                    artist=track.display_artist,
+                    album=album,
+                    track=track_no,
+                    media_id=track.media_id,
+                    source=item.source.title,
+                )
+
+                # Reuse the current file when the name still matches, so a
+                # plain re-convert overwrites in place. When the user changed
+                # the metadata, the new name differs and a fresh file is
+                # written; the old one is removed after a successful write.
+                old_output = Path(existing) if existing else None
+                if (
+                    old_output is not None
+                    and old_output.exists()
+                    and old_output.stem == stem
+                ):
+                    output = old_output
                 else:
-                    stem = render_template(
-                        settings.filename_template,
-                        title=track.display_title,
-                        artist=track.display_artist,
-                        album=album,
-                        track=track_no,
-                        media_id=track.media_id,
-                        source=item.source.title,
-                    )
                     output = unique_path(
                         out_dir, stem, f".{fmt}", fallback_id=track.media_id
                     )
@@ -465,6 +475,25 @@ class Pipeline(QObject):
                     else:
                         self.db.update_track(track.id, m4a_path=str(output))
 
+                    # The metadata change renamed the file: drop the stale
+                    # one so the folder does not accumulate duplicates.
+                    if (
+                        old_output is not None
+                        and old_output.exists()
+                        and old_output != output
+                    ):
+                        try:
+                            old_output.unlink()
+                        except OSError as exc:
+                            logger.debug("Could not remove old file: %s", exc)
+
+                        stale_copy = settings.spotify_path / old_output.name
+                        try:
+                            if stale_copy.exists():
+                                stale_copy.unlink()
+                        except OSError as exc:
+                            logger.debug("Could not remove old Spotify copy: %s", exc)
+
                 except Cancelled:
                     raise
                 except AppError as exc:
@@ -482,7 +511,11 @@ class Pipeline(QObject):
                 )
             else:
                 self.db.update_track(
-                    track.id, status=CONVERTED, converted_at=_now(), error=None
+                    track.id,
+                    status=CONVERTED,
+                    converted_at=_now(),
+                    error=None,
+                    needs_update=0,
                 )
                 summary["converted"] += 1
                 if not settings.keep_raw and raw.exists():

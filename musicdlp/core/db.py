@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS tracks (
     converted_at  TEXT,
     synced_at     TEXT,
     sync_error    TEXT,
+    needs_update  INTEGER NOT NULL DEFAULT 0,
     UNIQUE(platform, media_id)
 );
 
@@ -89,6 +90,7 @@ TRACK_UPDATABLE = {
     "status", "error", "meta_title", "meta_artist", "meta_album", "meta_track",
     "raw_path", "mp3_path", "m4a_path", "cover_path",
     "downloaded_at", "converted_at", "synced_at", "sync_error",
+    "needs_update",
 }
 
 SOURCE_UPDATABLE = {
@@ -162,6 +164,11 @@ class Database:
         if "sync_error" not in columns:
             conn.execute("ALTER TABLE tracks ADD COLUMN sync_error TEXT")
             logger.info("Migration: added tracks.sync_error")
+        if "needs_update" not in columns:
+            conn.execute(
+                "ALTER TABLE tracks ADD COLUMN needs_update INTEGER NOT NULL DEFAULT 0"
+            )
+            logger.info("Migration: added tracks.needs_update")
 
     # --------------------------------------------------------------- sources
 

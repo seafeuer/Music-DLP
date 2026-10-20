@@ -6,7 +6,7 @@ from PySide6.QtCore import QModelIndex, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter
 from PySide6.QtWidgets import QStyle, QStyledItemDelegate, QStyleOptionViewItem
 
-from musicdlp.core.models import status_label
+from musicdlp.core.models import display_status, status_label
 from musicdlp.ui.models.track_model import PROGRESS_ROLE, ROW_ROLE
 from musicdlp.ui.theme import ACCENT, STATUS_COLORS
 
@@ -26,7 +26,7 @@ class StatusDelegate(QStyledItemDelegate):
         if option.state & QStyle.State_Selected:
             painter.fillRect(option.rect, option.palette.highlight())
 
-        status = row.track.status
+        status = display_status(row.track)
         background, foreground = STATUS_COLORS.get(
             status, ("#e5e7eb", "#374151")
         )

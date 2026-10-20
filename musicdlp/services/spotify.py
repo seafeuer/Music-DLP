@@ -216,6 +216,59 @@ class SpotifyService:
     def open_spotify(self) -> bool:
         return self.start()
 
+    def source_registered(self, folder: Path) -> Optional[bool]:
+        """Best-effort check whether Spotify has this folder as a source.
+
+        Spotify keeps its watched folders in a binary file. The format is
+        not public, so this only looks for the folder path as text. It is
+        used to decide whether to show a hint, never to block the user.
+
+        Returns True, False, or None when the answer cannot be determined.
+        """
+        if os.name != "nt":
+            return None
+        appdata = os.environ.get("APPDATA")
+        if not appdata:
+            return None
+
+        candidates = [
+            Path(appdata) / "Spotify" / "watch-sources.bnk",
+            Path(appdata) / "Spotify" / "Users",
+        ]
+        payload = b""
+        for candidate in candidates:
+            try:
+                if candidate.is_file():
+                    payload += candidate.read_bytes()
+                elif candidate.is_dir():
+                    for item in candidate.glob("*.bnk"):
+                        payload += item.read_bytes()
+            except OSError:
+                continue
+
+        if not payload:
+            return None
+
+        folder = Path(folder)
+        for variant in {
+            str(folder),
+            str(folder).replace("\\", "/"),
+            str(folder.resolve()) if folder.exists() else str(folder),
+        }:
+            if variant.encode("utf-8", errors="ignore") in payload:
+                return True
+            if variant.encode("utf-16-le", errors="ignore") in payload:
+                return True
+        return False
+
+    def folder_has_files(self, folder: Path) -> bool:
+        try:
+            return any(Path(folder).glob("*.mp3")) or any(
+                Path(folder).glob("*.m4a")
+            )
+        except OSError:
+            return False
+
     @staticmethod
     def setup_steps(destination: Path) -> str:
         return (

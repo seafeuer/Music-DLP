@@ -8,9 +8,11 @@ from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyMod
 
 from musicdlp.core.models import (
     ERROR,
+    NEEDS_UPDATE,
     NEW,
     Track,
     TrackRow,
+    display_status,
     format_duration,
     is_converted,
     is_downloaded,
@@ -87,7 +89,7 @@ class TrackTableModel(QAbstractTableModel):
             if column == COL_FORMAT:
                 return _format_for(track)
             if column == COL_STATUS:
-                return status_label(track.status)
+                return status_label(display_status(track))
             if column == COL_PROGRESS:
                 percent = self.progress.get(track.id)
                 return "" if percent is None else f"{percent:.0f}%"
@@ -103,7 +105,11 @@ class TrackTableModel(QAbstractTableModel):
 
         if role == Qt.ToolTipRole:
             if column == COL_STATUS:
-                return track.error or track.sync_error or status_label(track.status)
+                return (
+                    track.error
+                    or track.sync_error
+                    or status_label(display_status(track))
+                )
             if column == COL_TITLE:
                 return track.display_title
             if column == COL_ARTIST:
@@ -263,6 +269,10 @@ class TrackFilterProxy(QSortFilterProxyModel):
             return False
         if self.status_filter == "errors" and not (
             status == ERROR or track.sync_error
+        ):
+            return False
+        if self.status_filter == "needs_update" and not (
+            track.needs_update and is_converted(status)
         ):
             return False
 

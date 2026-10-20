@@ -20,10 +20,10 @@ from PySide6.QtWidgets import (
 
 from musicdlp.core.config import Settings
 from musicdlp.core.db import Database
-from musicdlp.core.errors import Cancelled
+from musicdlp.core.errors import AppError, Cancelled
 from musicdlp.core.logging import LogEmitter, QtLogHandler
 from musicdlp.core.models import BatchItem, TrackRow
-from musicdlp.core.paths import art_cache_dir
+from musicdlp.core.paths import art_cache_dir, is_writable
 from musicdlp.services.ffmpeg import FFmpegService
 from musicdlp.services.legacy_import import (
     ImportSummary, find_legacy_db, import_legacy,
@@ -35,14 +35,19 @@ from musicdlp.services.thumbnails import ThumbnailService
 from musicdlp.services.urls import split_links
 from musicdlp.services.ytdlp import YtDlpService
 from musicdlp.ui.dialogs.bulk_add import BulkAddDialog
-from musicdlp.ui.dialogs.first_run import FirstRunWizard
 from musicdlp.ui.dialogs.settings import SettingsDialog
+from musicdlp.ui.dialogs.setup import SetupDialog
 from musicdlp.ui.dialogs.spotify_setup import SpotifyDialog
+from musicdlp.ui.dialogs.track_details import TrackDetailsDialog
 from musicdlp.ui.theme import apply_theme
 from musicdlp.ui.widgets.inspector import Inspector
 from musicdlp.ui.widgets.log_drawer import LogDrawer
+from musicdlp.ui.widgets.setup_banner import SetupBanner
 from musicdlp.ui.widgets.source_list import SourceListWidget
 from musicdlp.ui.widgets.status_bar import StatusBarWidget
+from musicdlp.ui.widgets.step_indicator import (
+    ACTIVE, DONE, ERROR as STEP_ERROR, WAITING, StepIndicator,
+)
 from musicdlp.ui.widgets.track_table import TrackTableWidget
 
 
@@ -178,6 +183,7 @@ class MainWindow(QMainWindow):
         self._refresh_sources(self.settings.last_source_id)
         self._update_spotify_state()
         self._update_actions()
+        self._refresh_setup_banner()
 
         if not ctx.ffmpeg.available:
             self.logger.warning(
@@ -201,17 +207,27 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self._build_toolbar())
 
+        self.setup_banner = SetupBanner()
+        self.setup_banner.action_clicked.connect(self._open_setup)
+        layout.addWidget(self.setup_banner)
+
+        self.steps = StepIndicator()
+        self.steps.step_clicked.connect(self._on_step_clicked)
+        layout.addWidget(self.steps)
+
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.setChildrenCollapsible(False)
 
         self.sidebar = SourceListWidget()
         self.track_table = TrackTableWidget()
         self.inspector = Inspector(self.ctx.thumbnails)
+        self.inspector.setMinimumWidth(300)
         inspector_scroll = QScrollArea()
         inspector_scroll.setWidgetResizable(True)
         inspector_scroll.setFrameShape(QScrollArea.NoFrame)
+        inspector_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         inspector_scroll.setWidget(self.inspector)
-        inspector_scroll.setMinimumWidth(280)
+        inspector_scroll.setMinimumWidth(320)
         self.inspector_scroll = inspector_scroll
 
         self.splitter.addWidget(self.sidebar)
@@ -220,7 +236,7 @@ class MainWindow(QMainWindow):
         self.splitter.setStretchFactor(0, 0)
         self.splitter.setStretchFactor(1, 1)
         self.splitter.setStretchFactor(2, 0)
-        self.splitter.setSizes([260, 780, 300])
+        self.splitter.setSizes([260, 760, 340])
         layout.addWidget(self.splitter, 1)
 
         self.log_drawer = LogDrawer()
@@ -355,7 +371,11 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self.inspector_action)
 
         help_menu = self.menuBar().addMenu("&Help")
-        spotify_action = QAction("Spotify setup…", self)
+        setup_action = QAction("Set up Music DLP…", self)
+        setup_action.triggered.connect(self._open_setup)
+        help_menu.addAction(setup_action)
+
+        spotify_action = QAction("Spotify folder…", self)
         spotify_action.triggered.connect(self._open_spotify)
         help_menu.addAction(spotify_action)
 
@@ -368,6 +388,7 @@ class MainWindow(QMainWindow):
             from PySide6.QtWidgets import QMenu
             more_menu = QMenu(self.more_button)
             self.more_button.setMenu(more_menu)
+        more_menu.addAction(setup_action)
         more_menu.addAction(self.settings_action)
         more_menu.addAction(spotify_action)
         more_menu.addSeparator()
@@ -384,7 +405,7 @@ class MainWindow(QMainWindow):
         self.sidebar.open_url_requested.connect(self._open_url)
 
         self.track_table.checked_changed.connect(self._on_checked_changed)
-        self.track_table.row_activated.connect(self._on_row_activated)
+        self.track_table.edit_details_requested.connect(self._open_details)
         self.track_table.retry_requested.connect(self._retry_track)
         self.track_table.reconvert_requested.connect(self._reconvert_track)
         self.track_table.remove_requested.connect(self._remove_track)
@@ -393,7 +414,7 @@ class MainWindow(QMainWindow):
             self._on_selection_changed
         )
 
-        self.inspector.metadata_applied.connect(self._apply_metadata)
+        self.inspector.edit_details_requested.connect(self._open_details)
         self.inspector.reconvert_requested.connect(self._reconvert_track)
         self.inspector.retry_requested.connect(self._retry_track)
         self.inspector.open_source_requested.connect(self._open_url)
@@ -470,6 +491,7 @@ class MainWindow(QMainWindow):
                 self.track_table.model.checked_ids()
             )
         self._update_actions()
+        self._update_steps()
 
     # ---------------------------------------------------------------- adding
 
@@ -643,6 +665,58 @@ class MainWindow(QMainWindow):
         self.mode_combo.setEnabled(not busy)
         self.settings_action.setEnabled(not busy)
         self.sidebar.set_busy(busy)
+        self._update_steps()
+
+    def _update_steps(self) -> None:
+        """Reflect the current selection in the pipeline strip."""
+        if self._is_busy():
+            return
+
+        count = self.track_table.checked_count()
+        ffmpeg_ok = self.ctx.ffmpeg.available
+        plural = "" if count == 1 else "s"
+        if count:
+            detail = f"{count} song{plural} selected"
+        elif self._current_source_id is None:
+            detail = "Start by adding a link above"
+        else:
+            detail = "Tick the songs you want"
+
+        enabled = (count > 0, count > 0 and ffmpeg_ok, count > 0)
+        self.steps.set_clickable(self.settings.mode == "pro")
+        self.steps.reset(detail, enabled=enabled)
+
+    def _on_step_clicked(self, index: int) -> None:
+        """In Pro mode, each step is also a button."""
+        if self.settings.mode != "pro" or self._is_busy():
+            return
+        stage = ("download", "convert", "sync")[index]
+        self._start_stage(stage)
+
+    def _set_stage_active(self, index: int, detail: str) -> None:
+        for earlier in range(index):
+            self.steps.set_step(earlier, DONE, "Done")
+        self.steps.set_step(index, ACTIVE, detail)
+
+    def _finish_steps(self, summary: dict) -> None:
+        if summary.get("cancelled"):
+            self.steps.reset("Cancelled", enabled=(True, True, True))
+            return
+        stages = summary.get("stages") or []
+        index_by_stage = {"download": 0, "convert": 1, "sync": 2}
+        last_index = -1
+        for stage in stages:
+            index = index_by_stage.get(stage)
+            if index is not None:
+                last_index = max(last_index, index)
+        for stage in stages:
+            index = index_by_stage.get(stage)
+            if index is None:
+                continue
+            if summary.get("failed") and index == last_index:
+                self.steps.set_step(index, STEP_ERROR, "Finished with errors")
+            else:
+                self.steps.set_step(index, DONE, "Done")
 
     def _set_controls_enabled(self, enabled: bool) -> None:
         self.add_button.setEnabled(enabled)
@@ -702,6 +776,12 @@ class MainWindow(QMainWindow):
 
         self.track_table.clear_progress()
         self.status.set_busy(f"Starting {' → '.join(stages)}…")
+        index_by_stage = {"download": 0, "convert": 1, "sync": 2}
+        for stage in stages:
+            index = index_by_stage.get(stage)
+            if index is not None:
+                self.steps.set_step(index, WAITING, "Waiting")
+        self._set_stage_active(index_by_stage[stages[0]], "Starting…")
         self.logger.info(
             "Starting %s for %d track(s)", " → ".join(stages), len(items)
         )
@@ -722,6 +802,13 @@ class MainWindow(QMainWindow):
                 int(track_id), float(data.get("item_percent") or 0)
             )
 
+        index_by_stage = {"download": 0, "convert": 1, "sync": 2}
+        index = index_by_stage.get(data.get("stage"))
+        if index is not None:
+            title = data.get("title") or ""
+            percent = float(data.get("item_percent") or 0)
+            self._set_stage_active(index, f"{title} — {percent:.0f}%")
+
     def _on_pipeline_message(self, level: str, message: str) -> None:
         self.logger.log(
             getattr(logging, level.upper(), logging.INFO), message
@@ -734,6 +821,8 @@ class MainWindow(QMainWindow):
         self._reload_current_source()
         self._refresh_sources(self._current_source_id)
         self._update_actions()
+        self._finish_steps(summary)
+        self._refresh_setup_banner()
 
         parts = []
         if summary.get("downloaded"):
@@ -782,15 +871,62 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------- track ops
 
-    def _on_row_activated(self, track_id: int) -> None:
+    def _open_details(self, track_id: int) -> None:
+        """Edit one song's title, artist, album, track number, and picture."""
+        if self._is_busy():
+            self.status.set_idle("Wait for the current job to finish.")
+            return
+
         row = self.track_table.model.row_for_id(track_id)
         if row is None:
             return
-        if self.settings.mode == "pro":
-            self.inspector_action.setChecked(True)
-            self.inspector.set_row(row)
-        else:
-            self._open_url(row.track.url)
+
+        album_default = (
+            row.source.title if row.source.kind == "playlist" else "Singles"
+        )
+        dialog = TrackDetailsDialog(
+            row.track,
+            album_default=album_default,
+            track_default=row.position,
+            filename_template=self.settings.filename_template,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.Accepted or not dialog.result_values:
+            return
+
+        values = dialog.result_values
+        self.ctx.library.set_metadata(
+            track_id,
+            title=values["title"],
+            artist=values["artist"],
+            album=values["album"],
+            track_number=values["track_number"],
+        )
+        if values["cover_changed"]:
+            try:
+                if values["cover_path"]:
+                    self.ctx.library.set_cover(track_id, Path(values["cover_path"]))
+                else:
+                    self.ctx.library.restore_video_cover(track_id)
+            except AppError as exc:
+                QMessageBox.warning(self, "Picture not used", exc.user_text())
+
+        self._refresh_sources(self._current_source_id)
+        updated = self.db.get_track(track_id)
+
+        if values["update_file"] and updated is not None:
+            stages = ["convert"]
+            if updated.synced_at:
+                stages.append("sync")
+            row = self.track_table.model.row_for_id(track_id)
+            if row is not None:
+                self._start_pipeline([row], stages, force=True)
+                self.status.set_busy("Updating the song with your new details…")
+                return
+
+        self.status.set_idle(
+            "Details saved. They are written into the file when you convert it."
+        )
 
     def _apply_metadata(
         self,
@@ -924,6 +1060,69 @@ class MainWindow(QMainWindow):
 
     # -------------------------------------------------------------- settings
 
+    def _open_setup(self) -> None:
+        """Open the guided setup checklist."""
+        if self._is_busy():
+            self.status.set_idle("Wait for the current job to finish.")
+            return
+        dialog = SetupDialog(
+            self.settings, self.ctx.ffmpeg, self.ctx.spotify, self
+        )
+        dialog.exec()
+
+        # The dialog may have changed the FFmpeg path or the Spotify folder.
+        self.settings = Settings.load()
+        self.ctx.rebuild(self.settings)
+        self.inspector.thumbnails = self.ctx.thumbnails
+        self._sync_mode_combo()
+        self._update_spotify_state()
+        self._refresh_setup_banner()
+        self._update_actions()
+        self.status.set_idle("Setup saved.")
+
+    def _refresh_setup_banner(self) -> None:
+        """Show one clear prompt for whatever is still missing."""
+        if not self.ctx.ffmpeg.available:
+            self.setup_banner.show_prompt(
+                "ffmpeg",
+                "Music DLP needs a free helper called FFmpeg to turn videos "
+                "into MP3 files. It is not installed yet.",
+                "Set up FFmpeg",
+            )
+            return
+
+        if not self.ctx.spotify.is_installed():
+            self.setup_banner.show_prompt(
+                "spotify",
+                "The Spotify app was not found on this computer. You can still "
+                "download songs, but they cannot appear in Spotify until it is "
+                "installed.",
+                "Set up Spotify",
+            )
+            return
+
+        folder = self.settings.spotify_path
+        if not is_writable(folder):
+            self.setup_banner.show_prompt(
+                "folder",
+                "Music DLP cannot save songs into the Spotify folder. Choose a "
+                "folder it is allowed to write to.",
+                "Choose folder",
+            )
+            return
+
+        registered = self.ctx.spotify.source_registered(folder)
+        if registered is False and self.ctx.spotify.folder_has_files(folder):
+            self.setup_banner.show_prompt(
+                "source",
+                "Spotify does not know about your songs folder yet, so songs "
+                "will not appear in Spotify. It takes about a minute to fix.",
+                "Show me how",
+            )
+            return
+
+        self.setup_banner.clear_prompt()
+
     def _open_settings(self) -> None:
         if self._is_busy():
             self.status.set_idle("Wait for the current job to finish.")
@@ -974,6 +1173,9 @@ class MainWindow(QMainWindow):
         show_inspector = self.settings.mode == "pro"
         self.inspector_scroll.setVisible(show_inspector)
         self.inspector_action.setChecked(show_inspector)
+        # Switching to Pro should show the highlighted song immediately.
+        if show_inspector:
+            self.inspector.set_row(self.track_table.current_row())
 
     def _open_spotify(self) -> None:
         dialog = SpotifyDialog(self.settings.spotify_dir, self.ctx.spotify, self)
