@@ -1,84 +1,142 @@
 # Music DLP
 
-A Windows desktop app that downloads audio from **YouTube playlists/videos**, **X/Twitter posts**, and other sites supported by yt-dlp, then converts it to Spotify-compatible MP3 and archival M4A files with embedded album art.
+A Windows desktop app that downloads audio from **YouTube playlists and videos**,
+**X/Twitter posts**, and other links supported by yt-dlp, converts it to tagged
+MP3/M4A, and delivers it to **Spotify Local Files**.
 
-Titles are kept exactly as they appear on the source site. There is no AI metadata cleaning or renaming step.
+Titles are kept exactly as published. You can edit title, artist, album, and
+track number per song before converting.
 
-## Features
+## What it does
 
-- **Multiple link types** - YouTube playlists, YouTube videos, X/Twitter posts, and other yt-dlp-supported links
-- **Paste several links at once** - one per line
-- **Single links and playlists** - each link appears in the library; single items open as a one-song collection
-- **Original titles** - files are named from the source title; the channel/uploader is embedded as the artist tag
-- **Dual output** - MP3 (320kbps, for Spotify) + M4A (320kbps AAC, for archival)
-- **Album art** - embeds 300x300 thumbnails into every file
-- **Resume support** - interrupted downloads and conversions pick up where they left off
-- **Bot-avoidance** - cookie support and randomized delays between downloads
-- **Modern GUI** - CustomTkinter with light/dark mode
+- **One click in Easy mode** — download, convert, and copy into your Spotify
+  folder in a single action.
+- **Pro mode** — separate Download, Convert, and Spotify steps, plus metadata
+  editing, per-stage retry, and an activity log.
+- **Any link** — YouTube playlists, YouTube videos (watch / youtu.be / shorts),
+  X/Twitter posts, and other yt-dlp sites. Paste several at once or drag them in.
+- **Real progress** — per-track bytes, speed, and ETA; cancellation that works.
+- **Duplicate-aware** — the same video in two playlists is downloaded once.
+- **Resume** — interrupted downloads and conversions continue where they stopped.
+- **Manual metadata** — edit title, artist, album, and track number; re-convert
+  writes the new tags into the files.
+- **Browser cookies** — use Chrome/Edge/Firefox cookies directly, or a
+  `cookies.txt` file, for sign-in checks and protected posts.
+- **Import old library** — brings sources, tracks, and output paths over from
+  the previous Music-DLP database.
 
 ## Requirements
 
-- Python 3.10+
-- **FFmpeg** installed and in PATH ([download](https://ffmpeg.org/download.html)), or placed next to the app / in a `ffmpeg` subfolder
-- Optional: **browser cookies** exported to a `cookies.txt` file (needed for some age-restricted or protected YouTube/X posts)
+- Windows 10/11
+- Python 3.10+ (for running from source)
+- **FFmpeg** — needed for conversion and tagging
+- Optional: Spotify Desktop, for Local Files delivery
 
-## Quick Start (From source)
+## Install and run
 
 ```bash
 git clone https://github.com/seafeuer/Music-DLP.git
 cd Music-DLP
 
+python -m venv .venv
+.venv\Scripts\activate
 pip install -r requirements.txt
 
 python main.py
 ```
 
-## How It Works
+Install FFmpeg with `winget install Gyan.FFmpeg`, or place `ffmpeg.exe` next to
+the app (or in a `ffmpeg\` subfolder). The first-run wizard can also locate it.
 
-```
-1. Paste link(s)  - YouTube playlist/video, X/Twitter post, or another yt-dlp link
-2. Extract        - Happens automatically when you press Add
-3. Download       - Select songs, then click "1. Download"
-4. Convert        - Click "2. Convert" to produce MP3 + M4A
-```
+## Using it
 
-Output goes to `downloads/final/mp3/` and `downloads/final/m4a/`.
+1. Paste a link into the bar and press **Add** (or drop links onto the window).
+2. Pick the tracks you want. New tracks are selected automatically.
+3. **Easy mode:** click **Download to Spotify (n)**.
+   **Pro mode:** use **Download**, **Convert**, and **Spotify** separately.
 
-### X/Twitter notes
+Converted files go to `Music\MusicDLP\MP3` (and `M4A` if enabled). Files sent to
+Spotify are copied to `Music\MusicDLP\Spotify` by default.
 
-- X/Twitter serves video, not a separate audio stream. Music DLP downloads the video and FFmpeg extracts the audio.
-- Posts with several videos are stored as a multi-song collection.
-- Protected or age-restricted posts may need a cookies file (Settings > Download > Cookies File).
+### Spotify
 
-## Importing to Spotify
+Spotify has **no public API** for uploading local files or adding them to a
+playlist. Music DLP does the part that can be automated:
 
-1. Open the Spotify desktop app > Settings > Local Files
-2. Enable "Show Local Files"
-3. Add the `downloads/final/mp3/` folder as a source
-4. Your songs appear under Local Files with album art
+1. Writes correctly tagged MP3s into a folder.
+2. Optionally restarts Spotify so it rescans that folder.
 
-**Note:** Use MP3 files for Spotify. Spotify doesn't display album art on M4A local files.
+One-time setup in Spotify:
 
-## Building the exe
+1. Profile → Settings → **Show local files**.
+2. **Add a source** → choose the Music DLP Spotify folder.
+3. Restart Spotify (the app has a button for this).
+4. Your tracks appear under **Your Library → Local Files**.
+
+You add them to a playlist inside Spotify; no external app can do that.
+
+## Modes
+
+| | Easy | Pro |
+|---|---|---|
+| Primary action | One button: download → convert → Spotify | Three separate buttons |
+| Details panel | Hidden | Metadata editing, paths, actions |
+| Format column | Hidden | Visible |
+| Retry | Automatic on next run | Per track |
+| Log | Drawer on error | Drawer on error |
+
+Switch modes from the toolbar at any time; the selection is preserved.
+
+## Settings worth knowing
+
+- **Download → Cookies** — browser cookies are the easiest fix for YouTube
+  sign-in checks and protected X posts.
+- **Output → Filename template** — `{title}` by default. Also supports
+  `{artist}`, `{album}`, `{track}`, `{id}`, `{source}`.
+- **Output → Normalize** — two-pass loudness normalization to −14 LUFS.
+- **Spotify → When sending** — copy (keep the output file) or move.
+- **Advanced** — FFmpeg path, diagnostics, log folder.
+
+## Building a standalone app
 
 ```bash
 pip install pyinstaller
-python build_exe.py --clean
+python build.py --clean
 ```
 
-Output: `dist/MusicDLP/`
+Output: `dist/MusicDLP/`. Put `ffmpeg.exe` in `dist/MusicDLP/ffmpeg/`.
 
-## Tech Stack
+## Development
 
-| Component | Technology |
-|-----------|-----------|
-| GUI | CustomTkinter |
-| Database | SQLite |
-| Downloader | yt-dlp |
-| Audio conversion | FFmpeg |
-| Metadata | mutagen |
-| Thumbnails | Pillow |
-| Packaging | PyInstaller |
+```bash
+pip install -r requirements.txt pytest pytest-qt
+python -m pytest
+```
+
+The test suite covers link parsing, filenames, the database, pipeline
+orchestration (with fake services), Spotify copying, legacy import, and an
+offscreen Qt smoke test.
+
+```
+musicdlp/
+  core/       paths, settings, database, models, logging, errors
+  services/   links, yt-dlp, FFmpeg, tagging, thumbnails, Spotify,
+              library, pipeline, legacy import
+  ui/         main window, table model, delegates, widgets, dialogs, theme
+```
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| "FFmpeg not found" | Settings → Advanced → Detect, or `winget install Gyan.FFmpeg` |
+| YouTube sign-in check | Settings → Download → Cookies → your browser |
+| X post fails | It may be protected or contain no video; try browser cookies |
+| Tracks not in Spotify | Spotify → Settings → Show local files → add the folder, then restart Spotify |
+| Duplicate entries in Spotify | Send only one format (Settings → Spotify → MP3) |
+
+Logs live in `%LOCALAPPDATA%\MusicDLP\logs\musicdlp.log`; the app's **Logs**
+drawer shows the same messages and can open the folder.
 
 ## License
 

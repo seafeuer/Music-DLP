@@ -1,122 +1,166 @@
 Music DLP - Installation
 ========================
 
-Music DLP downloads audio from YouTube playlists/videos, X/Twitter posts,
-and other yt-dlp-supported links, then converts it to MP3 and M4A with
-embedded album art.
+Music DLP downloads audio from YouTube playlists and videos, X/Twitter posts,
+and other yt-dlp-supported links. It converts the audio to tagged MP3 (and
+optionally M4A) and can copy the results into your Spotify Local Files folder.
 
-It does not use AI and does not rename titles: files keep the original
-source title, and the channel/uploader is embedded as the artist tag.
+It keeps the original published titles. You can edit metadata per track.
 
 
 REQUIREMENTS
 ------------
 
-1. Python 3.10 or newer (from https://www.python.org/downloads/)
-2. FFmpeg
-3. Optional: a cookies.txt file for protected or age-restricted posts
+1. Windows 10 or 11
+2. Python 3.10 or newer (only if running from source)
+3. FFmpeg (required for conversion)
+4. Optional: Spotify Desktop, for Local Files delivery
 
 
 STEP 1: Install FFmpeg
 ----------------------
 
-Option A - Put FFmpeg next to the app
+Option A - System-wide (recommended)
+
+    winget install Gyan.FFmpeg
+
+Then open a NEW terminal so PATH updates. Check it works:
+
+    ffmpeg -version
+
+Option B - Portable
+
   1. Download a Windows build from https://ffmpeg.org/download.html
-     (the "release essentials" build is enough)
-  2. Extract it
-  3. Copy ffmpeg.exe and ffprobe.exe into one of these places:
+  2. Copy ffmpeg.exe and ffprobe.exe into one of:
        - The same folder as main.py / MusicDLP.exe
-       - A folder named "ffmpeg" next to main.py / MusicDLP.exe
+       - A folder named "ffmpeg" next to it
 
-Option B - Install system-wide
-  Install FFmpeg with winget:
-      winget install Gyan.FFmpeg
-  Then open a NEW terminal so PATH updates.
+Option C - Point the app at it
 
-Verify it works:
-      ffmpeg -version
+  Settings -> Advanced -> FFmpeg path -> Browse.
 
 
-STEP 2: Install Python dependencies
------------------------------------
+STEP 2: Install and run
+-----------------------
 
-Open a terminal in the Music-DLP folder and run:
+From source:
 
-      pip install -r requirements.txt
+    python -m venv .venv
+    .venv\Scripts\activate
+    pip install -r requirements.txt
+    python main.py
 
+Pre-built app:
 
-STEP 3 (Optional): Cookies
---------------------------
-
-Some YouTube videos and protected X/Twitter posts require you to be signed
-in. To provide cookies:
-
-  1. Install the browser extension "Get cookies.txt LOCALLY"
-  2. Sign in to YouTube / X in that browser
-  3. Export cookies to a file (cookies.txt)
-  4. In Music DLP: Settings > Download > Cookies File > Browse
-     and select the file
+    Extract the folder and run MusicDLP.exe
 
 
-RUNNING FROM SOURCE
--------------------
+FIRST RUN
+---------
 
-      python main.py
+The setup wizard asks for:
 
+  - Easy or Pro mode
+  - Where to keep converted files (default: Music\MusicDLP)
+  - Which folder to use for Spotify (default: Music\MusicDLP\Spotify)
+  - Optional cookies
 
-BUILDING THE EXE
-----------------
-
-      pip install pyinstaller
-      python build_exe.py --clean
-
-Output: dist/MusicDLP/
-
-Copy ffmpeg.exe and ffprobe.exe into dist/MusicDLP/ffmpeg/ before running.
+Cookies are only needed for age-restricted YouTube videos and protected
+X/Twitter posts. The easiest option is "Use cookies from a browser"; choose
+the browser you are signed in with. Chrome may need to be closed while its
+cookie database is read. A cookies.txt file also works.
 
 
 USING THE APP
 -------------
 
-1. Paste one or more links into the Link(s) box and press Add.
-   Supported examples:
+1. Paste one or more links into the bar at the top and press Add.
+
+   Examples:
      https://www.youtube.com/playlist?list=...
      https://www.youtube.com/watch?v=...
      https://youtu.be/...
      https://x.com/user/status/...
-     https://twitter.com/user/status/...
 
-   You can paste several links at once, one per line.
+   You can paste several links at once (one per line), or drag links onto the
+   window.
 
-2. Select the songs you want (checkboxes, "Select All", or
-   "Select Downloaded").
+2. Select the tracks you want. Newly added tracks are selected for you.
 
-3. Click "1. Download".
+3. Press the main button:
+     Easy mode: "Download to Spotify"
+     Pro mode:  Download, then Convert, then Spotify
 
-4. Click "2. Convert" to create MP3 + M4A files.
+Converted files:
+     <output folder>\MP3
+     <output folder>\M4A      (if enabled)
 
-Output folders:
-      downloads/final/mp3/
-      downloads/final/m4a/
+Files copied for Spotify:
+     <Spotify folder>
+
+
+GETTING TRACKS INTO SPOTIFY
+---------------------------
+
+Spotify does not let other apps upload local files or add them to playlists.
+Music DLP writes tagged files into a folder and can restart Spotify so it
+rescans. Do this once:
+
+  1. Open Spotify Desktop.
+  2. Click your profile picture -> Settings.
+  3. Under Local Files, turn on "Show local files".
+  4. Click "Add a source" and choose the Music DLP Spotify folder.
+  5. Restart Spotify (Settings -> Spotify -> Restart Spotify now).
+
+Your tracks then appear under Your Library -> Local Files. Drag them into a
+playlist inside Spotify if you want one.
+
+
+EDITING METADATA
+----------------
+
+In Pro mode, select a track to open the Details panel:
+
+  - Title, Artist, Album, Track number
+  - Apply metadata saves the values
+  - Re-convert writes them into the audio file (and renames it)
+
+The filename template is in Settings -> Output. Default: {title}
+Other placeholders: {artist} {album} {track} {id} {source}
 
 
 TROUBLESHOOTING
 ---------------
 
-- "FFmpeg not found":
-  Put ffmpeg.exe next to main.py / MusicDLP.exe, or in a "ffmpeg"
-  subfolder, or install it system-wide and reopen the terminal.
+"FFmpeg not found"
+  Install with winget, place ffmpeg.exe next to the app, or set the path in
+  Settings -> Advanced. Downloads still work without it; conversion does not.
 
-- Download fails with 403 / bot detection:
-  Your cookies may be missing or expired. Re-export cookies.txt and
-  select it in Settings.
+YouTube sign-in check / 403
+  Settings -> Download -> Cookies -> choose your browser. Retry the track.
 
-- X/Twitter post fails:
-  The post may be protected, deleted, or region-locked. Try a cookies
-  file; if the post has no video, there is nothing to download.
+X/Twitter post fails
+  The post may be protected, deleted, region-locked, or contain no video.
+  Try browser cookies.
 
-- A download or conversion was interrupted:
-  Just run it again. Music DLP resumes completed items automatically.
+Nothing appears in Spotify
+  Check that the folder is added under Settings -> Show local files, and
+  restart Spotify. Rescanning can take a minute for large libraries.
 
-- Logs:
-  See the logs/ folder for details.
+Duplicate tracks in Spotify
+  Send only MP3 to Spotify (Settings -> Spotify -> Format sent to Spotify).
+
+A job seems stuck
+  Press Cancel in the status bar. Interrupted items resume next time.
+
+Logs
+  %LOCALAPPDATA%\MusicDLP\logs\musicdlp.log
+  Or use the Logs button in the app and "Open log file".
+
+
+IMPORTING AN OLD LIBRARY
+------------------------
+
+File -> Import old library, or accept the prompt on first launch if a
+music_dlp.db from the previous version is found. Existing files are
+referenced in place; nothing is moved or deleted.

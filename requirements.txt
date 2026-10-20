@@ -1,19 +1,11 @@
-# Music DLP - Requirements
-# Python 3.10+ required
-
-# Media downloading (YouTube, X/Twitter, and many other sites)
-yt-dlp>=2024.12.0
-
-# Audio/video processing
-ffmpeg-python>=0.2.0
+# Runtime dependencies
+PySide6>=6.7
+yt-dlp>=2025.1.1
 mutagen>=1.47.0
-
-# GUI framework
-customtkinter>=5.2.0
-
-# Image processing
 Pillow>=10.0.0
-
-# HTTP and utilities
 requests>=2.31.0
-colorama>=0.4.6
+
+# Development / tests
+# pytest>=8
+# pytest-qt>=4.4
+# pyinstaller>=6.6

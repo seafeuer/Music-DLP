@@ -1,0 +1,159 @@
+"""Typed application settings stored as JSON."""
+
+from __future__ import annotations
+
+import json
+import os
+from dataclasses import asdict, dataclass, field, fields
+from pathlib import Path
+from typing import Any
+
+from musicdlp.core.paths import (
+    config_path,
+    default_output_dir,
+    default_spotify_dir,
+)
+
+THEMES = ("system", "dark", "light")
+MODES = ("easy", "pro")
+FORMATS = ("mp3", "m4a")
+BITRATES = ("128", "192", "256", "320")
+COOKIE_MODES = ("none", "browser", "file")
+COPY_MODES = ("copy", "move")
+BROWSERS = ("chrome", "edge", "firefox", "brave", "opera", "vivaldi", "chromium")
+
+
+@dataclass
+class Settings:
+    """All persisted user preferences."""
+
+    theme: str = "system"
+    mode: str = "easy"
+
+    output_dir: str = ""
+    spotify_dir: str = ""
+    spotify_format: str = "mp3"
+    spotify_copy_mode: str = "copy"
+    spotify_auto_restart: bool = True
+
+    formats: list[str] = field(default_factory=lambda: ["mp3"])
+    mp3_bitrate: str = "320"
+    m4a_bitrate: str = "320"
+    normalize: bool = True
+    keep_raw: bool = False
+    filename_template: str = "{title}"
+
+    cookies_mode: str = "none"
+    cookies_browser: str = "chrome"
+    cookies_file: str = ""
+
+    max_retries: int = 3
+    sleep_min: float = 1.0
+    sleep_max: float = 3.0
+
+    notifications: bool = True
+    log_level: str = "INFO"
+
+    ffmpeg_path: str = ""
+    window_geometry: str = ""
+    last_source_id: int | None = None
+    first_run_done: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.output_dir:
+            self.output_dir = str(default_output_dir())
+        if not self.spotify_dir:
+            self.spotify_dir = str(default_spotify_dir())
+        self.validate()
+
+    # ------------------------------------------------------------------ load
+
+    @classmethod
+    def load(cls, path: Path | None = None) -> "Settings":
+        path = Path(path) if path else config_path()
+        if not path.exists():
+            return cls()
+
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return cls()
+
+        if not isinstance(raw, dict):
+            return cls()
+
+        known = {f.name for f in fields(cls)}
+        values = {k: v for k, v in raw.items() if k in known}
+        try:
+            return cls(**values)
+        except (TypeError, ValueError):
+            return cls()
+
+    # ------------------------------------------------------------------ save
+
+    def save(self, path: Path | None = None) -> None:
+        path = Path(path) if path else config_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(asdict(self), indent=2, ensure_ascii=False)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(payload, encoding="utf-8")
+        os.replace(tmp, path)
+
+    # -------------------------------------------------------------- validate
+
+    def validate(self) -> None:
+        """Coerce values into supported ranges instead of failing."""
+        if self.theme not in THEMES:
+            self.theme = "system"
+        if self.mode not in MODES:
+            self.mode = "easy"
+
+        formats = [f for f in (self.formats or []) if f in FORMATS]
+        self.formats = formats or ["mp3"]
+
+        if self.mp3_bitrate not in BITRATES:
+            self.mp3_bitrate = "320"
+        if self.m4a_bitrate not in BITRATES:
+            self.m4a_bitrate = "320"
+
+        if self.spotify_format not in FORMATS:
+            self.spotify_format = "mp3"
+        if self.spotify_copy_mode not in COPY_MODES:
+            self.spotify_copy_mode = "copy"
+
+        if self.cookies_mode not in COOKIE_MODES:
+            self.cookies_mode = "none"
+        if self.cookies_browser not in BROWSERS:
+            self.cookies_browser = "chrome"
+
+        try:
+            self.max_retries = max(0, min(10, int(self.max_retries)))
+        except (TypeError, ValueError):
+            self.max_retries = 3
+        try:
+            self.sleep_min = max(0.0, float(self.sleep_min))
+            self.sleep_max = max(self.sleep_min, float(self.sleep_max))
+        except (TypeError, ValueError):
+            self.sleep_min, self.sleep_max = 1.0, 3.0
+
+        if not self.filename_template.strip():
+            self.filename_template = "{title}"
+        if self.log_level not in ("DEBUG", "INFO", "WARNING", "ERROR"):
+            self.log_level = "INFO"
+
+    # ------------------------------------------------------------- accessors
+
+    @property
+    def output_path(self) -> Path:
+        return Path(self.output_dir).expanduser()
+
+    @property
+    def spotify_path(self) -> Path:
+        return Path(self.spotify_dir).expanduser()
+
+    @property
+    def raw_dir(self) -> Path:
+        return self.output_path / "_raw"
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)

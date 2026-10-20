@@ -5,6 +5,8 @@ __pycache__/
 *.so
 *.egg-info/
 *.egg
+build/
+dist/
 
 # Virtual environment
 venv/
@@ -18,55 +20,27 @@ env/
 *.swo
 *.code-workspace
 
-# Project runtime files
+# Runtime data (lives outside the repo by default, but keep it out if present)
+library.db
+library.db-wal
+library.db-shm
 music_dlp.db
-cookies.txt
+config.json
 config.ini
+cookies.txt
 crash.log
 logs/
 downloads/
+data/
 nul
-
-# PyInstaller
-build/
-dist/
 
 # OS files
 Thumbs.db
 Desktop.ini
 .DS_Store
 
-# Test / diagnostic scripts (local dev only)
-test_*.py
-run_all_tests.py
-check_*.py
-cleanup_*.py
-diagnose_*.py
-fix_*.py
-find_*.py
-compare_*.bat
-missing_methods_report.txt
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
 test_data/
-
-# ...but keep the committed test suite
-!tests/
-!tests/test_*.py
-
-# Development session docs (local only)
-HANDOFF*.md
-PHASE*_README.md
-PHASE*_SUMMARY.md
-PHASE*_START_PROMPT.md
-SESSION_*.md
-BUGFIX_*.md
-NEXT_SESSION*.md
-TROUBLESHOOTING.md
-TESTING_GUIDE.md
-DEPLOY_*.md
-REVIEW_*.md
-VRAM_*.md
-MODEL_*.md
-AI_IMPROVEMENTS*.md
-ATTRIBUTEERROR_*.md
-V3_PROMPTS_RESULTS.md
-EXTERNAL_AI_HANDOFF.md
