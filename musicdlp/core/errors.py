@@ -68,6 +68,22 @@ def classify_ytdlp_error(exc: BaseException) -> AppError:
             cause=exc,
         )
 
+    if "no video could be found" in lowered or "no video formats found" in lowered:
+        return AppError(
+            "That post has no video or audio in it.",
+            "Only posts that contain a video can be downloaded.",
+            kind="nomedia",
+            cause=exc,
+        )
+
+    if "unable to download webpage" in lowered or "http error 404" in lowered:
+        return AppError(
+            "That link isn't a video or playlist.",
+            "Check that you copied the whole link, then try again.",
+            kind="unsupported",
+            cause=exc,
+        )
+
     if "unsupported url" in lowered or "no suitable extractor" in lowered:
         return AppError(
             "This link is not supported.",

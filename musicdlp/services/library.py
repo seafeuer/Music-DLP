@@ -60,10 +60,14 @@ class LibraryService:
             except Cancelled:
                 raise
             except AppError as exc:
-                result.errors.append(f"{url}: {exc.user_text()}")
+                logger.error("Could not add %s: %s", url, exc.user_text())
+                result.errors.append(exc.user_text())
             except Exception as exc:
                 logger.exception("Could not add %s", url)
-                result.errors.append(f"{url}: {exc}")
+                result.errors.append(
+                    "That link could not be read. Check that it is complete "
+                    "and try again."
+                )
             finally:
                 if progress:
                     progress(index, total, url)

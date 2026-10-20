@@ -114,6 +114,11 @@ class SettingsDialog(QDialog):
         self._select(self.cookies_combo, self.settings.cookies_mode)
         self.cookies_combo.currentIndexChanged.connect(self._update_cookies)
         form.addRow("Cookies", self.cookies_combo)
+        self._hint(
+            form,
+            "Some videos and posts only work when you are signed in. "
+            "Choosing a browser is usually enough.",
+        )
 
         self.browser_combo = QComboBox()
         for browser in ("chrome", "edge", "firefox", "brave", "opera",
@@ -144,19 +149,28 @@ class SettingsDialog(QDialog):
         self.retries_spin = QSpinBox()
         self.retries_spin.setRange(0, 10)
         self.retries_spin.setValue(self.settings.max_retries)
-        form.addRow("Retries per item", self.retries_spin)
+        form.addRow("Tries per song", self.retries_spin)
+        self._hint(
+            form,
+            "How many times to retry a song that fails. 3 is a good default.",
+        )
 
         self.sleep_min_spin = QDoubleSpinBox()
         self.sleep_min_spin.setRange(0.0, 60.0)
         self.sleep_min_spin.setSingleStep(0.5)
         self.sleep_min_spin.setValue(self.settings.sleep_min)
-        form.addRow("Minimum delay between items (s)", self.sleep_min_spin)
+        form.addRow("Shortest pause between songs (seconds)", self.sleep_min_spin)
 
         self.sleep_max_spin = QDoubleSpinBox()
         self.sleep_max_spin.setRange(0.0, 120.0)
         self.sleep_max_spin.setSingleStep(0.5)
         self.sleep_max_spin.setValue(self.settings.sleep_max)
-        form.addRow("Maximum delay between items (s)", self.sleep_max_spin)
+        form.addRow("Longest pause between songs (seconds)", self.sleep_max_spin)
+        self._hint(
+            form,
+            "A small pause stops YouTube and X treating the app as a bot. "
+            "Leave these as they are unless downloads keep failing.",
+        )
 
         self._update_cookies()
         self.tabs.addTab(tab, "Download")
@@ -200,10 +214,14 @@ class SettingsDialog(QDialog):
         form.addRow("M4A quality", self.m4a_bitrate)
 
         self.normalize_check = QCheckBox(
-            "Normalize loudness (two-pass, -14 LUFS)"
+            "Make all songs the same volume"
         )
         self.normalize_check.setChecked(self.settings.normalize)
         form.addRow("Audio", self.normalize_check)
+        self._hint(
+            form,
+            "Keeps quiet and loud songs at a similar level. Recommended.",
+        )
 
         self.keep_raw_check = QCheckBox(
             "Keep the original download after converting"
@@ -339,6 +357,14 @@ class SettingsDialog(QDialog):
         index = combo.findData(value)
         if index >= 0:
             combo.setCurrentIndex(index)
+
+    @staticmethod
+    def _hint(form: QFormLayout, text: str) -> None:
+        """Add a short explanation under the previous field."""
+        label = QLabel(text)
+        label.setObjectName("mutedSmall")
+        label.setWordWrap(True)
+        form.addRow("", label)
 
     @staticmethod
     def _wrap(layout) -> QWidget:

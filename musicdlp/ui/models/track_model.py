@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Iterable, Optional
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Qt, Signal
@@ -90,7 +91,7 @@ class TrackTableModel(QAbstractTableModel):
             if column == COL_FORMAT:
                 return _format_for(track)
             if column == COL_STATUS:
-                return status_label(display_status(track))
+                return status_label(display_status(track, row.file_missing))
             if column == COL_PROGRESS:
                 percent = self.progress.get(track.id)
                 return "" if percent is None else f"{percent:.0f}%"
@@ -106,6 +107,8 @@ class TrackTableModel(QAbstractTableModel):
 
         if role == Qt.ToolTipRole:
             if column == COL_STATUS:
+                if row.file_missing:
+                    return "The audio file is missing. Use Retry to fetch it again."
                 return (
                     track.error
                     or track.sync_error
@@ -157,7 +160,7 @@ class TrackTableModel(QAbstractTableModel):
 
     def set_rows(self, rows: Iterable[TrackRow], checked: Optional[Iterable[int]] = None) -> None:
         self.beginResetModel()
-        self.rows = list(rows)
+        self.rows = [self._with_file_state(row) for row in rows]
         self.progress.clear()
         self._index_by_id = {
             row.track.id: index for index, row in enumerate(self.rows)
@@ -167,13 +170,27 @@ class TrackTableModel(QAbstractTableModel):
         self.endResetModel()
         self.check_changed.emit()
 
+    @staticmethod
+    def _with_file_state(row: TrackRow) -> TrackRow:
+        """Flag converted songs whose audio file has gone missing."""
+        if not is_converted(row.track.status):
+            return row
+        paths = [p for p in (row.track.mp3_path, row.track.m4a_path) if p]
+        missing = bool(paths) and not any(Path(p).exists() for p in paths)
+        if missing == row.file_missing:
+            return row
+        return TrackRow(
+            source=row.source, track=row.track, position=row.position,
+            file_missing=missing,
+        )
+
     def replace_track(self, track: Track) -> None:
         index = self._index_by_id.get(track.id)
         if index is None:
             return
         row = self.rows[index]
-        self.rows[index] = TrackRow(
-            source=row.source, track=track, position=row.position
+        self.rows[index] = self._with_file_state(
+            TrackRow(source=row.source, track=track, position=row.position)
         )
         left = self.index(index, 0)
         right = self.index(index, len(COLUMNS) - 1)
@@ -208,6 +225,10 @@ class TrackTableModel(QAbstractTableModel):
         index = self._index_by_id.get(track_id)
         return self.rows[index] if index is not None else None
 
+    def row_index_for_id(self, track_id: int) -> Optional[int]:
+        """Row number for a track id, for use with QModelIndex."""
+        return self._index_by_id.get(track_id)
+
     # ------------------------------------------------------------ selection
 
     def checked_rows(self) -> list[TrackRow]:
@@ -234,6 +255,32 @@ class TrackTableModel(QAbstractTableModel):
         ids = [
             row.track.id for row in self.rows
             if row.track.status == status
+        ]
+        self.set_checked(ids)
+
+    def set_checked_ids(self, ids: Iterable[int]) -> None:
+        self.set_checked(ids)
+
+    def toggle_check(self, track_id: int, checked: bool) -> None:
+        index = self._index_by_id.get(track_id)
+        if index is None:
+            return
+        self.setData(self.index(index, COL_CHECK),
+                     Qt.Checked if checked else Qt.Unchecked,
+                     Qt.CheckStateRole)
+
+    def check_problems(self) -> None:
+        """Select every song that needs attention.
+
+        This covers errors, missing files, sync failures, and songs whose
+        details changed after their file was written.
+        """
+        ids = [
+            row.track.id for row in self.rows
+            if row.file_missing
+            or row.track.status == ERROR
+            or row.track.sync_error
+            or row.track.needs_update
         ]
         self.set_checked(ids)
 

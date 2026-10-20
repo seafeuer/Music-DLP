@@ -23,7 +23,7 @@ from musicdlp.core.config import Settings
 from musicdlp.core.db import Database
 from musicdlp.core.errors import AppError, Cancelled
 from musicdlp.core.logging import LogEmitter, QtLogHandler
-from musicdlp.core.models import BatchItem, TrackRow
+from musicdlp.core.models import BatchItem, TrackRow, is_converted
 from musicdlp.core.paths import art_cache_dir, is_writable
 from musicdlp.services.ffmpeg import FFmpegService
 from musicdlp.services.legacy_import import (
@@ -163,8 +163,8 @@ class MainWindow(QMainWindow):
         self.logger = ctx.logger
 
         self.setWindowTitle(f"Music DLP {__version__}")
-        self.setMinimumSize(1040, 640)
-        self.resize(1280, 820)
+        self.setMinimumSize(1000, 620)
+        self._resize_to_screen()
         self._restore_geometry()
 
         self._checked_by_source: dict[int, set[int]] = {}
@@ -420,6 +420,7 @@ class MainWindow(QMainWindow):
         self.inspector.retry_requested.connect(self._retry_track)
         self.inspector.open_source_requested.connect(self._open_url)
         self.inspector.reveal_requested.connect(self._reveal_track)
+        self.inspector.include_changed.connect(self._set_track_included)
 
         self.status.cancel_clicked.connect(self._cancel)
         self.status.open_output.connect(self._open_output)
@@ -484,7 +485,8 @@ class MainWindow(QMainWindow):
         if keep_selected is None:
             self.inspector.set_row(None)
         else:
-            self.inspector.set_row(self.track_table.current_row())
+            row = self.track_table.current_row()
+            self.inspector.set_row(row, self._is_row_checked(row))
         self._update_actions()
 
     def _reload_current_source(self) -> None:
@@ -492,13 +494,21 @@ class MainWindow(QMainWindow):
             self._load_source(self._current_source_id)
 
     def _on_selection_changed(self, *_args) -> None:
-        self.inspector.set_row(self.track_table.current_row())
+        row = self.track_table.current_row()
+        self.inspector.set_row(row, self._is_row_checked(row))
+
+    def _is_row_checked(self, row) -> bool:
+        return bool(row) and row.track.id in self.track_table.model.checked
+
+    def _set_track_included(self, track_id: int, included: bool) -> None:
+        self.track_table.model.toggle_check(track_id, included)
 
     def _on_checked_changed(self) -> None:
         if self._current_source_id is not None:
             self._checked_by_source[self._current_source_id] = (
                 self.track_table.model.checked_ids()
             )
+        self.inspector.set_checked(self._is_row_checked(self.track_table.current_row()))
         self._update_actions()
         self._update_steps()
 
@@ -692,15 +702,14 @@ class MainWindow(QMainWindow):
             detail = "Tick the songs you want"
 
         enabled = (count > 0, count > 0 and ffmpeg_ok, count > 0)
-        self.steps.set_clickable(self.settings.mode == "pro")
+        # The strip is a progress display. Running a stage is done with the
+        # buttons, so exploring the numbered circles cannot start a job.
+        self.steps.set_clickable(False)
         self.steps.reset(detail, enabled=enabled)
 
     def _on_step_clicked(self, index: int) -> None:
-        """In Pro mode, each step is also a button."""
-        if self.settings.mode != "pro" or self._is_busy():
-            return
-        stage = ("download", "convert", "sync")[index]
-        self._start_stage(stage)
+        """The strip is informational; stages run from the buttons."""
+        return
 
     def _set_stage_active(self, index: int, detail: str) -> None:
         for earlier in range(index):
@@ -732,6 +741,12 @@ class MainWindow(QMainWindow):
             else:
                 self.steps.set_step(index, DONE, "Done")
 
+        # A download-only run means FFmpeg was unavailable. Say so instead of
+        # leaving the remaining steps waiting forever.
+        if stages == ["download"] and not self.ctx.ffmpeg.available:
+            self.steps.set_step(1, STEP_ERROR, "Needs FFmpeg")
+            self.steps.set_step(2, WAITING, "Runs after conversion")
+
     def _set_controls_enabled(self, enabled: bool) -> None:
         self.add_button.setEnabled(enabled)
         self.paste_button.setEnabled(enabled)
@@ -760,7 +775,7 @@ class MainWindow(QMainWindow):
     def _start_stage(self, stage: str) -> None:
         rows = self.track_table.checked_rows()
         if not rows:
-            self.status.set_idle("Select at least one track.")
+            self.status.set_idle("Tick at least one song first.")
             return
         if stage == "convert" and not self.ctx.ffmpeg.available:
             QMessageBox.warning(
@@ -768,6 +783,40 @@ class MainWindow(QMainWindow):
                 "Locate FFmpeg in Settings before converting.",
             )
             return
+
+        if stage == "convert":
+            ready = [
+                row for row in rows
+                if row.track.raw_path and Path(row.track.raw_path).exists()
+            ]
+            if not ready:
+                reply = QMessageBox.question(
+                    self,
+                    "Nothing to convert yet",
+                    "These songs have not been downloaded yet. "
+                    "Download them now?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.Yes,
+                )
+                if reply == QMessageBox.Yes:
+                    self._start_pipeline(rows, ["download", "convert"])
+                return
+            if len(ready) < len(rows):
+                self.logger.info(
+                    "%d song(s) skipped because they are not downloaded yet",
+                    len(rows) - len(ready),
+                )
+            rows = ready
+
+        if stage == "sync":
+            ready = [row for row in rows if row.track.output_paths]
+            if not ready:
+                self.status.set_idle(
+                    "Convert the songs first, then send them to Spotify."
+                )
+                return
+            rows = ready
+
         self._start_pipeline(rows, [stage])
 
     def _start_pipeline(
@@ -827,8 +876,6 @@ class MainWindow(QMainWindow):
         self.logger.log(
             getattr(logging, level.upper(), logging.INFO), message
         )
-        if level.upper() in ("WARNING", "ERROR") and not self.log_drawer.isVisible():
-            self.logs_action.setChecked(True)
 
     def _on_pipeline_finished(self, summary: dict) -> None:
         self.track_table.clear_progress()
@@ -852,8 +899,12 @@ class MainWindow(QMainWindow):
         if summary.get("cancelled"):
             self.status.set_idle("Job cancelled.")
         elif summary.get("failed"):
-            self.status.set_idle(f"{message} — see Logs for details.")
-            self.logs_action.setChecked(True)
+            self.status.set_idle(f"{message} — press Logs for details.")
+        elif not self.ctx.ffmpeg.available:
+            self.status.set_idle(
+                "Songs downloaded. FFmpeg is needed to convert them — "
+                "press “Set up FFmpeg” at the top."
+            )
         else:
             self.status.set_idle(message)
 
@@ -929,7 +980,11 @@ class MainWindow(QMainWindow):
         updated = self.db.get_track(track_id)
 
         if values["update_file"] and updated is not None:
-            stages = ["convert"]
+            raw = updated.raw_path
+            has_raw = bool(raw and Path(raw).exists())
+            # Re-tagging needs the original audio. When it was cleaned up
+            # after the first conversion, fetch it again rather than failing.
+            stages = ["convert"] if has_raw else ["download", "convert"]
             if updated.synced_at:
                 stages.append("sync")
             row = self.track_table.model.row_for_id(track_id)
@@ -938,9 +993,16 @@ class MainWindow(QMainWindow):
                 self.status.set_busy("Updating the song with your new details…")
                 return
 
-        self.status.set_idle(
-            "Details saved. They are written into the file when you convert it."
-        )
+        if updated is not None and is_converted(updated.status):
+            self.status.set_idle(
+                "Saved in Music DLP only. The audio file still has the old "
+                "details — open Edit details and tick “Update the audio file "
+                "now” to write them in."
+            )
+        else:
+            self.status.set_idle(
+                "Details saved. They are used when the song is downloaded."
+            )
 
     def _apply_metadata(
         self,
@@ -959,7 +1021,7 @@ class MainWindow(QMainWindow):
         )
         self._reload_current_source()
         row = self.track_table.model.row_for_id(track_id)
-        self.inspector.set_row(row)
+        self.inspector.set_row(row, self._is_row_checked(row))
         self.status.set_idle(
             "Metadata saved. Use Re-convert to write it into the files."
         )
@@ -1003,6 +1065,10 @@ class MainWindow(QMainWindow):
         stages = ["convert"] if raw and Path(raw).exists() else [
             "download", "convert"
         ]
+        # A song that is already in Spotify must be sent again after its
+        # file is rewritten, otherwise the copy in Spotify is stale or gone.
+        if row.track.synced_at:
+            stages.append("sync")
         self._start_pipeline([row], stages, force=True)
 
     def _remove_track(self, track_id: int) -> None:
@@ -1187,7 +1253,8 @@ class MainWindow(QMainWindow):
         # The details panel stays visible in both modes: it is where a song
         # is understood and edited, and hiding it made editing undiscoverable.
         self.inspector_scroll.setVisible(self.inspector_action.isChecked())
-        self.inspector.set_row(self.track_table.current_row())
+        row = self.track_table.current_row()
+        self.inspector.set_row(row, self._is_row_checked(row))
 
     def _open_spotify(self) -> None:
         dialog = SpotifyDialog(self.settings.spotify_dir, self.ctx.spotify, self)
@@ -1289,6 +1356,17 @@ class MainWindow(QMainWindow):
 
     # ----------------------------------------------------------- window state
 
+    def _resize_to_screen(self) -> None:
+        """Choose a default size that fits the screen, including 768p laptops."""
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            self.resize(1280, 800)
+            return
+        available = screen.availableGeometry()
+        width = min(1280, max(1000, available.width() - 40))
+        height = min(820, max(620, available.height() - 60))
+        self.resize(width, height)
+
     def _restore_geometry(self) -> None:
         if not self.settings.window_geometry:
             return
@@ -1297,7 +1375,19 @@ class MainWindow(QMainWindow):
             data = QByteArray.fromBase64(
                 self.settings.window_geometry.encode("ascii")
             )
-            self.restoreGeometry(data)
+            if not self.restoreGeometry(data):
+                return
+            # A window restored from a larger monitor can end up off-screen.
+            screen = QApplication.primaryScreen()
+            if screen is not None:
+                available = screen.availableGeometry()
+                frame = self.frameGeometry()
+                if not available.intersects(frame):
+                    self._resize_to_screen()
+                    self.move(
+                        available.x() + (available.width() - self.width()) // 2,
+                        available.y() + (available.height() - self.height()) // 2,
+                    )
         except Exception:
             pass
 

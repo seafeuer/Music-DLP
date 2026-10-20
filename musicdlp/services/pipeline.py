@@ -22,6 +22,7 @@ from musicdlp.core.config import Settings
 from musicdlp.core.db import Database
 from musicdlp.core.errors import AppError, Cancelled
 from musicdlp.core.models import (
+    CANCELLED,
     CONVERTED,
     DOWNLOADED,
     DOWNLOADING,
@@ -29,6 +30,7 @@ from musicdlp.core.models import (
     ERROR,
     QUEUED,
     SYNCED,
+    SYNCING,
     BatchItem,
     Track,
 )
@@ -195,6 +197,7 @@ class Pipeline(QObject):
             self._execute(items, stages, force, settings, summary)
         except Cancelled:
             summary["cancelled"] = True
+            self._mark_cancelled(items)
             self.message.emit("INFO", "Job cancelled.")
         except Exception as exc:
             logger.exception("Pipeline failed")
@@ -205,6 +208,16 @@ class Pipeline(QObject):
                 self._thread = None
             self.message.emit("INFO", self._summary_text(summary))
             self.finished.emit(summary)
+
+    def _mark_cancelled(self, items: list[BatchItem]) -> None:
+        """Leave nothing stuck on an in-progress status after a cancel."""
+        for item in items:
+            track = self.db.get_track(item.track.id)
+            if track is None:
+                continue
+            if track.status in (QUEUED, DOWNLOADING, CONVERTING, SYNCING):
+                self.db.update_track(track.id, status=CANCELLED)
+                self.track_changed.emit(track.id)
 
     def _execute(
         self,
@@ -487,12 +500,14 @@ class Pipeline(QObject):
                         except OSError as exc:
                             logger.debug("Could not remove old file: %s", exc)
 
-                        stale_copy = settings.spotify_path / old_output.name
-                        try:
-                            if stale_copy.exists():
-                                stale_copy.unlink()
-                        except OSError as exc:
-                            logger.debug("Could not remove old Spotify copy: %s", exc)
+                        # The Spotify copy is only removed once the new one
+                        # has been copied, in the sync stage. Deleting it here
+                        # made songs disappear from Spotify when the run did
+                        # not include a sync.
+                        stale_copies = summary.setdefault(
+                            "_stale_spotify", []
+                        )
+                        stale_copies.append(old_output.name)
 
                 except Cancelled:
                     raise
@@ -607,6 +622,18 @@ class Pipeline(QObject):
         if settings.spotify_auto_restart and summary["synced"]:
             ok, message = self.spotify.restart()
             self.message.emit("INFO" if ok else "WARNING", message)
+
+        # Remove Spotify copies left behind by renamed files, now that the
+        # replacements have been copied in.
+        for stale_name in summary.get("_stale_spotify", []):
+            if stale_name in {path.name for path in files}:
+                continue
+            stale = settings.spotify_path / stale_name
+            try:
+                if stale.exists():
+                    stale.unlink()
+            except OSError as exc:
+                logger.debug("Could not remove stale Spotify copy: %s", exc)
 
     @staticmethod
     def _outputs_exist(track: Track, settings: Settings) -> bool:

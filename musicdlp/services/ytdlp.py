@@ -21,7 +21,6 @@ from musicdlp.services.urls import (
     classify_url,
     platform_key,
 )
-
 logger = logging.getLogger("musicdlp.ytdlp")
 
 ProgressCallback = Callable[[dict], None]
@@ -100,7 +99,11 @@ class YtDlpService:
         opts = self._base_opts()
         opts.update({
             "skip_download": True,
-            "extract_flat": "in_playlist",
+            # A single link needs full extraction so that a post with no
+            # video (a text-only tweet, a dead link) fails now, while the
+            # user is adding it, instead of later during the download.
+            "extract_flat": False if (info and info.kind == KIND_ITEM)
+            else "in_playlist",
         })
 
         logger.info("Reading link: %s", url)

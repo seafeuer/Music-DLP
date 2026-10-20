@@ -28,13 +28,17 @@ class QtLogHandler(logging.Handler):
         super().__init__()
         self.emitter = emitter
         self.setFormatter(
-            logging.Formatter("%(asctime)s  %(levelname)-8s %(name)s: %(message)s",
-                              datefmt="%H:%M:%S")
+            logging.Formatter("%(asctime)s  %(message)s", datefmt="%H:%M:%S")
         )
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            self.emitter.message.emit(record.levelname, self.format(record))
+            # Only warnings and errors are labelled; ordinary lines read as
+            # plain sentences instead of "module: text".
+            text = self.format(record)
+            if record.levelno >= logging.WARNING:
+                text = f"{record.levelname.title()}: {text}"
+            self.emitter.message.emit(record.levelname, text)
         except Exception:
             self.handleError(record)
 

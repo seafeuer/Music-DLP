@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QApplication
 
 from musicdlp.core.models import (
     CANCELLED, CONVERTED, CONVERTING, DOWNLOADED, DOWNLOADING, ERROR,
-    NEEDS_UPDATE, NEW, QUEUED, SYNCED, SYNCING,
+    MISSING, NEEDS_UPDATE, NEW, QUEUED, SYNCED, SYNCING,
 )
 
 # (background, foreground) for status pills. Light pills with dark text read
@@ -25,6 +25,7 @@ STATUS_COLORS: dict[str, tuple[str, str]] = {
     ERROR: ("#fee2e2", "#991b1b"),
     CANCELLED: ("#e5e7eb", "#4b5563"),
     NEEDS_UPDATE: ("#ffedd5", "#9a3412"),
+    MISSING: ("#fee2e2", "#991b1b"),
 }
 
 ACCENT = "#3b82f6"
@@ -96,6 +97,7 @@ def build_stylesheet(theme: str) -> str:
     hover = "#3a3d42" if dark else "#eef1f5"
     checkbox_bg = "#3a3d42" if dark else "#ffffff"
     checkbox_border = "#5c6066" if dark else "#9aa1a9"
+    disabled_bg = "#2a2c30" if dark else "#e6e8ec"
 
     return f"""
     QWidget {{ font-size: 13px; }}
@@ -116,6 +118,12 @@ def build_stylesheet(theme: str) -> str:
     }}
     QPushButton:hover {{ background: {hover}; }}
     QPushButton:disabled {{ color: {muted}; }}
+    QPushButton#primary:disabled {{
+        background: {disabled_bg};
+        border: 1px solid {border};
+        color: {muted};
+        font-weight: 600;
+    }}
     QPushButton#primary {{
         background: {ACCENT}; border: 1px solid {ACCENT};
         color: white; font-weight: 600; padding: 7px 16px;

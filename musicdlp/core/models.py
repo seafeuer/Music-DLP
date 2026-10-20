@@ -18,10 +18,11 @@ SYNCED = "synced"
 ERROR = "error"
 CANCELLED = "cancelled"
 NEEDS_UPDATE = "needs_update"
+MISSING = "missing"
 
 STATUSES = (
     NEW, QUEUED, DOWNLOADING, DOWNLOADED, CONVERTING, CONVERTED,
-    SYNCING, SYNCED, ERROR, CANCELLED, NEEDS_UPDATE,
+    SYNCING, SYNCED, ERROR, CANCELLED, NEEDS_UPDATE, MISSING,
 )
 
 DOWNLOADED_STATES = (DOWNLOADED, CONVERTING, CONVERTED, SYNCING, SYNCED)
@@ -42,11 +43,14 @@ def status_label(status: str) -> str:
         ERROR: "Error",
         CANCELLED: "Cancelled",
         NEEDS_UPDATE: "Needs update",
+        MISSING: "Audio file missing",
     }.get(status, status.title())
 
 
-def display_status(track: "Track") -> str:
+def display_status(track: "Track", file_missing: bool = False) -> str:
     """The status a person should see, including pending metadata edits."""
+    if file_missing and is_converted(track.status):
+        return MISSING
     if track.needs_update and is_converted(track.status):
         return NEEDS_UPDATE
     if track.sync_error and track.status in CONVERTED_STATES:
@@ -199,6 +203,7 @@ class TrackRow:
     source: Source
     track: Track
     position: int
+    file_missing: bool = False
 
     @property
     def id(self) -> int:

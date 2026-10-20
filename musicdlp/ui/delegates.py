@@ -26,7 +26,7 @@ class StatusDelegate(QStyledItemDelegate):
         if option.state & QStyle.State_Selected:
             painter.fillRect(option.rect, option.palette.highlight())
 
-        status = display_status(row.track)
+        status = display_status(row.track, row.file_missing)
         background, foreground = STATUS_COLORS.get(
             status, ("#e5e7eb", "#374151")
         )

@@ -3,6 +3,7 @@
 import logging
 
 import pytest
+from PySide6.QtCore import Qt
 
 from musicdlp.core.config import Settings
 from musicdlp.core.db import Database
@@ -121,3 +122,69 @@ def test_metadata_edit(window):
     assert track.meta_artist == "New Artist"
     assert track.meta_album == "Album"
     assert track.meta_track == 3
+
+
+def test_checkbox_click_keeps_the_window_working(window):
+    """Regression: checking a row used to raise and freeze the run."""
+    main, _db, ids = window
+    model = main.track_table.model
+    index = model.index(model.row_index_for_id(ids[0]), 0)
+
+    assert model.setData(index, Qt.Checked, Qt.CheckStateRole)
+    assert ids[0] in model.checked
+    assert model.setData(index, Qt.Unchecked, Qt.CheckStateRole)
+    assert ids[0] not in model.checked
+
+    # The row is still selectable and the details panel follows it.
+    main.track_table._select_by_track_id(ids[1])
+    assert main.track_table.current_row().track.id == ids[1]
+    assert main.inspector.title_label.text() == "Song 2"
+
+
+def test_inspector_include_checkbox_mirrors_the_list(window):
+    main, _db, ids = window
+    main.track_table._select_by_track_id(ids[0])
+    assert main.inspector.include_check.isChecked()
+
+    main.inspector.include_check.setChecked(False)
+    assert ids[0] not in main.track_table.model.checked
+
+    main.inspector.include_check.setChecked(True)
+    assert ids[0] in main.track_table.model.checked
+
+
+def test_selection_survives_a_reload(window):
+    main, _db, ids = window
+    main.track_table._select_by_track_id(ids[1])
+    main._reload_current_source()
+    row = main.track_table.current_row()
+    assert row is not None
+    assert row.track.id == ids[1]
+    assert main.inspector.title_label.text() == "Song 2"
+
+
+def test_reconvert_on_synced_track_includes_sync(window):
+    main, db, ids = window
+    db.update_track(
+        ids[0],
+        status="synced",
+        synced_at="2026-01-01T00:00:00",
+        mp3_path=str(main.settings.output_path / "MP3" / "Song 1.mp3"),
+    )
+    main._reload_current_source()
+
+    captured = {}
+    original = main._start_pipeline
+
+    def fake_start(rows, stages, **kwargs):
+        captured["stages"] = stages
+        captured["rows"] = rows
+
+    main._start_pipeline = fake_start
+    try:
+        main._reconvert_track(ids[0])
+    finally:
+        main._start_pipeline = original
+
+    assert captured["stages"][-1] == "sync", captured
+

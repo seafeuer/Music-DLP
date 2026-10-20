@@ -179,7 +179,9 @@ class SetupDialog(QDialog):
             "right, then choose Settings.\n"
             "3.  Scroll down to “Local files” and switch on “Show local "
             "files”.\n"
-            "4.  Click “Add a source”, then choose the folder shown in step 3.\n"
+            "4.  Click “Add a source”. A folder picker opens. Go to the "
+            "folder shown in step 3 above and click Select Folder. "
+            "(Use “Copy folder path” if you would rather paste it.)\n"
             "5.  Come back here and click “Restart Spotify” so it reads the "
             "songs."
         )
@@ -205,8 +207,11 @@ class SetupDialog(QDialog):
 
         note = QLabel(
             "After this, new songs appear in Spotify under “Your Library → "
-            "Local Files”. To put them in a playlist, drag them there inside "
-            "Spotify."
+            "Local Files”.\n\n"
+            "If Spotify also lists songs you did not add, it is showing your "
+            "Music and Downloads folders, which it does by default. Switch "
+            "those off in the same Local files list so only Music DLP songs "
+            "appear."
         )
         note.setObjectName("muted")
         note.setWordWrap(True)

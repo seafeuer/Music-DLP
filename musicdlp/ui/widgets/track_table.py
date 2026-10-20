@@ -93,7 +93,7 @@ class TrackTableWidget(QWidget):
         select_menu = QMenu(self.select_button)
         select_menu.addAction("All songs", self.model.check_all)
         select_menu.addAction("Not downloaded", lambda: self.model.check_status(NEW))
-        select_menu.addAction("Failed", lambda: self.model.check_status(ERROR))
+        select_menu.addAction("Needs attention", self.model.check_problems)
         select_menu.addSeparator()
         select_menu.addAction("Clear selection", self.model.clear_checks)
         self.select_button.setMenu(select_menu)
@@ -193,7 +193,7 @@ class TrackTableWidget(QWidget):
         self.edit_button.setEnabled(self.current_row() is not None)
 
     def _select_by_track_id(self, track_id: int) -> None:
-        row = self.model.row_for_id(track_id)
+        row = self.model.row_index_for_id(track_id)
         if row is None:
             return
         source_index = self.model.index(row, COL_TITLE)

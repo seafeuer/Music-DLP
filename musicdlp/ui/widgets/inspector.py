@@ -12,7 +12,8 @@ from typing import Optional
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
-    QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
+    QCheckBox, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
+    QWidget,
 )
 
 from musicdlp.core.models import TrackRow, display_status, status_label
@@ -51,6 +52,7 @@ class Inspector(QWidget):
     retry_requested = Signal(int)
     open_source_requested = Signal(str)
     reveal_requested = Signal(int)
+    include_changed = Signal(int, bool)
 
     def __init__(self, thumbnails: ThumbnailService, parent=None) -> None:
         super().__init__(parent)
@@ -115,6 +117,13 @@ class Inspector(QWidget):
 
         buttons = QGridLayout()
         buttons.setSpacing(6)
+        self.include_check = QCheckBox("Include this song in the next run")
+        self.include_check.setToolTip(
+            "The same as ticking the box next to the song in the list"
+        )
+        self.include_check.toggled.connect(self._include_toggled)
+        buttons.addWidget(self.include_check, 0, 0, 1, 2)
+
         self.edit_button = QPushButton("Edit details…")
         self.edit_button.setObjectName("primary")
         self.edit_button.clicked.connect(self._edit)
@@ -122,9 +131,9 @@ class Inspector(QWidget):
         self.reconvert_button.clicked.connect(self._reconvert)
         self.retry_button = QPushButton("Retry")
         self.retry_button.clicked.connect(self._retry)
-        buttons.addWidget(self.edit_button, 0, 0, 1, 2)
-        buttons.addWidget(self.reconvert_button, 1, 0)
-        buttons.addWidget(self.retry_button, 1, 1)
+        buttons.addWidget(self.edit_button, 1, 0, 1, 2)
+        buttons.addWidget(self.reconvert_button, 2, 0)
+        buttons.addWidget(self.retry_button, 2, 1)
         layout.addLayout(buttons)
 
         link_row = QHBoxLayout()
@@ -139,12 +148,15 @@ class Inspector(QWidget):
         layout.addStretch(1)
         self.setEnabled(False)
 
-    def set_row(self, row: Optional[TrackRow]) -> None:
+    def set_row(self, row: Optional[TrackRow], checked: bool = False) -> None:
         self.current_row = row
         self.setEnabled(row is not None)
+        self._updating_include = True
+        self.include_check.setChecked(bool(row) and checked)
+        self._updating_include = False
         if row is None:
             self.title_label.setText("No song selected")
-            self.artist_label.clear()
+            self.artist_label.setText("Pick a song to see and edit its details.")
             self.album_label.clear()
             self.status_label.clear()
             self.hint_label.clear()
@@ -168,9 +180,14 @@ class Inspector(QWidget):
         self.album_label.setText(" · ".join(bits))
         self.album_label.setVisible(bool(bits))
 
-        status = display_status(track)
+        status = display_status(track, row.file_missing)
         self.status_label.setText(status_label(status))
-        if track.needs_update:
+        if row.file_missing:
+            self.hint_label.setText(
+                "The audio file is missing from your computer. Press Retry to "
+                "download and convert it again."
+            )
+        elif track.needs_update:
             self.hint_label.setText(
                 "The details were changed but the file still has the old "
                 "ones. Open “Edit details” and tick “Update the audio file "
@@ -189,7 +206,10 @@ class Inspector(QWidget):
         self.error_label.setVisible(bool(message))
 
         paths = [p for p in (track.mp3_path, track.m4a_path) if p]
-        if paths:
+        if row.file_missing:
+            self.paths_label.setText("The saved audio file is missing.")
+            self.paths_label.setToolTip("\n".join(paths))
+        elif paths:
             names = ", ".join(Path(p).name for p in paths)
             self.paths_label.setText(f"Saved as: {names}")
             self.paths_label.setToolTip("\n".join(paths))
@@ -198,10 +218,11 @@ class Inspector(QWidget):
             self.paths_label.setToolTip("")
 
         self.reconvert_button.setEnabled(
-            bool(track.raw_path or track.output_paths)
+            bool(track.raw_path or track.output_paths) and not row.file_missing
         )
         self.retry_button.setEnabled(
-            status in ("error", "cancelled", "needs_update")
+            row.file_missing
+            or status in ("error", "cancelled", "needs_update")
             or bool(track.sync_error)
         )
         self.reveal_button.setEnabled(bool(paths))
@@ -229,6 +250,17 @@ class Inspector(QWidget):
     def _on_artwork(self, track_id: int, path: str) -> None:
         if self.current_row and self.current_row.track.id == track_id:
             self._set_pixmap(path)
+
+    def set_checked(self, checked: bool) -> None:
+        """Reflect the list's checkbox without emitting a change back."""
+        self._updating_include = True
+        self.include_check.setChecked(checked)
+        self._updating_include = False
+
+    def _include_toggled(self, checked: bool) -> None:
+        if getattr(self, "_updating_include", False) or not self.current_row:
+            return
+        self.include_changed.emit(self.current_row.track.id, checked)
 
     def _edit(self) -> None:
         if self.current_row:
