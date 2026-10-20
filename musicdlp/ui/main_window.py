@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QSplitter, QStyle, QSystemTrayIcon, QToolButton, QVBoxLayout, QWidget,
 )
 
+from musicdlp import __version__
 from musicdlp.core.config import Settings
 from musicdlp.core.db import Database
 from musicdlp.core.errors import AppError, Cancelled
@@ -161,7 +162,7 @@ class MainWindow(QMainWindow):
         self.db = ctx.db
         self.logger = ctx.logger
 
-        self.setWindowTitle("Music DLP")
+        self.setWindowTitle(f"Music DLP {__version__}")
         self.setMinimumSize(1040, 640)
         self.resize(1280, 820)
         self._restore_geometry()
