@@ -2,13 +2,12 @@
 GUI Package for Music DLP
 
 CustomTkinter-based graphical user interface with:
-- Main window with playlist/song panels
-- AI review dialog for batch metadata approval
+- Main window with library/song panels
 - Settings dialog for configuration
 - Threading workers for long-running operations
 
 Author: Music DLP Project
-Version: 1.0.0
+Version: 2.0.0
 """
 
 from .main_window import MainWindow

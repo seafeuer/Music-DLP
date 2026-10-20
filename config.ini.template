@@ -2,20 +2,11 @@
 theme_mode = dark
 
 [Download]
-format = 251/bestaudio[ext=opus]/bestaudio
+format = 251/bestaudio[ext=opus]/bestaudio[ext=webm]/bestaudio/best
 cookies_file =
 sleep_interval_min = 2
 sleep_interval_max = 5
 max_retries = 3
-
-[AI]
-ollama_url = http://localhost:11434
-primary_model = gemma3:12b
-models = gemma3:12b
-parallel_workers = 2
-prompt_version = v4.0
-use_all_models = false
-thinking_mode = false
 
 [Output]
 mp3_enabled = true

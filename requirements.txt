@@ -1,7 +1,7 @@
 # Music DLP - Requirements
 # Python 3.10+ required
 
-# YouTube downloading
+# Media downloading (YouTube, X/Twitter, and many other sites)
 yt-dlp>=2024.12.0
 
 # Audio/video processing
@@ -14,12 +14,6 @@ customtkinter>=5.2.0
 # Image processing
 Pillow>=10.0.0
 
-# AI/LLM integration
-ollama>=0.1.9
-
 # HTTP and utilities
 requests>=2.31.0
 colorama>=0.4.6
-
-# Optional: Japanese text processing fallback
-# cutlet>=0.5.0  # Uncomment if needed for romanization fallback

@@ -34,7 +34,7 @@ class PlaylistPanel(ctk.CTkScrollableFrame):
             logger: Logger instance
             on_playlist_select: Callback when playlist is selected (receives playlist_id)
         """
-        super().__init__(parent, label_text="Playlists", width=250)
+        super().__init__(parent, label_text="Library", width=250)
 
         self.db = db
         self.config = config
@@ -89,7 +89,7 @@ class PlaylistPanel(ctk.CTkScrollableFrame):
                 # Show empty state
                 empty_label = ctk.CTkLabel(
                     self,
-                    text="No playlists added yet.\nAdd a playlist URL above.",
+                    text="Nothing added yet.\nPaste a link above and press Add.",
                     text_color="gray"
                 )
                 empty_label.pack(pady=20)
@@ -184,41 +184,22 @@ class PlaylistPanel(ctk.CTkScrollableFrame):
 
         return selected
 
-    def extract_selected(self):
-        """Extract metadata for selected playlists."""
-        selected = self.get_selected_playlists()
-
-        if not selected:
-            self.logger.warning("No playlists selected for extraction")
-            return
-
-        self.logger.info(f"Extracting {len(selected)} playlists...")
-
-        # Get playlist URLs from database
-        for playlist_id in selected:
-            playlist = self.db.get_playlist(playlist_id)
-            if playlist:
-                url = playlist['url']
-                # Trigger extraction via main window
-                # (This is a simplified version; actual implementation would use worker)
-                self.logger.info(f"Extracting: {url}")
-
     def _delete_selected(self):
-        """Delete selected playlists with confirmation."""
+        """Delete selected collections with confirmation."""
         selected = self.get_selected_playlists()
 
         if not selected:
-            self.logger.warning("No playlists selected for deletion")
+            self.logger.warning("Nothing selected for deletion")
             return
 
         # Show confirmation dialog
         from tkinter import messagebox
 
         confirm = messagebox.askyesno(
-            "Delete Playlists",
-            f"Are you sure you want to delete {len(selected)} playlist(s)?\n\n"
+            "Delete Selected",
+            f"Are you sure you want to delete {len(selected)} item(s)?\n\n"
             "This will also delete:\n"
-            "• Orphaned videos (not in other playlists)\n"
+            "• Songs that are not in any other collection\n"
             "• Downloaded files (.webm, .mp3, .m4a)\n"
             "• Thumbnails and metadata\n\n"
             "This action cannot be undone!"
@@ -248,7 +229,7 @@ class PlaylistPanel(ctk.CTkScrollableFrame):
             if errors:
                 messagebox.showwarning(
                     "Deletion Complete with Warnings",
-                    f"Deleted {len(selected)} playlist(s)\n"
+                    f"Deleted {len(selected)} item(s)\n"
                     f"Cleaned up {total_videos} orphaned videos\n"
                     f"Deleted {total_files} files\n\n"
                     f"⚠️ {len(errors)} error(s) occurred:\n" +
@@ -258,7 +239,7 @@ class PlaylistPanel(ctk.CTkScrollableFrame):
             else:
                 messagebox.showinfo(
                     "Deletion Complete",
-                    f"✅ Successfully deleted {len(selected)} playlist(s)\n"
+                    f"✅ Successfully deleted {len(selected)} item(s)\n"
                     f"✅ Cleaned up {total_videos} orphaned videos\n"
                     f"✅ Deleted {total_files} files"
                 )

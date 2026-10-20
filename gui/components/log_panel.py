@@ -14,6 +14,7 @@ Version: 1.0.0
 import customtkinter as ctk
 import tkinter as tk
 from datetime import datetime
+import queue
 
 
 class LogPanel(ctk.CTkFrame):
@@ -41,7 +42,13 @@ class LogPanel(ctk.CTkFrame):
 
         self.max_logs = 1000  # Maximum number of log entries to keep
 
+        # Worker threads enqueue log lines; the main thread drains them.
+        self._log_queue = queue.Queue()
+
         self._create_widgets()
+
+        # Poll the queue on the Tk main thread
+        self.after(100, self._drain_queue)
 
     def _create_widgets(self):
         """Create log panel widgets."""
@@ -105,10 +112,34 @@ class LogPanel(ctk.CTkFrame):
         """
         Add a log message to the display.
 
+        Safe to call from any thread: messages are queued and rendered on
+        the Tk main thread by _drain_queue.
+
         Args:
             level: Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
             message: Log message text
         """
+        self._log_queue.put((level, message))
+
+    def _drain_queue(self):
+        """Render queued log messages, then reschedule."""
+        rendered = 0
+        while rendered < 200:
+            try:
+                level, message = self._log_queue.get_nowait()
+            except queue.Empty:
+                break
+
+            self._append_line(level, message)
+            rendered += 1
+
+        try:
+            self.after(100, self._drain_queue)
+        except Exception:
+            pass  # Widget destroyed
+
+    def _append_line(self, level: str, message: str):
+        """Append one line to the text widget (main thread only)."""
         timestamp = datetime.now().strftime("%H:%M:%S")
         log_line = f"[{level}] {timestamp} - {message}\n"
 

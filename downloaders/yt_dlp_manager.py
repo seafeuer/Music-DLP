@@ -151,7 +151,12 @@ class YTDLPManager:
         """
         opts = {
             # Audio format priority: 251 (opus 160kbps) > any opus > any webm > best audio
+            # The final "best" fallback is what makes non-YouTube sites
+            # (X/Twitter, etc.) work: FFmpeg extracts the audio afterwards.
             'format': '251/bestaudio[ext=opus]/bestaudio[ext=webm]/bestaudio/best',
+
+            # Never expand a video link into a playlist
+            'noplaylist': True,
 
             # Output configuration
             'outtmpl': output_template,
@@ -198,19 +203,56 @@ class YTDLPManager:
 
         return opts
 
+    @staticmethod
+    def _resolve_downloaded_file(ydl, info: dict, output_dir: Path, safe_id: str):
+        """Find the file yt-dlp actually wrote.
+
+        ``prepare_filename()`` can return an extensionless path when the
+        extractor does not populate ``ext`` (common for direct media URLs
+        from X/Twitter). Prefer the ``requested_downloads`` record, then
+        the prepared name, then a directory scan.
+        """
+        for download in info.get('requested_downloads') or []:
+            filepath = download.get('filepath') or download.get('_filename')
+            if filepath and Path(filepath).exists():
+                return filepath
+
+        prepared = ydl.prepare_filename(info)
+        if prepared and Path(prepared).exists():
+            return prepared
+
+        prefix = f"[{safe_id}]"
+        candidates = [
+            path for path in output_dir.iterdir()
+            if path.is_file()
+            and path.name.startswith(prefix)
+            and not path.name.endswith('.part')
+        ]
+        if candidates:
+            return str(candidates[0])
+
+        return prepared
+
     def download_audio(
         self,
         video_id: str,
         output_dir: str,
-        filename_template: Optional[str] = None
+        filename_template: Optional[str] = None,
+        url: Optional[str] = None,
+        source_index: Optional[int] = None
     ) -> Tuple[bool, Optional[str], Optional[dict]]:
         """
-        Download audio from a single YouTube video.
+        Download audio from a single media item.
 
         Args:
-            video_id: YouTube video ID (11 characters)
+            video_id: Media ID, used for the temporary filename
             output_dir: Directory to save downloaded file
-            filename_template: Custom filename template (default: '[{video_id}].%(ext)s')
+            filename_template: Custom filename template (default: '[{id}].%(ext)s')
+            url: The item's page URL. Required for non-YouTube sites (X/Twitter,
+                 etc.); defaults to a YouTube watch URL for compatibility.
+            source_index: 1-based position when several items share one page
+                 URL (for example a tweet containing several videos). yt-dlp
+                 then selects that entry instead of the first one.
 
         Returns:
             Tuple of (success: bool, error_message: str|None, info: dict|None)
@@ -218,20 +260,32 @@ class YTDLPManager:
         """
         self.stats['downloads_attempted'] += 1
 
-        # Build output path
+        # Build output path. Media IDs from non-YouTube sites can contain
+        # characters that are invalid in filenames, so sanitize them.
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
+        safe_id = "".join(
+            c if (c.isalnum() or c in ('-', '_')) else '_'
+            for c in str(video_id)
+        ) or 'item'
+
         if filename_template is None:
-            filename_template = f"[{video_id}].%(ext)s"
+            filename_template = f"[{safe_id}].%(ext)s"
 
         output_template = str(output_dir / filename_template)
 
         # Build URL
-        url = f"https://www.youtube.com/watch?v={video_id}"
+        url = url or f"https://www.youtube.com/watch?v={video_id}"
 
         # Get yt-dlp options
         opts = self._get_ydl_opts(output_template)
+
+        if source_index:
+            # Select one entry from a multi-item page instead of letting
+            # yt-dlp pick the first. noplaylist would defeat this.
+            opts['noplaylist'] = False
+            opts['playlist_items'] = str(source_index)
 
         self.logger.info(f"Starting download: {video_id}")
 
@@ -242,11 +296,20 @@ class YTDLPManager:
 
                 # Get the actual filename (with extension)
                 if info:
-                    # yt-dlp stores the downloaded filename
-                    downloaded_file = ydl.prepare_filename(info)
+                    # playlist_items wraps the result in a playlist dict;
+                    # the real item is its only entry.
+                    item_info = info
+                    if info.get('_type') in ('playlist', 'multi_video'):
+                        entries = [e for e in (info.get('entries') or []) if e]
+                        if entries:
+                            item_info = entries[0]
+
+                    downloaded_file = self._resolve_downloaded_file(
+                        ydl, item_info, output_dir, safe_id
+                    )
 
                     # Verify file exists
-                    if Path(downloaded_file).exists():
+                    if downloaded_file and Path(downloaded_file).exists():
                         file_size = Path(downloaded_file).stat().st_size
                         self.logger.info(
                             f"Download successful: {video_id} -> {Path(downloaded_file).name} "
@@ -259,9 +322,9 @@ class YTDLPManager:
                         return True, None, {
                             'filename': downloaded_file,
                             'filesize': file_size,
-                            'duration': info.get('duration', 0),
-                            'title': info.get('title', ''),
-                            'ext': info.get('ext', 'opus')
+                            'duration': item_info.get('duration', 0),
+                            'title': item_info.get('title', ''),
+                            'ext': item_info.get('ext', 'opus')
                         }
                     else:
                         error_msg = f"File not found after download: {downloaded_file}"

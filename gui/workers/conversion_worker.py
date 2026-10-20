@@ -149,16 +149,28 @@ class ConversionWorker(threading.Thread):
 
                 video_id = video['video_id']
 
-                # Get approved metadata
+                # Use the original title and uploader. If this video has no
+                # output record yet, create the internal record that tracks
+                # conversion status and output paths.
                 metadata = self.db.get_approved_metadata(video_id)
 
                 if not metadata:
-                    self.logger.warning(f"No approved metadata for {video_id}, skipping")
+                    fallback_title = video.get('title') or video_id
+                    fallback_artist = video.get('uploader') or 'Unknown'
+                    self.db.add_approved_metadata(
+                        video_id=video_id,
+                        final_title=fallback_title,
+                        final_artist=fallback_artist
+                    )
+                    metadata = self.db.get_approved_metadata(video_id)
+
+                if not metadata:
+                    self.logger.warning(f"Could not create output record for {video_id}, skipping")
                     error_count += 1
                     continue
 
-                title = metadata.get('final_title', 'Unknown')
-                artist = metadata.get('final_artist', 'Unknown')
+                title = (video.get('title') or metadata.get('final_title') or video_id).strip()
+                artist = (video.get('uploader') or metadata.get('final_artist') or 'Unknown').strip()
 
                 # Update progress
                 if self.on_progress:
@@ -192,15 +204,18 @@ class ConversionWorker(threading.Thread):
                     mp3_dir.mkdir(parents=True, exist_ok=True)
                     m4a_dir.mkdir(parents=True, exist_ok=True)
 
-                    # Sanitize filename
-                    safe_filename = f"{artist} - {title}"
-                    safe_filename = "".join(
-                        c for c in safe_filename
-                        if c.isalnum() or c in (' ', '-', '_', '.')
-                    ).strip()
-
+                    # Filename comes from the original title (no AI renaming)
+                    safe_filename = self._safe_filename(title)
                     output_mp3 = mp3_dir / f"{safe_filename}.mp3"
                     output_m4a = m4a_dir / f"{safe_filename}.m4a"
+
+                    # Don't overwrite a different video's file that happens to
+                    # share the same title.
+                    if (self._is_foreign_file(output_mp3, metadata)
+                            or self._is_foreign_file(output_m4a, metadata)):
+                        safe_filename = f"{safe_filename} [{video_id}]"
+                        output_mp3 = mp3_dir / f"{safe_filename}.mp3"
+                        output_m4a = m4a_dir / f"{safe_filename}.m4a"
 
                     # Convert to both MP3 and M4A (measures loudness once)
                     self.logger.info(f"Converting: {output_mp3.name} + {output_m4a.name}")
@@ -228,10 +243,10 @@ class ConversionWorker(threading.Thread):
                             output_m4a.unlink()
                         raise Exception(f"M4A output missing or too small: {output_m4a}")
 
-                    # Prepare metadata for embedding
+                    # Prepare metadata for embedding (original title/uploader)
                     embed_metadata = {
-                        'title': metadata.get('final_title'),
-                        'artist': metadata.get('final_artist'),
+                        'title': title,
+                        'artist': artist,
                         'album': metadata.get('album'),
                         'tags': metadata.get('tags')
                     }
@@ -321,6 +336,34 @@ class ConversionWorker(threading.Thread):
             self.logger.error(f"Conversion batch failed: {e}")
             if self.on_complete:
                 self.on_complete(False, {'error': str(e)})
+
+    @staticmethod
+    def _safe_filename(name: str) -> str:
+        """Make a title safe for Windows/macOS/Linux filesystems.
+
+        Keeps Unicode letters so non-English titles stay intact, and removes
+        only characters that are invalid in filenames.
+        """
+        invalid = '<>:"/\\|?*'
+        cleaned = ''.join('_' if c in invalid else c for c in (name or ''))
+        cleaned = ''.join(' ' if c in '\r\n\t' else c for c in cleaned)
+        cleaned = ''.join(c for c in cleaned if c >= ' ' and c != '\x7f')
+        cleaned = ' '.join(cleaned.split())  # collapse whitespace/newlines
+        cleaned = cleaned.strip(' .')
+
+        if not cleaned:
+            cleaned = 'Untitled'
+
+        # Keep well below the Windows path limit
+        return cleaned[:150].strip(' .') or 'Untitled'
+
+    @staticmethod
+    def _is_foreign_file(path: Path, metadata: dict) -> bool:
+        """True when a file exists but was not produced for this video."""
+        if not path.exists():
+            return False
+        known = {metadata.get('file_path_mp3'), metadata.get('file_path_m4a')}
+        return str(path) not in known
 
     def cancel(self):
         """Cancel the conversion operation."""

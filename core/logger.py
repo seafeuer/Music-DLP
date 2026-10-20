@@ -153,11 +153,14 @@ class GUILogHandler(logging.Handler):
         ))
 
     def emit(self, record):
-        """Emit log record to callback."""
+        """Emit log record to callback.
+
+        Only the message is passed; the log panel adds its own level and
+        timestamp so the display does not show them twice.
+        """
         if self.callback:
             try:
-                msg = self.format(record)
-                self.callback(msg, record.levelname)
+                self.callback(record.levelname, record.getMessage())
             except Exception:
                 self.handleError(record)
 

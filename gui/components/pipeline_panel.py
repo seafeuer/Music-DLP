@@ -2,13 +2,16 @@
 Pipeline Panel Component
 
 Pipeline control panel with:
-- Stage buttons (Extract, Download, AI Process, Review, Convert)
+- Stage buttons (Download, Convert)
 - Progress bar
 - Status text display
 - Current operation display
 
+Links are extracted automatically when they are added, so the pipeline
+starts at Download.
+
 Author: Music DLP Project
-Version: 1.0.0
+Version: 2.0.0
 """
 
 import customtkinter as ctk
@@ -23,10 +26,7 @@ class PipelinePanel(ctk.CTkFrame):
     """
 
     def __init__(self, parent, db, config, logger,
-                 on_extract: Optional[Callable] = None,
                  on_download: Optional[Callable] = None,
-                 on_ai_process: Optional[Callable] = None,
-                 on_review: Optional[Callable] = None,
                  on_convert: Optional[Callable] = None):
         """
         Initialize pipeline panel.
@@ -36,10 +36,7 @@ class PipelinePanel(ctk.CTkFrame):
             db: Database instance
             config: ConfigManager instance
             logger: Logger instance
-            on_extract: Callback for Extract button
             on_download: Callback for Download button
-            on_ai_process: Callback for AI Process button
-            on_review: Callback for Review button
             on_convert: Callback for Convert button
         """
         super().__init__(parent, height=150)
@@ -48,10 +45,7 @@ class PipelinePanel(ctk.CTkFrame):
         self.config = config
         self.logger = logger
 
-        self.on_extract = on_extract
         self.on_download = on_download
-        self.on_ai_process = on_ai_process
-        self.on_review = on_review
         self.on_convert = on_convert
 
         # Operation locking state
@@ -74,45 +68,29 @@ class PipelinePanel(ctk.CTkFrame):
         button_frame.pack(fill="x", padx=20, pady=5)
 
         # Pipeline stage buttons
-        self.extract_button = ctk.CTkButton(
-            button_frame,
-            text="1. Extract",
-            width=120,
-            command=self._on_extract_click
-        )
-        self.extract_button.pack(side="left", padx=5)
-
         self.download_button = ctk.CTkButton(
             button_frame,
-            text="2. Download",
-            width=120,
+            text="1. Download",
+            width=140,
             command=self._on_download_click
         )
         self.download_button.pack(side="left", padx=5)
 
-        self.ai_button = ctk.CTkButton(
-            button_frame,
-            text="3. AI Process",
-            width=120,
-            command=self._on_ai_click
-        )
-        self.ai_button.pack(side="left", padx=5)
-
-        self.review_button = ctk.CTkButton(
-            button_frame,
-            text="4. Review",
-            width=120,
-            command=self._on_review_click
-        )
-        self.review_button.pack(side="left", padx=5)
-
         self.convert_button = ctk.CTkButton(
             button_frame,
-            text="5. Convert",
-            width=120,
+            text="2. Convert",
+            width=140,
             command=self._on_convert_click
         )
         self.convert_button.pack(side="left", padx=5)
+
+        # Hint
+        hint_label = ctk.CTkLabel(
+            button_frame,
+            text="Paste a link above to add it to the library.",
+            text_color="gray"
+        )
+        hint_label.pack(side="left", padx=15)
 
         # Progress frame
         progress_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -131,25 +109,10 @@ class PipelinePanel(ctk.CTkFrame):
         )
         self.status_label.pack(pady=5)
 
-    def _on_extract_click(self):
-        """Handle Extract button click."""
-        if self.on_extract:
-            self.on_extract()
-
     def _on_download_click(self):
         """Handle Download button click."""
         if self.on_download:
             self.on_download()
-
-    def _on_ai_click(self):
-        """Handle AI Process button click."""
-        if self.on_ai_process:
-            self.on_ai_process()
-
-    def _on_review_click(self):
-        """Handle Review button click."""
-        if self.on_review:
-            self.on_review()
 
     def _on_convert_click(self):
         """Handle Convert button click."""
@@ -203,10 +166,7 @@ class PipelinePanel(ctk.CTkFrame):
         """
         state = "normal" if enabled else "disabled"
 
-        self.extract_button.configure(state=state)
         self.download_button.configure(state=state)
-        self.ai_button.configure(state=state)
-        self.review_button.configure(state=state)
         self.convert_button.configure(state=state)
 
     def set_busy(self, stage_name: str):
@@ -214,7 +174,7 @@ class PipelinePanel(ctk.CTkFrame):
         Mark a pipeline stage as running. Disables all buttons.
 
         Args:
-            stage_name: Name of the active stage (e.g., "Download", "AI Process")
+            stage_name: Name of the active stage (e.g., "Download")
         """
         self._active_stage = stage_name
         self.set_buttons_enabled(False)

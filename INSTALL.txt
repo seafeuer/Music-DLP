@@ -1,129 +1,122 @@
-Music DLP - Installation Guide
-===============================
+Music DLP - Installation
+========================
 
-A YouTube playlist downloader with AI-powered metadata cleaning
-and Spotify-compatible output.
+Music DLP downloads audio from YouTube playlists/videos, X/Twitter posts,
+and other yt-dlp-supported links, then converts it to MP3 and M4A with
+embedded album art.
 
-
-QUICK START
------------
-1. Install FFmpeg (see below)
-2. Install Ollama + AI model (see below)
-3. Export your YouTube cookies (see below)
-4. Run MusicDLP.exe
+It does not use AI and does not rename titles: files keep the original
+source title, and the channel/uploader is embedded as the artist tag.
 
 
-STEP 1: Install FFmpeg (REQUIRED)
-----------------------------------
-FFmpeg is needed to convert audio files to MP3/M4A format.
+REQUIREMENTS
+------------
 
-Option A - Portable (recommended):
-  1. Go to https://www.gyan.dev/ffmpeg/builds/
-  2. Download "ffmpeg-release-essentials.zip"
-  3. Extract the archive
-  4. Copy ffmpeg.exe and ffprobe.exe into the "ffmpeg" folder
-     next to MusicDLP.exe
-
-Option B - System install:
-  1. Download FFmpeg from https://ffmpeg.org/download.html
-  2. Add the bin/ folder to your system PATH
+1. Python 3.10 or newer (from https://www.python.org/downloads/)
+2. FFmpeg
+3. Optional: a cookies.txt file for protected or age-restricted posts
 
 
-STEP 2: Install Ollama + AI Model (RECOMMENDED)
--------------------------------------------------
-Ollama runs AI models locally to clean up messy YouTube titles.
-Without it, you can still download and convert music, but you'll
-need to edit titles manually.
+STEP 1: Install FFmpeg
+----------------------
 
-  1. Download Ollama from https://ollama.com/download
-  2. Install and launch it (it runs in the background)
-  3. Open a terminal and pull at least one model:
+Option A - Put FFmpeg next to the app
+  1. Download a Windows build from https://ffmpeg.org/download.html
+     (the "release essentials" build is enough)
+  2. Extract it
+  3. Copy ffmpeg.exe and ffprobe.exe into one of these places:
+       - The same folder as main.py / MusicDLP.exe
+       - A folder named "ffmpeg" next to main.py / MusicDLP.exe
 
-     ollama pull gemma3:12b
+Option B - Install system-wide
+  Install FFmpeg with winget:
+      winget install Gyan.FFmpeg
+  Then open a NEW terminal so PATH updates.
 
-     (This downloads ~8GB. It's the most accurate model for
-     Japanese music metadata.)
-
-  4. Ollama must be running whenever you use AI processing
-     in Music DLP.
-
-Optional additional models:
-     ollama pull qwen3:14b
-     ollama pull qwen2.5:7b
+Verify it works:
+      ffmpeg -version
 
 
-STEP 3: Export YouTube Cookies (REQUIRED FOR DOWNLOADS)
---------------------------------------------------------
-YouTube blocks automated downloads without authentication.
-You need to export your browser cookies so yt-dlp can use them.
+STEP 2: Install Python dependencies
+-----------------------------------
 
-  1. Install the "Get cookies.txt LOCALLY" extension:
-     - Chrome: Search for it in the Chrome Web Store
-     - Firefox: Search for it in Firefox Add-ons
+Open a terminal in the Music-DLP folder and run:
 
-  2. Go to youtube.com and make sure you're logged in
-
-  3. Click the extension icon and export cookies
-
-  4. Save the file as "cookies.txt" next to MusicDLP.exe
-     (or anywhere - you can set the path in Settings)
+      pip install -r requirements.txt
 
 
-STEP 4: Run MusicDLP.exe
+STEP 3 (Optional): Cookies
 --------------------------
-Double-click MusicDLP.exe to launch the application.
 
-On first run, it will automatically create:
-  - config.ini   (your settings)
-  - music_dlp.db (song database)
-  - downloads/   (downloaded and converted files)
-  - logs/        (application logs)
+Some YouTube videos and protected X/Twitter posts require you to be signed
+in. To provide cookies:
 
-
-FOLDER STRUCTURE
------------------
-After setup, your folder should look like this:
-
-  MusicDLP/
-    MusicDLP.exe
-    ffmpeg/
-      ffmpeg.exe        <-- you add this
-      ffprobe.exe       <-- you add this
-    cookies.txt         <-- you add this
-    config.ini          (auto-created)
-    music_dlp.db        (auto-created)
-    downloads/
-      raw/              (downloaded .opus files)
-      final/
-        mp3/            (converted MP3 files for Spotify)
-        m4a/            (converted M4A files for archival)
-    logs/
+  1. Install the browser extension "Get cookies.txt LOCALLY"
+  2. Sign in to YouTube / X in that browser
+  3. Export cookies to a file (cookies.txt)
+  4. In Music DLP: Settings > Download > Cookies File > Browse
+     and select the file
 
 
-IMPORTING TO SPOTIFY
----------------------
-  1. Open Spotify desktop app
-  2. Go to Settings (gear icon)
-  3. Scroll to "Local Files"
-  4. Enable "Show Local Files"
-  5. Click "Add a source" and select the downloads/final/mp3/ folder
-  6. Your songs will appear under Local Files in your library
+RUNNING FROM SOURCE
+-------------------
+
+      python main.py
+
+
+BUILDING THE EXE
+----------------
+
+      pip install pyinstaller
+      python build_exe.py --clean
+
+Output: dist/MusicDLP/
+
+Copy ffmpeg.exe and ffprobe.exe into dist/MusicDLP/ffmpeg/ before running.
+
+
+USING THE APP
+-------------
+
+1. Paste one or more links into the Link(s) box and press Add.
+   Supported examples:
+     https://www.youtube.com/playlist?list=...
+     https://www.youtube.com/watch?v=...
+     https://youtu.be/...
+     https://x.com/user/status/...
+     https://twitter.com/user/status/...
+
+   You can paste several links at once, one per line.
+
+2. Select the songs you want (checkboxes, "Select All", or
+   "Select Downloaded").
+
+3. Click "1. Download".
+
+4. Click "2. Convert" to create MP3 + M4A files.
+
+Output folders:
+      downloads/final/mp3/
+      downloads/final/m4a/
 
 
 TROUBLESHOOTING
-----------------
-- "FFmpeg not found" error:
-  Make sure ffmpeg.exe is in the ffmpeg/ folder or in your system PATH.
+---------------
 
-- "Ollama is not running" warning:
-  Start Ollama from the system tray or run "ollama serve" in a terminal.
+- "FFmpeg not found":
+  Put ffmpeg.exe next to main.py / MusicDLP.exe, or in a "ffmpeg"
+  subfolder, or install it system-wide and reopen the terminal.
 
-- Downloads fail with 403 errors:
-  Your cookies may have expired. Re-export them from your browser.
+- Download fails with 403 / bot detection:
+  Your cookies may be missing or expired. Re-export cookies.txt and
+  select it in Settings.
 
-- App crashes on startup:
-  Check crash.log in the app folder for details.
+- X/Twitter post fails:
+  The post may be protected, deleted, or region-locked. Try a cookies
+  file; if the post has no video, there is nothing to download.
 
-- No album art in Spotify:
-  Use the MP3 files (downloads/final/mp3/), not M4A.
-  Spotify doesn't display album art for M4A local files.
+- A download or conversion was interrupted:
+  Just run it again. Music DLP resumes completed items automatically.
+
+- Logs:
+  See the logs/ folder for details.

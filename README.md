@@ -1,63 +1,58 @@
 # Music DLP
 
-A Windows desktop app that downloads songs from YouTube playlists, cleans up their metadata with AI, and exports them as Spotify-compatible MP3 files with album art.
+A Windows desktop app that downloads audio from **YouTube playlists/videos**, **X/Twitter posts**, and other sites supported by yt-dlp, then converts it to Spotify-compatible MP3 and archival M4A files with embedded album art.
 
-Built for people with YouTube playlists full of Japanese covers, VTuber songs, and other music that isn't on Spotify.
+Titles are kept exactly as they appear on the source site. There is no AI metadata cleaning or renaming step.
 
 ## Features
 
-- **YouTube playlist downloading** via yt-dlp with bot detection avoidance
-- **AI-powered metadata cleaning** - fixes messy YouTube titles into proper `Artist - Title` format using local Ollama models
-- **Batch review workflow** - review AI suggestions side-by-side, edit manually, or regenerate
+- **Multiple link types** - YouTube playlists, YouTube videos, X/Twitter posts, and other yt-dlp-supported links
+- **Paste several links at once** - one per line
+- **Single links and playlists** - each link appears in the library; single items open as a one-song collection
+- **Original titles** - files are named from the source title; the channel/uploader is embedded as the artist tag
 - **Dual output** - MP3 (320kbps, for Spotify) + M4A (320kbps AAC, for archival)
 - **Album art** - embeds 300x300 thumbnails into every file
+- **Resume support** - interrupted downloads and conversions pick up where they left off
+- **Bot-avoidance** - cookie support and randomized delays between downloads
 - **Modern GUI** - CustomTkinter with light/dark mode
 
-## Quick Start (Pre-built exe)
+## Requirements
 
-1. Download the latest release from [Releases](../../releases)
-2. Extract the zip
-3. Read `INSTALL.txt` inside for setup (FFmpeg, Ollama, cookies)
-4. Run `MusicDLP.exe`
+- Python 3.10+
+- **FFmpeg** installed and in PATH ([download](https://ffmpeg.org/download.html)), or placed next to the app / in a `ffmpeg` subfolder
+- Optional: **browser cookies** exported to a `cookies.txt` file (needed for some age-restricted or protected YouTube/X posts)
 
 ## Quick Start (From source)
 
 ```bash
-# Clone
-git clone https://github.com/MARistheone/Music-DLP.git
+git clone https://github.com/seafeuer/Music-DLP.git
 cd Music-DLP
 
-# Install Python dependencies
 pip install -r requirements.txt
 
-# Run
 python main.py
 ```
-
-You'll also need:
-- **FFmpeg** installed and in PATH ([download](https://ffmpeg.org/download.html))
-- **Ollama** running locally with at least one model ([download](https://ollama.com/download)):
-  ```
-  ollama pull gemma3:12b
-  ```
-- **YouTube cookies** exported from your browser (see `INSTALL.txt`)
 
 ## How It Works
 
 ```
-1. Add Playlist    - Paste a YouTube playlist URL
-2. Extract         - Pulls video metadata (no downloading yet)
-3. Download        - Downloads audio as .opus with bot avoidance
-4. AI Process      - Ollama models clean up titles/artists
-5. Review          - You approve, edit, or regenerate AI suggestions
-6. Convert         - FFmpeg converts to MP3 + M4A with embedded metadata
+1. Paste link(s)  - YouTube playlist/video, X/Twitter post, or another yt-dlp link
+2. Extract        - Happens automatically when you press Add
+3. Download       - Select songs, then click "1. Download"
+4. Convert        - Click "2. Convert" to produce MP3 + M4A
 ```
 
 Output goes to `downloads/final/mp3/` and `downloads/final/m4a/`.
 
+### X/Twitter notes
+
+- X/Twitter serves video, not a separate audio stream. Music DLP downloads the video and FFmpeg extracts the audio.
+- Posts with several videos are stored as a multi-song collection.
+- Protected or age-restricted posts may need a cookies file (Settings > Download > Cookies File).
+
 ## Importing to Spotify
 
-1. Open Spotify desktop app > Settings > Local Files
+1. Open the Spotify desktop app > Settings > Local Files
 2. Enable "Show Local Files"
 3. Add the `downloads/final/mp3/` folder as a source
 4. Your songs appear under Local Files with album art
@@ -81,7 +76,6 @@ Output: `dist/MusicDLP/`
 | Database | SQLite |
 | Downloader | yt-dlp |
 | Audio conversion | FFmpeg |
-| AI models | Ollama (gemma3:12b recommended) |
 | Metadata | mutagen |
 | Thumbnails | Pillow |
 | Packaging | PyInstaller |

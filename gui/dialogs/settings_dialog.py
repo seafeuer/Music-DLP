@@ -4,12 +4,11 @@ Settings Dialog
 Tabbed settings dialog for configuring:
 - Appearance (theme, font size)
 - Download (cookies, format, sleep intervals)
-- AI (Ollama URL, models, workers)
 - Output (bitrates, formats, directories)
 - Logging (level, file rotation)
 
 Author: Music DLP Project
-Version: 1.0.0
+Version: 2.0.0
 """
 
 import customtkinter as ctk
@@ -76,12 +75,6 @@ class SettingsDialog(ctk.CTkToplevel):
             'theme_mode': self.config.theme_mode,
             'cookies_file': self.config.cookies_file,
             'download_format': self.config.download_format,
-            'ollama_url': self.config.ollama_url,
-            'ai_models': self.config.ai_models,
-            'primary_ai_model': self.config.primary_ai_model,
-            'use_all_models': self.config.use_all_models,
-            'parallel_workers': self.config.parallel_workers,
-            'thinking_mode': self.config.thinking_mode,
             'mp3_bitrate': self.config.mp3_bitrate,
             'm4a_bitrate': self.config.m4a_bitrate,
             'log_level': self.config.log_level,
@@ -104,7 +97,6 @@ class SettingsDialog(ctk.CTkToplevel):
         # Create tabs
         self.tabview.add("Appearance")
         self.tabview.add("Download")
-        self.tabview.add("AI Processing")
         self.tabview.add("Output")
         self.tabview.add("Logging")
 
@@ -120,19 +112,6 @@ class SettingsDialog(ctk.CTkToplevel):
             self.logger.info("Created Download tab")
         except Exception as e:
             self.logger.error(f"Failed to create Download tab: {e}")
-
-        try:
-            self._create_ai_tab()
-            self.logger.info("Created AI Processing tab")
-        except Exception as e:
-            self.logger.error(f"Failed to create AI Processing tab: {e}")
-            # Show error in tab
-            error_label = ctk.CTkLabel(
-                self.tabview.tab("AI Processing"),
-                text=f"Error loading AI Processing settings:\n{str(e)}",
-                text_color="red"
-            )
-            error_label.pack(pady=20)
 
         try:
             self._create_output_tab()
@@ -217,7 +196,9 @@ class SettingsDialog(ctk.CTkToplevel):
         ctk.CTkLabel(cookies_frame, text="Cookies File:", font=("Arial", 12, "bold")).pack(anchor="w", pady=5)
         ctk.CTkLabel(
             cookies_frame,
-            text="Browser cookies for bot avoidance (Export with 'Get cookies.txt LOCALLY' extension)",
+            text="Browser cookies for bot avoidance and age-restricted posts "
+                 "(Export with 'Get cookies.txt LOCALLY' extension). "
+                 "Useful for YouTube and protected X/Twitter posts.",
             text_color="gray",
             wraplength=600
         ).pack(anchor="w", padx=10)
@@ -252,133 +233,6 @@ class SettingsDialog(ctk.CTkToplevel):
             text="Default: 251/bestaudio[ext=opus]/bestaudio",
             text_color="gray"
         ).pack(anchor="w", padx=10)
-
-    def _create_ai_tab(self):
-        """Create AI Processing tab."""
-        tab = self.tabview.tab("AI Processing")
-
-        # Make the tab scrollable for many settings
-        scroll_frame = ctk.CTkScrollableFrame(tab)
-        scroll_frame.pack(fill="both", expand=True, padx=0, pady=0)
-
-        # Use scroll_frame as container instead of tab
-        container = scroll_frame
-
-        # Ollama URL
-        url_frame = ctk.CTkFrame(container)
-        url_frame.pack(fill="x", padx=20, pady=10)
-
-        ctk.CTkLabel(url_frame, text="Ollama URL:", font=("Arial", 12, "bold")).pack(anchor="w", pady=5)
-
-        self.ollama_url_entry = ctk.CTkEntry(url_frame, width=500)
-        self.ollama_url_entry.pack(fill="x", padx=10, pady=5)
-        self.ollama_url_entry.insert(0, self.config.ollama_url)
-
-        # Primary Model Selection
-        primary_model_frame = ctk.CTkFrame(container)
-        primary_model_frame.pack(fill="x", padx=20, pady=10)
-
-        ctk.CTkLabel(primary_model_frame, text="Primary Model:", font=("Arial", 12, "bold")).pack(anchor="w", pady=5)
-        ctk.CTkLabel(
-            primary_model_frame,
-            text="Select the AI model to use for processing (used when 'Use All Models' is disabled)",
-            text_color="gray"
-        ).pack(anchor="w", padx=10)
-
-        # Get available models from config
-        available_models = self.config.ai_models
-
-        self.primary_model_dropdown = ctk.CTkComboBox(
-            primary_model_frame,
-            values=available_models,
-            width=500
-        )
-        self.primary_model_dropdown.pack(fill="x", padx=10, pady=5)
-        self.primary_model_dropdown.set(self.config.primary_ai_model)
-
-        # Use All Models Toggle
-        use_all_frame = ctk.CTkFrame(container)
-        use_all_frame.pack(fill="x", padx=20, pady=10)
-
-        ctk.CTkLabel(
-            use_all_frame,
-            text="Use All Models:",
-            font=("Arial", 12, "bold")
-        ).pack(anchor="w", pady=5)
-
-        ctk.CTkLabel(
-            use_all_frame,
-            text="Enable to process with all models in parallel (slower but gives more options). Disable to use only the primary model (faster, recommended for 95% of songs).",
-            text_color="gray",
-            wraplength=600
-        ).pack(anchor="w", padx=10)
-
-        self.use_all_models_var = ctk.BooleanVar(value=self.config.use_all_models)
-        ctk.CTkCheckBox(
-            use_all_frame,
-            text="Run All Models (3 models in parallel)",
-            variable=self.use_all_models_var
-        ).pack(anchor="w", padx=10, pady=5)
-
-        # All Models List
-        models_frame = ctk.CTkFrame(container)
-        models_frame.pack(fill="x", padx=20, pady=10)
-
-        ctk.CTkLabel(models_frame, text="AI Models:", font=("Arial", 12, "bold")).pack(anchor="w", pady=5)
-        ctk.CTkLabel(
-            models_frame,
-            text="Models to use for title processing (comma-separated)",
-            text_color="gray"
-        ).pack(anchor="w", padx=10)
-
-        self.models_entry = ctk.CTkEntry(models_frame, width=500)
-        self.models_entry.pack(fill="x", padx=10, pady=5)
-        self.models_entry.insert(0, ', '.join(self.config.ai_models))
-
-        # Parallel workers
-        workers_frame = ctk.CTkFrame(container)
-        workers_frame.pack(fill="x", padx=20, pady=10)
-
-        ctk.CTkLabel(workers_frame, text="Parallel Workers:", font=("Arial", 12, "bold")).pack(anchor="w", pady=5)
-
-        self.workers_slider = ctk.CTkSlider(
-            workers_frame,
-            from_=1,
-            to=5,
-            number_of_steps=4,
-            width=400
-        )
-        self.workers_slider.pack(padx=10, pady=5)
-        self.workers_slider.set(self.config.parallel_workers)
-
-        self.workers_label = ctk.CTkLabel(workers_frame, text=f"{self.config.parallel_workers} workers")
-        self.workers_label.pack(padx=10)
-
-        self.workers_slider.configure(command=lambda v: self.workers_label.configure(text=f"{int(v)} workers"))
-
-        # Thinking mode toggle
-        thinking_frame = ctk.CTkFrame(container)
-        thinking_frame.pack(fill="x", padx=20, pady=10)
-
-        ctk.CTkLabel(
-            thinking_frame,
-            text="AI Thinking Mode:",
-            font=("Arial", 12, "bold")
-        ).pack(anchor="w", pady=5)
-
-        ctk.CTkLabel(
-            thinking_frame,
-            text="Enable extended processing for more accurate results (may be slower)",
-            text_color="gray",
-            wraplength=600
-        ).pack(anchor="w", padx=10)
-
-        self.thinking_var = ctk.BooleanVar(value=self.config.thinking_mode)
-        ctk.CTkCheckBox(
-            thinking_frame,
-            text="Enable Thinking Mode",
-            variable=self.thinking_var
-        ).pack(anchor="w", padx=10, pady=5)
 
     def _create_output_tab(self):
         """Create Output tab."""
@@ -464,18 +318,6 @@ class SettingsDialog(ctk.CTkToplevel):
             self.config.theme_mode = self.theme_var.get()
             self.config.cookies_file = self.cookies_entry.get().strip() or ''
             self.config.download_format = self.format_entry.get().strip()
-            self.config.ollama_url = self.ollama_url_entry.get().strip()
-
-            # Parse models list
-            models_str = self.models_entry.get().strip()
-            self.config.ai_models = [m.strip() for m in models_str.split(',') if m.strip()]
-
-            # Save primary model and use_all_models setting
-            self.config.primary_ai_model = self.primary_model_dropdown.get()
-            self.config.use_all_models = self.use_all_models_var.get()
-
-            self.config.parallel_workers = int(self.workers_slider.get())
-            self.config.thinking_mode = self.thinking_var.get()
             self.config.mp3_bitrate = self.mp3_bitrate_var.get()
             self.config.m4a_bitrate = self.m4a_bitrate_var.get()
             self.config.log_level = self.log_level_var.get()

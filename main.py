@@ -1,11 +1,14 @@
 """
-Music DLP - YouTube Playlist Downloader with AI Metadata Cleaning
+Music DLP - Media Downloader
 
 Main application entry point. Initializes the database, configuration,
 logging, and launches the CustomTkinter GUI.
 
+Supports YouTube playlists/videos, X/Twitter posts, and other
+yt-dlp-supported links.
+
 Author: Music DLP Project
-Version: 1.0.0
+Version: 2.0.0
 """
 
 import sys
@@ -89,25 +92,6 @@ def check_dependencies():
     except Exception as e:
         missing.append('ffmpeg')
         messages.append(f"Error checking FFmpeg: {e}")
-
-    # Check Ollama (optional but recommended)
-    try:
-        import requests
-        response = requests.get('http://localhost:11434/api/tags', timeout=2)
-        if response.status_code != 200:
-            messages.append(
-                "Warning: Ollama is not responding.\n"
-                "AI processing will not work.\n"
-                "Install from: https://ollama.com/download"
-            )
-    except requests.exceptions.ConnectionError:
-        messages.append(
-            "Warning: Ollama is not running.\n"
-            "AI processing will not work.\n"
-            "Install from: https://ollama.com/download"
-        )
-    except Exception:
-        pass  # Ollama check is optional
 
     success = len(missing) == 0
     message = "\n\n".join(messages) if messages else ""

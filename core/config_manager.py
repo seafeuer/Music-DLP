@@ -46,22 +46,11 @@ class ConfigManager:
 
         # Download settings
         self.config['Download'] = {
-            'format': '251/bestaudio[ext=opus]/bestaudio',
+            'format': '251/bestaudio[ext=opus]/bestaudio[ext=webm]/bestaudio/best',
             'cookies_file': '',
             'sleep_interval_min': '2',
             'sleep_interval_max': '5',
             'max_retries': '3',
-        }
-
-        # AI Processing
-        self.config['AI'] = {
-            'ollama_url': 'http://localhost:11434',
-            'primary_model': 'gemma3:12b',
-            'models': 'gemma3:12b,qwen3:14b,qwen2.5:7b',
-            'use_all_models': 'false',  # If false, use only primary_model
-            'parallel_workers': '3',
-            'thinking_mode': 'false',
-            'prompt_version': 'v1.0',
         }
 
         # Output settings
@@ -113,11 +102,9 @@ class ConfigManager:
 
         # Sync key settings to database
         self.db.set_config('theme_mode', self.get('Appearance', 'theme_mode'))
-        self.db.set_config('primary_ai_model', self.get('AI', 'primary_model'))
         self.db.set_config('download_format', self.get('Download', 'format'))
         self.db.set_config('mp3_bitrate', self.get('Output', 'mp3_bitrate'))
         self.db.set_config('m4a_bitrate', self.get('Output', 'm4a_bitrate'))
-        self.db.set_config('parallel_ai_workers', self.get('AI', 'parallel_workers'))
         self.db.set_config('cookies_file', self.get('Download', 'cookies_file'))
 
     def get(self, section: str, key: str, fallback: Optional[str] = None) -> str:
@@ -196,7 +183,7 @@ class ConfigManager:
     @property
     def download_format(self) -> str:
         """Get yt-dlp download format."""
-        return self.get('Download', 'format', '251/bestaudio[ext=opus]/bestaudio')
+        return self.get('Download', 'format', '251/bestaudio[ext=opus]/bestaudio[ext=webm]/bestaudio/best')
 
     @download_format.setter
     def download_format(self, value: str):
@@ -213,85 +200,6 @@ class ConfigManager:
     def cookies_file(self, value: str):
         """Set path to cookies file."""
         self.set('Download', 'cookies_file', value)
-        self.save()
-
-    @property
-    def ollama_url(self) -> str:
-        """Get Ollama server URL."""
-        return self.get('AI', 'ollama_url', 'http://localhost:11434')
-
-    @ollama_url.setter
-    def ollama_url(self, value: str):
-        """Set Ollama server URL."""
-        self.set('AI', 'ollama_url', value)
-        self.save()
-
-    @property
-    def primary_ai_model(self) -> str:
-        """Get primary AI model."""
-        return self.get('AI', 'primary_model', 'gemma3:12b')
-
-    @primary_ai_model.setter
-    def primary_ai_model(self, value: str):
-        """Set primary AI model."""
-        self.set('AI', 'primary_model', value)
-        self.save()
-
-    @property
-    def ai_models(self) -> list:
-        """Get list of AI models to use."""
-        models_str = self.get('AI', 'models', 'gemma3:12b')
-        return [m.strip() for m in models_str.split(',')]
-
-    @ai_models.setter
-    def ai_models(self, value: list):
-        """Set list of AI models."""
-        self.set('AI', 'models', ','.join(value))
-        self.save()
-
-    @property
-    def use_all_models(self) -> bool:
-        """Check if all models should be used (True) or just primary model (False)."""
-        return self.get_bool('AI', 'use_all_models', False)
-
-    @use_all_models.setter
-    def use_all_models(self, value: bool):
-        """Set whether to use all models or just primary."""
-        self.set('AI', 'use_all_models', str(value).lower())
-        self.save()
-
-    @property
-    def active_ai_models(self) -> list:
-        """Get active AI models based on settings.
-
-        Returns single model if use_all_models is False,
-        otherwise returns all configured models.
-        """
-        if self.use_all_models:
-            return self.ai_models
-        else:
-            return [self.primary_ai_model]
-
-    @property
-    def parallel_workers(self) -> int:
-        """Get number of parallel AI workers."""
-        return self.get_int('AI', 'parallel_workers', 3)
-
-    @parallel_workers.setter
-    def parallel_workers(self, value: int):
-        """Set number of parallel AI workers."""
-        self.set('AI', 'parallel_workers', str(value))
-        self.save()
-
-    @property
-    def thinking_mode(self) -> bool:
-        """Get AI thinking mode setting."""
-        return self.get_bool('AI', 'thinking_mode', False)
-
-    @thinking_mode.setter
-    def thinking_mode(self, value: bool):
-        """Set AI thinking mode setting."""
-        self.set('AI', 'thinking_mode', str(value).lower())
         self.save()
 
     @property
@@ -374,13 +282,6 @@ class ConfigManager:
         # Check download format
         if not self.download_format:
             issues.append("Download format is empty")
-
-        # Check AI settings
-        if self.parallel_workers < 1 or self.parallel_workers > 10:
-            issues.append("Parallel workers must be between 1 and 10")
-
-        if not self.ai_models:
-            issues.append("No AI models configured")
 
         # Check bitrates
         valid_bitrates = ['128', '192', '256', '320']

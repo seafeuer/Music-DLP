@@ -31,6 +31,7 @@ class DownloadWorker(threading.Thread):
     def __init__(self, db, config, logger,
                  mode: str = 'download',
                  url: Optional[str] = None,
+                 urls: Optional[List[str]] = None,
                  videos: Optional[List[Dict]] = None,
                  on_complete: Optional[Callable] = None,
                  on_progress: Optional[Callable] = None):
@@ -42,7 +43,8 @@ class DownloadWorker(threading.Thread):
             config: ConfigManager instance
             logger: Logger instance
             mode: Operation mode ('extract' or 'download')
-            url: Playlist URL (for extract mode)
+            url: Single link (for extract mode)
+            urls: Multiple links (for extract mode); takes precedence over url
             videos: List of video dicts (for download mode)
             on_complete: Callback when complete (success: bool, result: dict)
             on_progress: Callback for progress updates (current: int, total: int, message: str)
@@ -55,6 +57,7 @@ class DownloadWorker(threading.Thread):
 
         self.mode = mode
         self.url = url
+        self.urls = urls or ([url] if url else [])
         self.videos = videos or []
 
         self.on_complete = on_complete
@@ -66,7 +69,7 @@ class DownloadWorker(threading.Thread):
         """Execute the download operation."""
         try:
             if self.mode == 'extract':
-                self._extract_playlist()
+                self._extract_links()
             elif self.mode == 'download':
                 self._download_videos()
             else:
@@ -77,51 +80,58 @@ class DownloadWorker(threading.Thread):
             if self.on_complete:
                 self.on_complete(False, {'error': str(e)})
 
-    def _extract_playlist(self):
-        """Extract playlist metadata (Stage 1)."""
-        if not self.url:
-            raise ValueError("URL required for extract mode")
+    def _extract_links(self):
+        """Extract metadata for one or more links (Stage 1)."""
+        if not self.urls:
+            raise ValueError("At least one URL is required for extract mode")
 
-        self.logger.info(f"Extracting playlist: {self.url}")
+        self.logger.info(f"Extracting {len(self.urls)} link(s)")
 
-        if self.on_progress:
-            self.on_progress(0, 1, "Extracting playlist metadata...")
+        extractor = MetadataExtractor(
+            database=self.db,
+            cookies_file=self.config.cookies_file,
+            logger=self.logger
+        )
 
-        try:
-            # Initialize extractor
-            extractor = MetadataExtractor(
-                database=self.db,
-                cookies_file=self.config.cookies_file,
-                logger=self.logger
-            )
+        collections = []
+        errors = []
+        total = len(self.urls)
 
-            # Extract metadata
-            success, error, playlist_data = extractor.extract_playlist(self.url)
-
-            if not success:
-                raise Exception(f"Failed to extract playlist: {error}")
-
-            # Get playlist info
-            playlist_id = playlist_data['playlist_id']
-            playlist = self.db.get_playlist(playlist_id)
-            video_count = playlist.get('video_count', 0)
+        for idx, url in enumerate(self.urls, 1):
+            if self.cancelled:
+                self.logger.info("Extraction cancelled by user")
+                break
 
             if self.on_progress:
-                self.on_progress(1, 1, f"Extracted {video_count} videos")
+                self.on_progress(idx - 1, total, f"Extracting link {idx}/{total}...")
 
-            self.logger.info(f"Extraction complete: {playlist_id}")
+            success, error, collection_data = extractor.extract_link(url)
 
+            if success:
+                collections.append(collection_data)
+                self.logger.info(
+                    f"Extracted: {collection_data.get('title', 'Unknown')} "
+                    f"({collection_data.get('video_count', 0)} item(s))"
+                )
+            else:
+                errors.append({'url': url, 'error': error})
+                self.logger.error(f"Extraction failed for {url}: {error}")
+
+            if self.on_progress:
+                self.on_progress(idx, total, f"Extracted link {idx}/{total}")
+
+        if not collections:
+            message = errors[0]['error'] if errors else "No links could be extracted"
             if self.on_complete:
-                self.on_complete(True, {
-                    'playlist_id': playlist_id,
-                    'title': playlist.get('title', 'Unknown'),
-                    'video_count': video_count
-                })
+                self.on_complete(False, {'error': message, 'errors': errors})
+            return
 
-        except Exception as e:
-            self.logger.error(f"Extraction failed: {e}")
-            if self.on_complete:
-                self.on_complete(False, {'error': str(e)})
+        if self.on_complete:
+            self.on_complete(True, {
+                'collections': collections,
+                'count': len(collections),
+                'errors': errors,
+            })
 
     def _download_videos(self):
         """Download videos (Stage 2) with resume support and disk space check."""
@@ -200,10 +210,13 @@ class DownloadWorker(threading.Thread):
                     # Mark as in-progress so interrupted downloads are detectable
                     self.db.update_download_status(video_id=video_id, status='downloading')
 
-                    # Download audio
+                    # Download audio (pass the item's real URL so X/Twitter
+                    # and other non-YouTube links work)
                     success, error_msg, info = manager.download_audio(
                         video_id=video_id,
-                        output_dir=str(self.config.raw_download_dir)
+                        output_dir=str(self.config.raw_download_dir),
+                        url=video.get('url'),
+                        source_index=video.get('source_index')
                     )
 
                     if success:
@@ -224,7 +237,8 @@ class DownloadWorker(threading.Thread):
                                 thumb_path = self.config.raw_download_dir / f"{video_id}_thumb.jpg"
                                 thumb_success, thumb_error = thumb_processor.download_and_process(
                                     thumbnail_url=thumb_url,
-                                    output_path=str(thumb_path)
+                                    output_path=str(thumb_path),
+                                    fallback_urls=self._thumbnail_fallbacks(video)
                                 )
                                 if not thumb_success:
                                     self.logger.warning(f"Thumbnail download failed: {thumb_error}")
@@ -272,6 +286,27 @@ class DownloadWorker(threading.Thread):
             self.logger.error(f"Download batch failed: {e}")
             if self.on_complete:
                 self.on_complete(False, {'error': str(e)})
+
+    @staticmethod
+    def _thumbnail_fallbacks(video: Dict) -> List[str]:
+        """Known-good thumbnail URLs to try when the extracted one fails.
+
+        YouTube's maxresdefault image does not exist for every video, so
+        fall back through the sizes that always exist.
+        """
+        url = (video.get('url') or '').lower()
+        if 'youtu' not in url:
+            return []
+
+        video_id = video.get('video_id') or ''
+        if not video_id:
+            return []
+
+        return [
+            f"https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg",
+            f"https://i.ytimg.com/vi/{video_id}/sddefault.jpg",
+            f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+        ]
 
     def cancel(self):
         """Cancel the download operation."""

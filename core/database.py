@@ -1,7 +1,7 @@
 """SQLite database manager for Music DLP.
 
 Handles all database operations including schema creation, migrations,
-and CRUD operations for playlists, videos, AI attempts, and metadata.
+and CRUD operations for collections, videos, and output records.
 """
 
 import sqlite3
@@ -13,9 +13,9 @@ import logging
 
 
 class Database:
-    """SQLite database manager with schema v1.0."""
+    """SQLite database manager."""
 
-    SCHEMA_VERSION = "1.0"
+    SCHEMA_VERSION = "2.0"
 
     def __init__(self, db_path: str = "music_dlp.db"):
         """Initialize database connection.
@@ -74,6 +74,10 @@ class Database:
                 download_error TEXT,
                 file_path_raw TEXT,
 
+                -- Index within the source collection when several items
+                -- share one page URL (e.g. a tweet with multiple videos).
+                source_index INTEGER,
+
                 extraction_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -92,39 +96,20 @@ class Database:
             )
         """)
 
-        # AI title attempts table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS ai_title_attempts (
-                attempt_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                video_id TEXT NOT NULL,
-                model_name TEXT NOT NULL,
-                generated_title TEXT NOT NULL,
-                artist TEXT,
-                tags TEXT,
-                confidence REAL,
-                prompt_version TEXT,
-                generation_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                processing_time REAL,
-
-                FOREIGN KEY (video_id) REFERENCES videos(video_id) ON DELETE CASCADE
-            )
-        """)
-
         # Create indices for faster queries
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_ai_attempts_video
-            ON ai_title_attempts(video_id)
-        """)
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_videos_download_status
             ON videos(download_status)
         """)
 
-        # Approved metadata table
+        # Output records table
+        #
+        # Despite the historical name, this table now tracks conversion
+        # state and output file paths for each video. It keeps its name so
+        # databases created by earlier versions continue to work.
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS approved_metadata (
                 video_id TEXT PRIMARY KEY,
-                selected_attempt_id INTEGER,
 
                 final_title TEXT NOT NULL,
                 final_artist TEXT,
@@ -139,8 +124,7 @@ class Database:
                 file_path_m4a TEXT,
                 thumbnail_path TEXT,
 
-                FOREIGN KEY (video_id) REFERENCES videos(video_id) ON DELETE CASCADE,
-                FOREIGN KEY (selected_attempt_id) REFERENCES ai_title_attempts(attempt_id) ON DELETE SET NULL
+                FOREIGN KEY (video_id) REFERENCES videos(video_id) ON DELETE CASCADE
             )
         """)
 
@@ -169,29 +153,21 @@ class Database:
 
     def _run_migrations(self, cursor):
         """Run schema migrations for new columns."""
-        # V4: Add cover_artist column to ai_title_attempts
-        cursor.execute("PRAGMA table_info(ai_title_attempts)")
+        # Add source_index to databases created before multi-item sources
+        # (such as multi-video tweets) were supported.
+        cursor.execute("PRAGMA table_info(videos)")
         columns = [col[1] for col in cursor.fetchall()]
-        if 'cover_artist' not in columns:
-            cursor.execute("ALTER TABLE ai_title_attempts ADD COLUMN cover_artist TEXT")
-            self.logger.info("Migration: Added cover_artist to ai_title_attempts")
-
-        # V4: Add cover_artist column to approved_metadata
-        cursor.execute("PRAGMA table_info(approved_metadata)")
-        columns = [col[1] for col in cursor.fetchall()]
-        if 'cover_artist' not in columns:
-            cursor.execute("ALTER TABLE approved_metadata ADD COLUMN cover_artist TEXT")
-            self.logger.info("Migration: Added cover_artist to approved_metadata")
+        if 'source_index' not in columns:
+            cursor.execute("ALTER TABLE videos ADD COLUMN source_index INTEGER")
+            self.logger.info("Migration: Added source_index to videos")
 
     def _init_default_config(self):
         """Initialize default configuration values."""
         defaults = {
             'theme_mode': 'dark',
-            'primary_ai_model': 'gemma3:12b',
-            'download_format': '251/bestaudio[ext=opus]/bestaudio',
+            'download_format': '251/bestaudio[ext=opus]/bestaudio[ext=webm]/bestaudio/best',
             'mp3_bitrate': '320',
             'm4a_bitrate': '320',
-            'parallel_ai_workers': '3',
             'cookies_file': '',
             'schema_version': self.SCHEMA_VERSION
         }
@@ -375,17 +351,20 @@ class Database:
                   uploader: Optional[str] = None,
                   duration: Optional[int] = None,
                   description: Optional[str] = None,
-                  thumbnail_url: Optional[str] = None) -> bool:
+                  thumbnail_url: Optional[str] = None,
+                  source_index: Optional[int] = None) -> bool:
         """Add a new video to the database.
 
         Args:
-            video_id: YouTube video ID
+            video_id: Media ID
             title: Video title
             url: Full video URL
             uploader: Channel name
             duration: Duration in seconds
             description: Video description
             thumbnail_url: Thumbnail URL
+            source_index: Position within a shared page URL, when several
+                items come from one link (e.g. a multi-video tweet)
 
         Returns:
             True if successful, False otherwise
@@ -393,10 +372,18 @@ class Database:
         try:
             cursor = self.conn.cursor()
             cursor.execute("""
-                INSERT OR IGNORE INTO videos
-                (video_id, title, uploader, duration, url, description, thumbnail_url)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (video_id, title, uploader, duration, url, description, thumbnail_url))
+                INSERT INTO videos
+                (video_id, title, uploader, duration, url, description, thumbnail_url, source_index)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(video_id) DO UPDATE SET
+                    title = excluded.title,
+                    uploader = excluded.uploader,
+                    duration = excluded.duration,
+                    url = excluded.url,
+                    description = excluded.description,
+                    thumbnail_url = excluded.thumbnail_url,
+                    source_index = excluded.source_index
+            """, (video_id, title, uploader, duration, url, description, thumbnail_url, source_index))
             self.conn.commit()
             self.logger.debug(f"Added video: {title} ({video_id})")
             return True
@@ -508,8 +495,7 @@ class Database:
 
         Warning: This will CASCADE delete:
         - playlist_videos relationships
-        - ai_title_attempts
-        - approved_metadata
+        - output records (approved_metadata)
 
         Args:
             video_id: Video ID to delete
@@ -571,7 +557,7 @@ class Database:
                     if video.get('file_path_raw'):
                         files_to_delete.append(Path(video['file_path_raw']))
 
-                    # Get approved metadata for converted files
+                    # Get output record for converted files
                     metadata = self.get_approved_metadata(video_id)
                     if metadata:
                         if metadata.get('file_path_mp3'):
@@ -674,143 +660,18 @@ class Database:
             self.conn.rollback()
             return False
 
-    # ==================== AI Attempts Operations ====================
-
-    def add_ai_attempt(self, video_id: str, model_name: str,
-                       generated_title: str, artist: Optional[str] = None,
-                       cover_artist: Optional[str] = None,
-                       tags: Optional[List[str]] = None, confidence: Optional[float] = None,
-                       prompt_version: str = "v1.0", processing_time: Optional[float] = None) -> Optional[int]:
-        """Add an AI title generation attempt.
-
-        Args:
-            video_id: Video ID
-            model_name: AI model name
-            generated_title: Generated title
-            artist: Extracted original artist name
-            cover_artist: Cover/performing artist name (if different from original)
-            tags: List of tags
-            confidence: Confidence score (0-1)
-            prompt_version: Version of prompt used
-            processing_time: Time taken in seconds
-
-        Returns:
-            Attempt ID if successful, None otherwise
-        """
-        try:
-            cursor = self.conn.cursor()
-            tags_json = json.dumps(tags) if tags else None
-            cursor.execute("""
-                INSERT INTO ai_title_attempts
-                (video_id, model_name, generated_title, artist, cover_artist, tags, confidence, prompt_version, processing_time)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (video_id, model_name, generated_title, artist, cover_artist, tags_json, confidence, prompt_version, processing_time))
-            self.conn.commit()
-            return cursor.lastrowid
-        except sqlite3.Error as e:
-            self.logger.error(f"Failed to add AI attempt for {video_id}: {e}")
-            return None
-
-    def get_ai_attempts(self, video_id: str) -> List[Dict[str, Any]]:
-        """Get all AI attempts for a video.
-
-        Args:
-            video_id: Video ID
-
-        Returns:
-            List of attempt dictionaries with parsed tags
-        """
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            SELECT * FROM ai_title_attempts
-            WHERE video_id = ?
-            ORDER BY confidence DESC, generation_date DESC
-        """, (video_id,))
-
-        attempts = []
-        for row in cursor.fetchall():
-            attempt = dict(row)
-            # Parse JSON tags
-            if attempt['tags']:
-                attempt['tags'] = json.loads(attempt['tags'])
-            attempts.append(attempt)
-        return attempts
-
-    def get_ai_attempt_counts_bulk(self, video_ids: List[str]) -> Dict[str, int]:
-        """Get AI attempt counts for multiple videos in a single query.
-
-        Args:
-            video_ids: List of video IDs
-
-        Returns:
-            Dict mapping video_id to attempt count
-        """
-        if not video_ids:
-            return {}
-        placeholders = ','.join('?' * len(video_ids))
-        cursor = self.conn.cursor()
-        cursor.execute(
-            f"SELECT video_id, COUNT(*) as cnt FROM ai_title_attempts "
-            f"WHERE video_id IN ({placeholders}) GROUP BY video_id",
-            video_ids
-        )
-        return {row['video_id']: row['cnt'] for row in cursor.fetchall()}
-
-    def get_approved_video_ids_bulk(self, video_ids: List[str]) -> set:
-        """Get set of video IDs that have approved metadata.
-
-        Args:
-            video_ids: List of video IDs to check
-
-        Returns:
-            Set of video_ids that have approved metadata
-        """
-        if not video_ids:
-            return set()
-        placeholders = ','.join('?' * len(video_ids))
-        cursor = self.conn.cursor()
-        cursor.execute(
-            f"SELECT video_id FROM approved_metadata WHERE video_id IN ({placeholders})",
-            video_ids
-        )
-        return {row['video_id'] for row in cursor.fetchall()}
-
-    def delete_ai_attempt(self, attempt_id: int) -> bool:
-        """Delete a specific AI title attempt.
-
-        Args:
-            attempt_id: Attempt ID to delete
-
-        Returns:
-            True if successful, False otherwise
-        """
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute("DELETE FROM ai_title_attempts WHERE attempt_id = ?", (attempt_id,))
-            self.conn.commit()
-            self.logger.debug(f"Deleted AI attempt: {attempt_id}")
-            return True
-        except sqlite3.Error as e:
-            self.logger.error(f"Failed to delete AI attempt {attempt_id}: {e}")
-            self.conn.rollback()
-            return False
-
-    # ==================== Approved Metadata Operations ====================
+    # ==================== Output Record Operations ====================
 
     def approve_metadata(self, video_id: str, final_title: str, final_artist: Optional[str] = None,
-                        cover_artist: Optional[str] = None,
-                        album: Optional[str] = None, tags: Optional[List[str]] = None,
-                        selected_attempt_id: Optional[int] = None) -> bool:
-        """Approve final metadata for a video.
+                        album: Optional[str] = None, tags: Optional[List[str]] = None) -> bool:
+        """Create or replace the output record for a video.
 
         Args:
             video_id: Video ID
-            final_title: Final approved title
-            final_artist: Final approved original artist
-            cover_artist: Cover/performing artist (if different from original)
+            final_title: Title to embed and use for the filename
+            final_artist: Artist to embed (the source channel/uploader)
             album: Album name
             tags: List of tags
-            selected_attempt_id: ID of selected AI attempt (if any)
 
         Returns:
             True if successful, False otherwise
@@ -820,24 +681,24 @@ class Database:
             tags_json = json.dumps(tags) if tags else None
             cursor.execute("""
                 INSERT OR REPLACE INTO approved_metadata
-                (video_id, selected_attempt_id, final_title, final_artist, cover_artist, album, tags)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (video_id, selected_attempt_id, final_title, final_artist, cover_artist, album, tags_json))
+                (video_id, final_title, final_artist, album, tags)
+                VALUES (?, ?, ?, ?, ?)
+            """, (video_id, final_title, final_artist, album, tags_json))
             self.conn.commit()
-            self.logger.info(f"Approved metadata for {video_id}: {final_title}")
+            self.logger.info(f"Saved output record for {video_id}: {final_title}")
             return True
         except sqlite3.Error as e:
-            self.logger.error(f"Failed to approve metadata for {video_id}: {e}")
+            self.logger.error(f"Failed to save output record for {video_id}: {e}")
             return False
 
     def get_approved_metadata(self, video_id: str) -> Optional[Dict[str, Any]]:
-        """Get approved metadata for a video.
+        """Get the output record for a video.
 
         Args:
             video_id: Video ID
 
         Returns:
-            Metadata dictionary with parsed tags or None
+            Record dictionary with parsed tags or None
         """
         cursor = self.conn.cursor()
         cursor.execute("SELECT * FROM approved_metadata WHERE video_id = ?", (video_id,))
@@ -850,31 +711,14 @@ class Database:
         return None
 
     def add_approved_metadata(self, video_id: str, final_title: str, final_artist: Optional[str] = None,
-                             cover_artist: Optional[str] = None,
-                             album: Optional[str] = None, tags: Optional[List[str]] = None,
-                             selected_attempt_id: Optional[int] = None) -> bool:
-        """Alias for approve_metadata() - add or update approved metadata.
-
-        This method is an alias to maintain compatibility with GUI code.
-
-        Args:
-            video_id: Video ID
-            final_title: Final approved title
-            final_artist: Final approved original artist
-            cover_artist: Cover/performing artist (if different from original)
-            album: Album name
-            tags: List of tags
-            selected_attempt_id: ID of selected AI attempt (if any)
-
-        Returns:
-            True if successful, False otherwise
-        """
-        return self.approve_metadata(video_id, final_title, final_artist, cover_artist, album, tags, selected_attempt_id)
+                             album: Optional[str] = None, tags: Optional[List[str]] = None) -> bool:
+        """Alias for approve_metadata(), kept for call-site compatibility."""
+        return self.approve_metadata(video_id, final_title, final_artist, album, tags)
 
     def update_approved_metadata(self, video_id: str, final_title: Optional[str] = None,
                                 final_artist: Optional[str] = None, album: Optional[str] = None,
                                 tags: Optional[List[str]] = None) -> bool:
-        """Update existing approved metadata (partial update).
+        """Update an existing output record (partial update).
 
         Args:
             video_id: Video ID
@@ -887,10 +731,9 @@ class Database:
             True if successful, False otherwise
         """
         try:
-            # Get existing metadata first
             existing = self.get_approved_metadata(video_id)
             if not existing:
-                self.logger.warning(f"No approved metadata found for {video_id}")
+                self.logger.warning(f"No output record found for {video_id}")
                 return False
 
             # Use existing values if not provided
@@ -909,10 +752,10 @@ class Database:
             """, (final_title, final_artist, album, tags_json, video_id))
 
             self.conn.commit()
-            self.logger.debug(f"Updated approved metadata for {video_id}")
+            self.logger.debug(f"Updated output record for {video_id}")
             return True
         except sqlite3.Error as e:
-            self.logger.error(f"Failed to update approved metadata for {video_id}: {e}")
+            self.logger.error(f"Failed to update output record for {video_id}: {e}")
             self.conn.rollback()
             return False
 
@@ -921,7 +764,7 @@ class Database:
                                  m4a_path: Optional[str] = None,
                                  thumbnail_path: Optional[str] = None,
                                  error: Optional[str] = None) -> bool:
-        """Update conversion status for approved metadata.
+        """Update conversion status and output paths for a video.
 
         Args:
             video_id: Video ID
@@ -952,10 +795,10 @@ class Database:
             return False
 
     def delete_approved_metadata(self, video_id: str) -> bool:
-        """Delete approved metadata for a video.
+        """Delete the output record for a video.
 
-        This removes the approved metadata but keeps the video and AI attempts.
-        Useful for re-approving metadata with different selections.
+        This removes conversion tracking for the video but keeps the video
+        itself and its downloaded file.
 
         Args:
             video_id: Video ID
@@ -967,22 +810,20 @@ class Database:
             cursor = self.conn.cursor()
             cursor.execute("DELETE FROM approved_metadata WHERE video_id = ?", (video_id,))
             self.conn.commit()
-            self.logger.info(f"Deleted approved metadata for: {video_id}")
+            self.logger.info(f"Deleted output record for: {video_id}")
             return True
         except sqlite3.Error as e:
-            self.logger.error(f"Failed to delete approved metadata for {video_id}: {e}")
+            self.logger.error(f"Failed to delete output record for {video_id}: {e}")
             self.conn.rollback()
             return False
 
     # ==================== Query Methods ====================
 
     def get_videos_without_metadata(self) -> List[Dict[str, Any]]:
-        """Get videos that have been downloaded but don't have approved metadata yet.
-
-        Useful for finding videos that need AI processing or manual metadata entry.
+        """Get downloaded videos that have no output record yet.
 
         Returns:
-            List of video dictionaries that need metadata
+            List of video dictionaries that still need converting
         """
         cursor = self.conn.cursor()
         cursor.execute("""
@@ -996,15 +837,15 @@ class Database:
         return [dict(row) for row in cursor.fetchall()]
 
     def get_conversion_queue(self) -> List[Dict[str, Any]]:
-        """Get videos that have approved metadata and are ready for conversion.
+        """Get videos that are ready for conversion.
 
         Returns videos where:
         - Download status is 'downloaded'
-        - Approved metadata exists
+        - An output record exists
         - Conversion status is 'pending'
 
         Returns:
-            List of video dictionaries with approved metadata, ready to convert
+            List of video dictionaries, ready to convert
         """
         cursor = self.conn.cursor()
         cursor.execute("""

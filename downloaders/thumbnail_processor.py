@@ -14,7 +14,7 @@ This module:
 """
 
 from pathlib import Path
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List
 import requests
 from io import BytesIO
 from PIL import Image
@@ -44,7 +44,8 @@ class ThumbnailProcessor:
         self,
         thumbnail_url: str,
         output_path: str,
-        size: Tuple[int, int] = (300, 300)
+        size: Tuple[int, int] = (300, 300),
+        fallback_urls: Optional[List[str]] = None
     ) -> Tuple[bool, Optional[str]]:
         """
         Download thumbnail from URL and process to square format.
@@ -53,15 +54,39 @@ class ThumbnailProcessor:
             thumbnail_url: URL of the thumbnail image
             output_path: Path to save processed thumbnail (with .jpg extension)
             size: Output size as (width, height) tuple (default: 300x300)
+            fallback_urls: Additional URLs to try if the first one fails
+                (useful for YouTube, where maxresdefault may not exist)
 
         Returns:
             Tuple of (success: bool, error_message: str|None)
         """
-        if not thumbnail_url:
+        if not thumbnail_url and not fallback_urls:
             error_msg = "No thumbnail URL provided"
             self.logger.warning(error_msg)
             return False, error_msg
 
+        candidates = []
+        for url in [thumbnail_url, *(fallback_urls or [])]:
+            if url and url not in candidates:
+                candidates.append(url)
+
+        last_error = None
+        for url in candidates:
+            success, error = self._download_and_process_one(url, output_path, size)
+            if success:
+                return True, None
+            last_error = error
+            self.logger.debug(f"Thumbnail attempt failed ({url}): {error}")
+
+        return False, last_error
+
+    def _download_and_process_one(
+        self,
+        thumbnail_url: str,
+        output_path: str,
+        size: Tuple[int, int]
+    ) -> Tuple[bool, Optional[str]]:
+        """Download and process a single thumbnail URL."""
         self.logger.debug(f"Downloading thumbnail from: {thumbnail_url}")
 
         try:

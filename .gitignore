@@ -48,6 +48,10 @@ compare_*.bat
 missing_methods_report.txt
 test_data/
 
+# ...but keep the committed test suite
+!tests/
+!tests/test_*.py
+
 # Development session docs (local only)
 HANDOFF*.md
 PHASE*_README.md
@@ -66,8 +70,3 @@ AI_IMPROVEMENTS*.md
 ATTRIBUTEERROR_*.md
 V3_PROMPTS_RESULTS.md
 EXTERNAL_AI_HANDOFF.md
-
-# Old prompt versions (local only)
-ai/prompts_v1_backup.py
-ai/prompts_v2.py
-ai/prompts_v3.py
