@@ -204,6 +204,28 @@ class SetupDialog(QDialog):
         tell_buttons.addStretch(1)
         tell_layout.addLayout(tell_buttons)
 
+        # Songs that appear without their picture ---------------------------------
+        self.tags_card, tags_layout = self._card(
+            "Songs appear in Spotify without their picture?",
+            "Music DLP embeds the cover picture inside each song. If Spotify "
+            "shows a plain icon instead, it is using an old cached list. "
+            "These two buttons fix that; they do not re-download anything.",
+        )
+
+        tags_buttons = QHBoxLayout()
+        rewrite = QPushButton("Update song details and pictures")
+        rewrite.clicked.connect(self._rewrite_tags)
+        reset_index = QPushButton("Make Spotify re-read the folder")
+        reset_index.clicked.connect(self._reset_spotify_index)
+        tags_buttons.addWidget(rewrite)
+        tags_buttons.addWidget(reset_index)
+        tags_buttons.addStretch(1)
+        tags_layout.addLayout(tags_buttons)
+
+        self.tags_status = QLabel("")
+        self.tags_status.setWordWrap(True)
+        tags_layout.addWidget(self.tags_status)
+
         self.tell_status = QLabel("")
         self.tell_status.setWordWrap(True)
         tell_layout.addWidget(self.tell_status)
@@ -349,6 +371,37 @@ class SetupDialog(QDialog):
             self.settings.ffmpeg_path = filename
             self.settings.save()
             self.refresh()
+
+    def _rewrite_tags(self) -> None:
+        from musicdlp.core.db import Database
+        from musicdlp.core.maintenance import rewrite_tags
+        from musicdlp.core.paths import db_path
+
+        db = Database(db_path())
+        try:
+            notes = rewrite_tags(db, self.settings)
+        except Exception as exc:
+            notes = [f"Could not update the songs: {exc}"]
+        finally:
+            db.close()
+
+        self.tags_status.setText("\n".join(notes) or "No songs to update yet.")
+        self.tags_status.setStyleSheet("color: #16a34a;")
+
+    def _reset_spotify_index(self) -> None:
+        from musicdlp.core.maintenance import refresh_spotify_index
+
+        was_running = self.spotify.is_running()
+        if was_running:
+            self.spotify.restart()  # closes Spotify first
+        ok, message = refresh_spotify_index()
+        if ok:
+            self.spotify.start()
+            message += " Spotify has been restarted."
+        self.tags_status.setText(message)
+        self.tags_status.setStyleSheet(
+            "color: #16a34a;" if ok else "color: #d97706;"
+        )
 
     def _open_spotify(self) -> None:
         if not self.spotify.open_spotify():

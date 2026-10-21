@@ -40,6 +40,13 @@ def _embed_mp3(
     track: Optional[int],
     cover_path: Optional[Path],
 ) -> bool:
+    """Write ID3v2.3 tags with UTF-16 text.
+
+    Spotify's Local Files scanner reads ID3v2.4 text frames but frequently
+    drops the embedded picture from them. ID3v2.3 with UTF-16 is the
+    combination that Spotify, Windows Explorer, and other players all read
+    reliably.
+    """
     from mutagen.id3 import APIC, ID3, TALB, TIT2, TPE1, TRCK
 
     try:
@@ -53,20 +60,20 @@ def _embed_mp3(
     tags.delall("TRCK")
     tags.delall("APIC")
 
-    tags.add(TIT2(encoding=3, text=title))
+    tags.add(TIT2(encoding=1, text=title))
     if artist:
-        tags.add(TPE1(encoding=3, text=artist))
+        tags.add(TPE1(encoding=1, text=artist))
     if album:
-        tags.add(TALB(encoding=3, text=album))
+        tags.add(TALB(encoding=1, text=album))
     if track:
-        tags.add(TRCK(encoding=3, text=str(track)))
+        tags.add(TRCK(encoding=1, text=str(track)))
 
     if cover_path and Path(cover_path).exists():
         data = Path(cover_path).read_bytes()
-        tags.add(APIC(encoding=3, mime="image/jpeg", type=3,
+        tags.add(APIC(encoding=1, mime="image/jpeg", type=3,
                       desc="Cover", data=data))
 
-    tags.save(str(path))
+    tags.save(str(path), v2_version=3)
     return True
 
 

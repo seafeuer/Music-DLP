@@ -165,3 +165,92 @@ def _find_by_name(root: Path, name: str) -> Path | None:
         if candidate.is_file():
             return candidate
     return None
+
+
+def rewrite_tags(db: Database, settings: Settings) -> list[str]:
+    """Re-write tags and artwork into existing output files.
+
+    Used after the tag format changes, or when a player shows songs without
+    their picture. No audio is converted; only the tag block is replaced.
+    """
+    from musicdlp.services.tagging import embed_tags
+
+    notes: list[str] = []
+    rewritten = 0
+    failed = 0
+
+    for track in db.get_all_tracks():
+        paths = [Path(p) for p in (track.mp3_path, track.m4a_path) if p]
+        paths = [p for p in paths if p.exists()]
+
+        # The Spotify folder holds copies. They need the same tags, or
+        # Spotify keeps showing whatever it read the first time.
+        copies = [
+            settings.spotify_path / path.name for path in paths
+        ]
+        paths.extend(copy for copy in copies if copy.exists())
+
+        if not paths:
+            continue
+
+        cover = (
+            Path(track.cover_path)
+            if track.cover_path and Path(track.cover_path).exists()
+            else None
+        )
+
+        album = track.display_album or "Singles"
+        track_no = track.display_track
+        ok = False
+        for path in paths:
+            ok = embed_tags(
+                path,
+                title=track.display_title,
+                artist=track.display_artist or "Unknown",
+                album=album,
+                track=track_no,
+                cover_path=cover,
+            ) or ok
+        if ok:
+            rewritten += 1
+        else:
+            failed += 1
+
+    if rewritten:
+        notes.append(f"Updated the details and artwork in {rewritten} song(s).")
+    if failed:
+        notes.append(f"{failed} song(s) could not be updated.")
+    return notes
+
+
+def refresh_spotify_index(spotify_running_check=None) -> tuple[bool, str]:
+    """Make Spotify rebuild its list of local files.
+
+    Spotify caches which files it has seen, including artwork. Removing the
+    index while Spotify is closed forces a full re-read on the next start.
+    """
+    import os
+
+    appdata = os.environ.get("APPDATA")
+    if not appdata:
+        return False, "Spotify's data folder could not be found."
+
+    removed = 0
+    users = Path(appdata) / "Spotify" / "Users"
+    if users.exists():
+        for index_file in users.glob("*/local-files.bnk"):
+            try:
+                index_file.unlink()
+                removed += 1
+            except OSError as exc:
+                logger.warning("Could not remove %s: %s", index_file, exc)
+
+    if not removed:
+        return False, (
+            "No Spotify index was found to reset. Add the folder in Spotify "
+            "under Settings, Local files."
+        )
+    return True, (
+        "Spotify's list of local files was reset. It will re-read the "
+        "folder, including artwork, the next time it starts."
+    )
