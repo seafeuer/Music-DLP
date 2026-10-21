@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from musicdlp.core.config import Settings
-from musicdlp.core.paths import config_path, db_path, log_dir
+from musicdlp.core.paths import config_path, db_path, log_dir, start_directory
 from musicdlp.services.filenames import render_template
 from musicdlp.services.ffmpeg import FFmpegService
 from musicdlp.services.spotify import SpotifyService
@@ -255,11 +255,23 @@ class SettingsDialog(QDialog):
         folder_row = QHBoxLayout()
         folder_row.addWidget(QLabel("Spotify folder"))
         self.spotify_edit = QLineEdit(self.settings.spotify_dir)
+        self.spotify_edit.setPlaceholderText(
+            r"Paste a full path, e.g. C:\Users\you\MusicDLP\Spotify"
+        )
+        self.spotify_edit.setClearButtonEnabled(True)
         folder_row.addWidget(self.spotify_edit, 1)
         browse = QPushButton("Browse…")
         browse.clicked.connect(self._browse_spotify)
         folder_row.addWidget(browse)
         layout.addLayout(folder_row)
+
+        folder_hint = QLabel(
+            "You can paste a path here instead of browsing. If the folder "
+            "does not exist yet, it is created when you save."
+        )
+        folder_hint.setObjectName("mutedSmall")
+        folder_hint.setWordWrap(True)
+        layout.addWidget(folder_hint)
 
         form = QFormLayout()
         self.spotify_format = QComboBox()
@@ -397,18 +409,28 @@ class SettingsDialog(QDialog):
             self.cookies_file_edit.setText(filename)
 
     def _browse_output(self) -> None:
-        folder = QFileDialog.getExistingDirectory(
-            self, "Choose output folder", self.output_edit.text()
-        )
+        folder = self._choose_folder("Choose output folder", self.output_edit.text())
         if folder:
             self.output_edit.setText(folder)
 
     def _browse_spotify(self) -> None:
-        folder = QFileDialog.getExistingDirectory(
-            self, "Choose Spotify local-files folder", self.spotify_edit.text()
+        folder = self._choose_folder(
+            "Choose Spotify local-files folder", self.spotify_edit.text()
         )
         if folder:
             self.spotify_edit.setText(folder)
+
+    @staticmethod
+    def _choose_folder(title: str, current: str) -> str:
+        """Open a folder picker from a directory that actually exists.
+
+        Passing a path that has been deleted makes the Windows picker open
+        somewhere unexpected, which looks like the folder is missing.
+        """
+        start = start_directory(current)
+        return QFileDialog.getExistingDirectory(
+            None, title, str(start), QFileDialog.ShowDirsOnly
+        )
 
     def _browse_ffmpeg(self) -> None:
         filename, _ = QFileDialog.getOpenFileName(
@@ -456,11 +478,27 @@ class SettingsDialog(QDialog):
         if spotify_format not in formats:
             formats.append(spotify_format)
 
+        spotify_dir = self.spotify_edit.text().strip()
+        if not spotify_dir:
+            QMessageBox.warning(
+                self, "No Spotify folder",
+                "Choose the folder Spotify should read your songs from.",
+            )
+            return
+        try:
+            Path(spotify_dir).expanduser().mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            QMessageBox.critical(
+                self, "Folder cannot be used",
+                f"That folder cannot be created:\n{spotify_dir}\n\n{exc}",
+            )
+            return
+
         settings = Settings(
             theme=self.theme_combo.currentData(),
             mode=self.mode_combo.currentData(),
             output_dir=self.output_edit.text().strip(),
-            spotify_dir=self.spotify_edit.text().strip(),
+            spotify_dir=spotify_dir,
             spotify_format=spotify_format,
             spotify_copy_mode=self.copy_mode.currentData(),
             spotify_auto_restart=self.restart_check.isChecked(),

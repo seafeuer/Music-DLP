@@ -43,7 +43,7 @@ def status_label(status: str) -> str:
         ERROR: "Error",
         CANCELLED: "Cancelled",
         NEEDS_UPDATE: "Needs update",
-        MISSING: "Audio file missing",
+        MISSING: "File missing",
     }.get(status, status.title())
 
 

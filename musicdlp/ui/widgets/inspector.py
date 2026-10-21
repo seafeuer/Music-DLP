@@ -185,7 +185,7 @@ class Inspector(QWidget):
         if row.file_missing:
             self.hint_label.setText(
                 "The audio file is missing from your computer. Press Retry to "
-                "download and convert it again."
+                "download it again."
             )
         elif track.needs_update:
             self.hint_label.setText(
@@ -207,7 +207,7 @@ class Inspector(QWidget):
 
         paths = [p for p in (track.mp3_path, track.m4a_path) if p]
         if row.file_missing:
-            self.paths_label.setText("The saved audio file is missing.")
+            self.paths_label.setText("")
             self.paths_label.setToolTip("\n".join(paths))
         elif paths:
             names = ", ".join(Path(p).name for p in paths)

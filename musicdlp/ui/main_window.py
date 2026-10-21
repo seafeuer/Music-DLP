@@ -1392,11 +1392,18 @@ class MainWindow(QMainWindow):
             pass
 
     def _save_window_state(self) -> None:
+        """Persist only the window state this session owns.
+
+        Writing the whole in-memory settings object would undo a change made
+        elsewhere, such as pointing the app at a different folder while it
+        was open.
+        """
         try:
             data = bytes(self.saveGeometry().toBase64()).decode("ascii")
-            self.settings.window_geometry = data
-            self.settings.last_source_id = self._current_source_id
-            self.settings.save()
+            current = Settings.load()
+            current.window_geometry = data
+            current.last_source_id = self._current_source_id
+            current.save()
         except OSError:
             pass
 

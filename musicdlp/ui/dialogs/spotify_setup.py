@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QMessageBox, QPushButton, QVBoxLayout,
 )
 
-from musicdlp.core.paths import is_writable
+from musicdlp.core.paths import is_writable, start_directory
 from musicdlp.services.spotify import SpotifyService
 
 
@@ -90,7 +90,10 @@ class SpotifyDialog(QDialog):
 
     def _browse(self) -> None:
         folder = QFileDialog.getExistingDirectory(
-            self, "Choose Spotify local-files folder", self.folder_edit.text()
+            self,
+            "Choose Spotify local-files folder",
+            str(start_directory(self.folder_edit.text())),
+            QFileDialog.ShowDirsOnly,
         )
         if folder:
             self.folder_edit.setText(folder)

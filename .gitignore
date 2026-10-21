@@ -39,6 +39,9 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 
+# Audio kept inside the repo (Spotify local-files folder, if chosen here)
+Spotify_Local_Files/
+
 # Test artifacts
 .pytest_cache/
 .coverage

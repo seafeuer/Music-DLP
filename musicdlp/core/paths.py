@@ -120,3 +120,17 @@ def is_writable(path: Path) -> bool:
         return True
     except OSError:
         return False
+
+
+def start_directory(preferred: str | Path | None) -> Path:
+    """A directory that exists, for opening a file or folder picker.
+
+    File dialogs behave badly when handed a path that no longer exists, so
+    walk up to the nearest real folder instead.
+    """
+    if preferred:
+        candidate = Path(str(preferred)).expanduser()
+        for path in (candidate, *candidate.parents):
+            if path.is_dir():
+                return path
+    return Path.home()

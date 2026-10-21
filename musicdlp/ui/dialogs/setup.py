@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from musicdlp.core.config import Settings
-from musicdlp.core.paths import is_writable
+from musicdlp.core.paths import is_writable, start_directory
 from musicdlp.services import deps
 from musicdlp.services.ffmpeg import FFmpegService
 from musicdlp.services.spotify import SpotifyService
@@ -150,7 +150,10 @@ class SetupDialog(QDialog):
             "Spotify will read them from here.",
         )
         self.folder_edit = QLineEdit(self.settings.spotify_dir)
-        self.folder_edit.setReadOnly(True)
+        self.folder_edit.setPlaceholderText(
+            r"Paste a path here, e.g. C:\Users\you\MusicDLP\Spotify"
+        )
+        self.folder_edit.editingFinished.connect(self._folder_typed)
         folder_layout.addWidget(self.folder_edit)
 
         folder_buttons = QHBoxLayout()
@@ -364,11 +367,29 @@ class SetupDialog(QDialog):
 
     def _change_folder(self) -> None:
         folder = QFileDialog.getExistingDirectory(
-            self, "Choose where to keep your songs", self.folder_edit.text()
+            self,
+            "Choose where to keep your songs",
+            str(start_directory(self.folder_edit.text())),
+            QFileDialog.ShowDirsOnly,
         )
         if not folder:
             return
-        self.settings.spotify_dir = folder
+        self.folder_edit.setText(folder)
+        self._folder_typed()
+
+    def _folder_typed(self) -> None:
+        """Accept a pasted path, creating the folder if needed."""
+        text = self.folder_edit.text().strip()
+        if not text:
+            return
+        path = Path(text).expanduser()
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            self.folder_edit.setStyleSheet("border: 1px solid #dc2626;")
+            return
+        self.folder_edit.setStyleSheet("")
+        self.settings.spotify_dir = str(path)
         self.settings.save()
         self.saved = True
         self.refresh()
