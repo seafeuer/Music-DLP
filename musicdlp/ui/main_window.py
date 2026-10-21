@@ -425,6 +425,9 @@ class MainWindow(QMainWindow):
         self.sidebar.open_url_requested.connect(self._open_url)
         self.sidebar.select_all_requested.connect(self._select_every_song)
         self.sidebar.move_to_folder_requested.connect(self._move_to_folder)
+        self.sidebar.tracks_dropped.connect(self._tracks_dropped)
+        self.sidebar.new_folder_requested.connect(self._new_folder)
+        self.sidebar.rename_folder_requested.connect(self._rename_folder)
 
         self.track_table.checked_changed.connect(self._on_checked_changed)
         self.track_table.edit_details_requested.connect(self._open_details)
@@ -467,6 +470,8 @@ class MainWindow(QMainWindow):
     # --------------------------------------------------------------- sources
 
     def _refresh_sources(self, selected_id: Optional[int] = None) -> None:
+        # Links can name a folder that does not exist yet.
+        self.db.ensure_folders()
         sources = self.db.get_sources()
         counts = {source.id: self.db.status_counts(source.id) for source in sources}
 
@@ -481,6 +486,7 @@ class MainWindow(QMainWindow):
             target = None
 
         if sources:
+            link_count = sum(1 for source in sources if not source.is_folder)
             self._all_source = Source(
                 id=ALL_SONGS_ID,
                 url="",
@@ -489,7 +495,8 @@ class MainWindow(QMainWindow):
                 external_id=None,
                 title="All songs",
                 uploader=(
-                    f"{len(sources)} link" + ("" if len(sources) == 1 else "s")
+                    f"{link_count} link"
+                    + ("" if link_count == 1 else "s")
                 ),
                 item_count=self.db.count_tracks(),
                 thumbnail_url=None,
@@ -561,21 +568,64 @@ class MainWindow(QMainWindow):
         """Every ticked song, across all links."""
         return self.db.get_track_rows_by_ids(self._checked)
 
+    def _rename_folder(self, folder_id: int) -> None:
+        folder = self.db.get_source(folder_id)
+        if folder is None:
+            return
+        name, ok = QInputDialog.getText(
+            self, "Rename folder", "New name:", text=folder.title
+        )
+        if not ok or not name.strip() or name.strip() == folder.title:
+            return
+
+        new_name = name.strip()
+        self.db.update_source(folder_id, title=new_name)
+        # Links grouped under the old name follow the rename.
+        for source in self.db.get_sources():
+            if (source.folder or "") == folder.title:
+                self.db.set_source_folder(source.id, new_name)
+        self._refresh_sources(folder_id)
+        self.status.set_idle(f"Renamed the folder to “{new_name}”.")
+
+    def _tracks_dropped(self, folder_id: int, track_ids: list) -> None:
+        """Songs dragged onto a folder move into it."""
+        folder = self.db.get_source(folder_id)
+        if folder is None:
+            return
+        moved = self.db.move_tracks_to_folder(track_ids, folder_id)
+        self._refresh_sources(folder_id)
+        self.status.set_idle(
+            f"Moved {moved} song{'' if moved == 1 else 's'} into "
+            f"“{folder.title}”."
+        )
+
+    def _new_folder(self) -> None:
+        name, ok = QInputDialog.getText(
+            self, "New folder", "Name for the folder:"
+        )
+        if not ok or not name.strip():
+            return
+        folder_id = self.db.add_folder(name.strip())
+        self._refresh_sources(folder_id)
+        self.status.set_idle(
+            f"Created “{name.strip()}”. Drag songs onto it to file them."
+        )
+
     def _move_to_folder(self, source_id: int) -> None:
         """Put a link in a library folder, creating the folder if needed."""
         source = self.db.get_source(source_id)
         if source is None:
             return
 
-        folders = self.db.get_folders()
+        names = [folder.title for folder in self.db.get_folder_sources()]
         current = source.folder or ""
-        options = ["(no folder)", *folders]
+        options = ["(no folder)", *names]
         start = options.index(current) if current in options else 0
 
         choice, ok = QInputDialog.getItem(
             self,
             "Move to folder",
-            "Folder name.\nChoose one, or type a new name to create it:",
+            "Choose a folder, or type a new name to create it:",
             options,
             start,
             True,
@@ -584,6 +634,8 @@ class MainWindow(QMainWindow):
             return
 
         folder = "" if choice.strip() in ("", "(no folder)") else choice.strip()
+        if folder:
+            self.db.add_folder(folder)
         self.db.set_source_folder(source_id, folder)
         self._refresh_sources(source_id)
         if folder:

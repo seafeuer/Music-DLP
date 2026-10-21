@@ -107,6 +107,10 @@ class Source:
     def is_all(self) -> bool:
         return self.id == ALL_SONGS_ID
 
+    @property
+    def is_folder(self) -> bool:
+        return self.kind == "folder"
+
     @classmethod
     def from_row(cls, row: Mapping[str, Any]) -> "Source":
         return cls(

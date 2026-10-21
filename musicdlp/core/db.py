@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import threading
+import uuid
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
@@ -286,6 +287,138 @@ class Database:
 
     def set_source_folder(self, source_id: int, folder: str) -> None:
         self.update_source(source_id, folder=(folder or "").strip())
+
+    # --------------------------------------------------------------- folders
+    #
+    # A folder is a source row with kind 'folder'. That keeps the whole
+    # pipeline (tracks, statuses, selection, shipping) working unchanged,
+    # and lets a song be dragged into it like any other collection.
+
+    def add_folder(self, name: str) -> int:
+        name = (name or "").strip()
+        if not name:
+            raise ValueError("A folder needs a name")
+
+        conn = self._conn()
+        row = conn.execute(
+            "SELECT id FROM sources WHERE kind = 'folder' "
+            "AND title = ? COLLATE NOCASE",
+            (name,),
+        ).fetchone()
+        if row:
+            return int(row["id"])
+
+        url = f"folder://{uuid.uuid4().hex[:12]}"
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO sources
+                    (url, kind, platform, external_id, title, uploader,
+                     item_count, thumbnail_url)
+                VALUES (?, 'folder', 'folder', NULL, ?, '', 0, NULL)
+                """,
+                (url, name),
+            )
+            row = conn.execute(
+                "SELECT id FROM sources WHERE url = ?", (url,)
+            ).fetchone()
+        logger.info("Created folder %r", name)
+        return int(row["id"])
+
+    def get_folder_sources(self) -> list[Source]:
+        rows = self._conn().execute(
+            "SELECT * FROM sources WHERE kind = 'folder' "
+            "ORDER BY title COLLATE NOCASE"
+        ).fetchall()
+        return [Source.from_row(row) for row in rows]
+
+    def ensure_folders(self) -> None:
+        """Create a folder row for any folder name used by a link.
+
+        Links store their folder by name; this keeps the two views in step.
+        """
+        for name in self.get_folders():
+            self.add_folder(name)
+
+    def move_tracks_to_folder(
+        self, track_ids: Iterable[int], folder_id: int
+    ) -> int:
+        """Move songs into a folder, removing them from their old lists.
+
+        Single-video entries that become empty are deleted, so an
+        individually added song stops having its own library entry.
+        """
+        ids = [int(value) for value in track_ids]
+        if not ids:
+            return 0
+
+        conn = self._conn()
+        moved = 0
+        with conn:
+            affected: set[int] = set()
+            for track_id in ids:
+                rows = conn.execute(
+                    "SELECT source_id FROM source_tracks WHERE track_id = ?",
+                    (track_id,),
+                ).fetchall()
+                affected.update(int(row["source_id"]) for row in rows)
+
+                conn.execute(
+                    "DELETE FROM source_tracks "
+                    "WHERE track_id = ? AND source_id <> ?",
+                    (track_id, folder_id),
+                )
+                present = conn.execute(
+                    "SELECT 1 FROM source_tracks "
+                    "WHERE source_id = ? AND track_id = ?",
+                    (folder_id, track_id),
+                ).fetchone()
+                if present is None:
+                    position = conn.execute(
+                        "SELECT COALESCE(MAX(position), 0) + 1 AS n "
+                        "FROM source_tracks WHERE source_id = ?",
+                        (folder_id,),
+                    ).fetchone()["n"]
+                    conn.execute(
+                        "INSERT INTO source_tracks "
+                        "(source_id, track_id, position) VALUES (?, ?, ?)",
+                        (folder_id, track_id, position),
+                    )
+                moved += 1
+
+            affected.add(folder_id)
+            self._prune_and_recount(conn, affected)
+
+        logger.info("Moved %d song(s) into folder %s", moved, folder_id)
+        return moved
+
+    def _prune_and_recount(
+        self, conn: sqlite3.Connection, source_ids: Iterable[int]
+    ) -> None:
+        """Drop empty one-song entries, then refresh every item count."""
+        for source_id in source_ids:
+            row = conn.execute(
+                "SELECT kind FROM sources WHERE id = ?", (source_id,)
+            ).fetchone()
+            if row is None:
+                continue
+            count = conn.execute(
+                "SELECT COUNT(*) AS n FROM source_tracks WHERE source_id = ?",
+                (source_id,),
+            ).fetchone()["n"]
+            if count == 0 and row["kind"] == "item":
+                conn.execute("DELETE FROM sources WHERE id = ?", (source_id,))
+                continue
+            conn.execute(
+                "UPDATE sources SET item_count = ? WHERE id = ?",
+                (count, source_id),
+            )
+
+    def delete_folder(self, folder_id: int) -> None:
+        """Remove a folder. Its songs stay in the library."""
+        conn = self._conn()
+        with conn:
+            conn.execute("DELETE FROM sources WHERE id = ?", (folder_id,))
 
     def get_folders(self) -> list[str]:
         rows = self._conn().execute(

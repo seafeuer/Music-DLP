@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Iterable, Optional
 
-from PySide6.QtCore import QModelIndex, Qt, Signal
+from PySide6.QtCore import QMimeData, QModelIndex, Qt, Signal
+from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QHBoxLayout, QHeaderView, QLabel,
     QLineEdit, QMenu, QPushButton, QStackedWidget, QTableView, QToolButton,
@@ -18,6 +19,37 @@ from musicdlp.ui.models.track_model import (
     COL_PROGRESS, COL_STATUS, COL_TITLE, ROW_ROLE, TrackFilterProxy,
     TrackTableModel,
 )
+
+
+class TrackTableView(QTableView):
+    """Table view that lets selected rows be dragged into a library folder."""
+
+    def startDrag(self, supported_actions) -> None:
+        indexes = self.selectionModel().selectedRows()
+        if not indexes:
+            return
+        model = self.model()
+        ids: list[int] = []
+        for index in indexes:
+            source_index = model.mapToSource(index)
+            row = model.sourceModel().rows[source_index.row()]
+            ids.append(row.track.id)
+        if not ids:
+            return
+
+        from musicdlp.ui.widgets.source_list import TRACKS_MIME
+
+        payload = QMimeData()
+        payload.setData(TRACKS_MIME, ",".join(str(i) for i in ids).encode("ascii"))
+        payload.setText(
+            ", ".join(model.sourceModel().rows[
+                model.mapToSource(i).row()
+            ].display_title for i in indexes[:5])
+        )
+
+        drag = QDrag(self)
+        drag.setMimeData(payload)
+        drag.exec(Qt.MoveAction)
 
 
 class TrackTableWidget(QWidget):
@@ -111,9 +143,12 @@ class TrackTableWidget(QWidget):
 
         # Table ------------------------------------------------------------
         self.stack = QStackedWidget()
-        self.table = QTableView()
+        self.table = TrackTableView()
         self.mode = "easy"
         self.table.setModel(self.proxy)
+        self.table.setDragEnabled(True)
+        self.table.setDragDropMode(QAbstractItemView.DragOnly)
+        self.table.setDefaultDropAction(Qt.MoveAction)
         self.table.setSortingEnabled(True)
         self.table.sortByColumn(COL_POSITION, Qt.AscendingOrder)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)

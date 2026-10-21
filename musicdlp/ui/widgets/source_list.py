@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Iterable, Optional
 
 from PySide6.QtCore import QAbstractListModel, QModelIndex, QSize, QSortFilterProxyModel, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication, QHBoxLayout, QLabel, QLineEdit, QListView, QMenu,
     QPushButton, QStyle, QStyledItemDelegate, QStyleOptionViewItem,
@@ -17,6 +17,8 @@ from musicdlp.core.models import (
 )
 
 COUNT_ROLE = Qt.UserRole + 1
+INDENT_ROLE = Qt.UserRole + 2
+TRACKS_MIME = "application/x-musicdlp-tracks"
 
 
 def _downloaded_count(counts: dict[str, int]) -> int:
@@ -53,7 +55,11 @@ class SourceListModel(QAbstractListModel):
             return source.title
         if role == COUNT_ROLE:
             return counts
+        if role == INDENT_ROLE:
+            return row[3]
         if role == Qt.ToolTipRole:
+            if source.is_folder:
+                return f"{source.title}\nDrag songs here to file them."
             return f"{source.title}\n{source.url}"
         return None
 
@@ -72,37 +78,46 @@ class SourceListModel(QAbstractListModel):
         sources = list(sources)
         self.beginResetModel()
 
-        # Group by folder, keeping "All songs" first and ungrouped links
-        # last, so a folder never hides the link you just added.
-        folders: dict[str, list[Source]] = {}
-        ungrouped: list[Source] = []
-        all_entries: list[Source] = []
-        for source in sources:
-            if source.id == ALL_SONGS_ID:
-                all_entries.append(source)
-                continue
-            folder = (source.folder or "").strip()
-            if folder:
-                folders.setdefault(folder, []).append(source)
-            else:
-                ungrouped.append(source)
+        all_entries = [s for s in sources if s.id == ALL_SONGS_ID]
+        folders = [s for s in sources if s.is_folder]
+        links = [
+            s for s in sources
+            if s.id != ALL_SONGS_ID and not s.is_folder
+        ]
 
-        rows: list[tuple] = [("source", source, counts.get(source.id, {}))
-                             for source in all_entries]
-        for name in sorted(folders, key=str.lower):
-            group = folders[name]
-            group_counts: dict[str, int] = {}
-            for source in group:
-                for status, value in counts.get(source.id, {}).items():
-                    group_counts[status] = group_counts.get(status, 0) + value
-            rows.append(("header", name, group_counts))
+        by_folder: dict[str, list[Source]] = {}
+        unfiled: list[Source] = []
+        for link in links:
+            name = (link.folder or "").strip()
+            if name:
+                by_folder.setdefault(name.lower(), []).append(link)
+            else:
+                unfiled.append(link)
+
+        # ("source", Source, counts, indent)
+        rows: list[tuple] = [
+            ("source", source, counts.get(source.id, {}), 0)
+            for source in all_entries
+        ]
+
+        known = {folder.title.lower() for folder in folders}
+        for folder in folders:
+            rows.append(("source", folder, counts.get(folder.id, {}), 0))
+            for link in by_folder.get(folder.title.lower(), []):
+                rows.append(("source", link, counts.get(link.id, {}), 1))
+        # A link naming a folder that does not exist yet is still shown.
+        for name, group in by_folder.items():
+            if name in known:
+                continue
+            rows.append(("header", name.title(), {}, 0))
             rows.extend(
-                ("source", source, counts.get(source.id, {}))
-                for source in group
+                ("source", link, counts.get(link.id, {}), 1)
+                for link in group
             )
+
         rows.extend(
-            ("source", source, counts.get(source.id, {}))
-            for source in ungrouped
+            ("source", source, counts.get(source.id, {}), 0)
+            for source in unfiled
         )
         self.rows = rows
 
@@ -192,14 +207,26 @@ class SourceDelegate(QStyledItemDelegate):
             return
 
         source, counts = entry[1], entry[2]
+        indent = entry[3] if len(entry) > 3 else 0
 
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing, True)
         rect = option.rect.adjusted(2, 2, -2, -2)
+        if indent:
+            rect = rect.adjusted(18, 0, 0, 0)
 
         selected = bool(option.state & QStyle.State_Selected)
         hovered = bool(option.state & QStyle.State_MouseOver)
-        if selected:
+        drop_target = (
+            source.is_folder
+            and getattr(option.widget, "_hovered_folder", None) == source.id
+        )
+        if drop_target:
+            painter.setBrush(QColor(59, 130, 246, 60))
+            painter.setPen(QPen(QColor("#3b82f6"), 1.5))
+            painter.drawRoundedRect(rect, 7, 7)
+            painter.setPen(Qt.NoPen)
+        elif selected:
             painter.setBrush(QColor(59, 130, 246, 45))
             painter.setPen(Qt.NoPen)
             painter.drawRoundedRect(rect, 7, 7)
@@ -219,6 +246,8 @@ class SourceDelegate(QStyledItemDelegate):
         painter.setPen(option.palette.text().color())
 
         title = source.title
+        if source.is_folder:
+            title = "▸ " + title
         if title in source_model.duplicate_titles:
             marker = (source.external_id or source.url)[-4:]
             title = f"{title}  ·{marker}"
@@ -231,9 +260,12 @@ class SourceDelegate(QStyledItemDelegate):
         downloaded = _downloaded_count(counts)
         errors = counts.get(ERROR, 0)
         track_word = "song" if total == 1 else "songs"
-        subtitle = f"{total} {track_word} · {downloaded} downloaded"
-        if errors:
-            subtitle += f" · {errors} error" + ("" if errors == 1 else "s")
+        if source.is_folder:
+            subtitle = f"{total} {track_word} · drop songs here"
+        else:
+            subtitle = f"{total} {track_word} · {downloaded} downloaded"
+            if errors:
+                subtitle += f" · {errors} error" + ("" if errors == 1 else "s")
 
         sub_font = QFont(option.font)
         sub_font.setPointSizeF(max(7.5, sub_font.pointSizeF() - 1.2))
@@ -281,6 +313,80 @@ class SourceDelegate(QStyledItemDelegate):
         painter.restore()
 
 
+class SourceListView(QListView):
+    """The library list, which accepts songs dragged onto a folder."""
+
+    tracks_dropped = Signal(int, list)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(False)
+        self.setDragDropMode(QListView.DropOnly)
+        self._hovered_folder: Optional[int] = None
+
+    # ------------------------------------------------------------------ drop
+
+    def _folder_at(self, position) -> Optional[int]:
+        index = self.indexAt(position)
+        if not index.isValid():
+            return None
+        model = self.model()
+        if model is None:
+            return None
+        source_index = model.mapToSource(index)
+        entries = getattr(model.sourceModel(), "rows", None)
+        if not entries or not (0 <= source_index.row() < len(entries)):
+            return None
+        entry = entries[source_index.row()]
+        if entry[0] != "source" or not entry[1].is_folder:
+            return None
+        return entry[1].id
+
+    def dragEnterEvent(self, event) -> None:
+        if event.mimeData().hasFormat(TRACKS_MIME):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event) -> None:
+        if not event.mimeData().hasFormat(TRACKS_MIME):
+            super().dragMoveEvent(event)
+            return
+        folder_id = self._folder_at(event.position().toPoint())
+        self._set_hover(folder_id)
+        if folder_id is None:
+            event.ignore()
+        else:
+            event.acceptProposedAction()
+
+    def dragLeaveEvent(self, event) -> None:
+        self._set_hover(None)
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event) -> None:
+        if not event.mimeData().hasFormat(TRACKS_MIME):
+            super().dropEvent(event)
+            return
+        folder_id = self._folder_at(event.position().toPoint())
+        self._set_hover(None)
+        if folder_id is None:
+            event.ignore()
+            return
+
+        raw = bytes(event.mimeData().data(TRACKS_MIME)).decode("ascii")
+        ids = [int(value) for value in raw.split(",") if value.strip()]
+        if ids:
+            self.tracks_dropped.emit(folder_id, ids)
+            event.acceptProposedAction()
+
+    def _set_hover(self, folder_id: Optional[int]) -> None:
+        if folder_id == self._hovered_folder:
+            return
+        self._hovered_folder = folder_id
+        self.viewport().update()
+
+
 class SourceListWidget(QWidget):
     source_selected = Signal(int)
     refresh_requested = Signal(int)
@@ -289,6 +395,9 @@ class SourceListWidget(QWidget):
     open_url_requested = Signal(str)
     select_all_requested = Signal()
     move_to_folder_requested = Signal(int)
+    tracks_dropped = Signal(int, list)
+    new_folder_requested = Signal()
+    rename_folder_requested = Signal(int)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -310,7 +419,7 @@ class SourceListWidget(QWidget):
         self.search.textChanged.connect(self.proxy.set_search)
         layout.addWidget(self.search)
 
-        self.view = QListView()
+        self.view = SourceListView()
         self.view.setModel(self.proxy)
         self.view.setItemDelegate(SourceDelegate(self.view))
         self.view.setSelectionMode(QListView.SingleSelection)
@@ -319,13 +428,17 @@ class SourceListWidget(QWidget):
         self.view.setContextMenuPolicy(Qt.CustomContextMenu)
         self.view.customContextMenuRequested.connect(self._context_menu)
         self.view.selectionModel().currentChanged.connect(self._on_current_changed)
-        self.view.clicked.connect(self._on_clicked)
+        self.view.tracks_dropped.connect(self.tracks_dropped)
         layout.addWidget(self.view, 1)
 
         footer = QHBoxLayout()
         footer.setSpacing(6)
         self.add_button = QPushButton("Add")
         self.add_button.clicked.connect(self.add_requested)
+        self.folder_button = QPushButton("Folder")
+        self.folder_button.setToolTip("Create a folder to drag songs into")
+        self.folder_button.clicked.connect(self.new_folder_requested)
+        footer.addWidget(self.folder_button)
         self.refresh_button = QPushButton("Refresh")
         self.refresh_button.clicked.connect(self._refresh)
         self.remove_button = QPushButton("Remove")
@@ -339,6 +452,7 @@ class SourceListWidget(QWidget):
     def set_busy(self, busy: bool) -> None:
         enabled = not busy
         self.add_button.setEnabled(enabled)
+        self.folder_button.setEnabled(enabled)
         self.refresh_button.setEnabled(enabled)
         self.remove_button.setEnabled(enabled)
 
@@ -359,6 +473,7 @@ class SourceListWidget(QWidget):
         row = self.model.row_for_id(source_id)
         if row is None:
             return
+        self._last_source_id = source_id
         source_index = self.model.index(row, 0)
         proxy_index = self.proxy.mapFromSource(source_index)
         if proxy_index.isValid():
@@ -381,26 +496,6 @@ class SourceListWidget(QWidget):
             self._update_buttons()
             self.source_selected.emit(source.id)
 
-    def _on_clicked(self, index: QModelIndex) -> None:
-        """A click on a folder heading should not clear the selection."""
-        if not index.isValid():
-            return
-        source_index = self.proxy.mapToSource(index)
-        if self.model.source_at(source_index.row()) is None:
-            # Restore the previously selected link.
-            if self._last_source_id is not None:
-                self.select_source(self._last_source_id)
-
-    def select_source(self, source_id: int) -> None:
-        row = self.model.row_for_id(source_id)
-        if row is None:
-            return
-        self._last_source_id = source_id
-        source_index = self.model.index(row, 0)
-        proxy_index = self.proxy.mapFromSource(source_index)
-        if proxy_index.isValid():
-            self.view.setCurrentIndex(proxy_index)
-
     def _refresh(self) -> None:
         source_id = self.selected_source_id()
         if source_id is not None and source_id != ALL_SONGS_ID:
@@ -414,7 +509,12 @@ class SourceListWidget(QWidget):
     def _update_buttons(self) -> None:
         source_id = self.selected_source_id()
         is_all = source_id == ALL_SONGS_ID
-        self.refresh_button.setEnabled(not is_all)
+        is_folder = False
+        if source_id is not None and not is_all:
+            row = self.model.row_for_id(source_id)
+            if row is not None:
+                is_folder = self.model.rows[row][1].is_folder
+        self.refresh_button.setEnabled(not is_all and not is_folder)
         self.remove_button.setEnabled(not is_all)
 
     def _context_menu(self, position) -> None:
@@ -431,6 +531,16 @@ class SourceListWidget(QWidget):
             menu.addAction(
                 "Select every song",
                 lambda: self.select_all_requested.emit(),
+            )
+        elif source.is_folder:
+            menu.addAction(
+                "Rename folder…",
+                lambda: self.rename_folder_requested.emit(source.id),
+            )
+            menu.addSeparator()
+            menu.addAction(
+                "Remove folder…",
+                lambda: self.delete_requested.emit(source.id),
             )
         else:
             menu.addAction(
