@@ -47,9 +47,9 @@ STYLE_BOTH = "both"
 STYLES = (STYLE_TRANSLATED, STYLE_TRANSLITERATED, STYLE_BOTH)
 
 STYLE_LABELS = {
-    STYLE_TRANSLATED: "In the language's own script",
-    STYLE_TRANSLITERATED: "In Latin letters (readable to me)",
-    STYLE_BOTH: "Both: 夜に駆ける (Yoru ni Kakeru)",
+    STYLE_TRANSLATED: "Own script",
+    STYLE_TRANSLITERATED: "Latin letters",
+    STYLE_BOTH: "Both (script + Latin)",
 }
 
 # A batch this size keeps one request cheap and still saves most of the
@@ -71,14 +71,19 @@ Rules:
   written as a native listener would expect them (katakana for foreign names
   in Japanese, Hebrew letters for foreign names in Hebrew), not left in
   English.
-- Translate the MEANING of the title, not word by word, and keep the result
-  natural as a song title.
+- A song title is a NAME, not a sentence. Use the form the song is actually
+  known by in the target language. An English title in Japanese is normally
+  the katakana transliteration (プラスチック・ラブ), not a word-for-word
+  translation of its meaning. Translate the meaning only when the title is a
+  plain descriptive phrase, and never when the title is a person's name, a
+  place, or an idiom.
+- Keep it natural as a song title. Do not add punctuation that was not there.
 - Never translate or change a name that is already in the target language;
   copy it through unchanged.
 - Set "already_target" to true when the title was already in the target
   language.
-- "confidence" is 0.0-1.0. Use below 0.5 when the meaning is unclear, for
-  example a title that is a name or a pun.
+- "confidence" is 0.0-1.0. Use below 0.5 when you are unsure which form the
+  song is known by.
 - Never add channel names, quality tags, or explanations.
 """
 

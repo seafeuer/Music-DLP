@@ -253,3 +253,22 @@ def test_cancellation(env):
             env["items"], ["download"], False,
             env["settings"], _summary(),
         )
+
+
+def test_an_update_run_only_refreshes_songs_already_in_spotify(env):
+    """Updating files must not add new songs to the Spotify folder."""
+    db = env["db"]
+    pipeline = env["pipeline"]
+    pipeline._execute(
+        env["items"], ["download", "convert"], False,
+        env["settings"], _summary(),
+    )
+    db.update_track(
+        env["track_ids"][0], status="synced", synced_at="2024-01-01 00:00:00"
+    )
+
+    assert pipeline.start(env["items"], ["sync"], only_synced=True)
+    pipeline.wait(20)
+
+    copies = list((env["tmp"] / "spotify").glob("*.mp3"))
+    assert len(copies) == 1

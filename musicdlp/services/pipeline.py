@@ -139,6 +139,7 @@ class Pipeline(QObject):
 
         self._thread: Optional[threading.Thread] = None
         self._cancel = threading.Event()
+        self._only_synced = False
         self._lock = threading.Lock()
 
     # --------------------------------------------------------------- control
@@ -154,6 +155,7 @@ class Pipeline(QObject):
         stages: Iterable[str],
         *,
         force: bool = False,
+        only_synced: bool = False,
     ) -> bool:
         items = list(items)
         stages = [stage for stage in self.STAGES if stage in set(stages)]
@@ -164,6 +166,7 @@ class Pipeline(QObject):
             if self.is_running:
                 return False
             self._cancel = threading.Event()
+            self._only_synced = only_synced
             self._thread = threading.Thread(
                 target=self._run,
                 args=(items, stages, force),
@@ -603,6 +606,12 @@ class Pipeline(QObject):
                 continue
 
             if track.id in summary.get("_failed_ids", set()):
+                tracker.complete_unit("sync", track.display_title, track.id)
+                continue
+
+            # An "update files" run only refreshes copies that already exist
+            # in Spotify; it must not add new songs to the Spotify folder.
+            if getattr(self, "_only_synced", False) and not track.synced_at:
                 tracker.complete_unit("sync", track.display_title, track.id)
                 continue
 

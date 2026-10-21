@@ -814,28 +814,103 @@ class Database:
     def restore_track_links(
         self, track_id: int, links: Iterable[tuple[int, int]]
     ) -> None:
-        """Put a track back into exactly the sources and positions given."""
+        """Put a track back into exactly the sources and positions given.
+
+        If none of those sources still exists there is nothing to restore,
+        and the song is left where it is rather than unlinked from
+        everything.
+        """
         track_id = int(track_id)
         wanted = [(int(source_id), int(position)) for source_id, position in links]
         conn = self._conn()
+        existing = {
+            int(row["id"])
+            for row in conn.execute("SELECT id FROM sources").fetchall()
+        }
+        usable = [
+            (source_id, position)
+            for source_id, position in wanted
+            if source_id in existing
+        ]
+        if not usable:
+            logger.info(
+                "Nothing to restore for track %s: its sources are gone", track_id
+            )
+            return
+
         with conn:
             conn.execute(
                 "DELETE FROM source_tracks WHERE track_id = ?", (track_id,)
             )
-            existing = {
-                int(row["id"])
-                for row in conn.execute("SELECT id FROM sources").fetchall()
-            }
-            for source_id, position in wanted:
-                if source_id not in existing:
-                    continue
+            for source_id, position in usable:
                 conn.execute(
                     "INSERT INTO source_tracks (source_id, track_id, position) "
                     "VALUES (?, ?, ?)",
                     (source_id, track_id, position),
                 )
             self._prune_and_recount(
-                conn, {source_id for source_id, _p in wanted}
+                conn, {source_id for source_id, _p in usable}
+            )
+
+    def restore_track(self, track: Track) -> None:
+        """Put a deleted track row back, keeping its id.
+
+        Used by undo after a duplicate is removed from the library.
+        """
+        conn = self._conn()
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO tracks
+                    (id, platform, media_id, url, source_index, title,
+                     uploader, duration, thumbnail_url, description, status,
+                     error, meta_title, meta_artist, meta_album, meta_track,
+                     raw_path, mp3_path, m4a_path, cover_path, downloaded_at,
+                     converted_at, synced_at, sync_error, needs_update,
+                     smart_title, smart_artist, smart_confidence, smart_reason)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO NOTHING
+                """,
+                (
+                    track.id, track.platform, track.media_id, track.url,
+                    track.source_index, track.title, track.uploader,
+                    track.duration, track.thumbnail_url, track.description,
+                    track.status, track.error, track.meta_title,
+                    track.meta_artist, track.meta_album, track.meta_track,
+                    track.raw_path, track.mp3_path, track.m4a_path,
+                    track.cover_path, track.downloaded_at, track.converted_at,
+                    track.synced_at, track.sync_error,
+                    1 if track.needs_update else 0, track.smart_title,
+                    track.smart_artist, track.smart_confidence,
+                    track.smart_reason,
+                ),
+            )
+
+    def restore_source(self, source: Source) -> None:
+        """Put a deleted source back, keeping its id.
+
+        Moving the only song out of a one-song link deletes that link. An
+        undo has to recreate it before the song can be linked back.
+        """
+        conn = self._conn()
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO sources
+                    (id, url, kind, platform, external_id, title, uploader,
+                     item_count, thumbnail_url, folder, filename_template,
+                     added_at, refreshed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO NOTHING
+                """,
+                (
+                    source.id, source.url, source.kind, source.platform,
+                    source.external_id, source.title, source.uploader,
+                    source.item_count, source.thumbnail_url,
+                    source.folder or "", source.filename_template,
+                    source.added_at, source.refreshed_at,
+                ),
             )
 
     def find_duplicate_groups(self) -> list[list[TrackRow]]:

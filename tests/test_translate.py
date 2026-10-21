@@ -299,7 +299,7 @@ def test_dialog_leaves_an_unsure_translation_unticked(qapp):
     dialog = TranslationDialog([_row()], ai_settings=SETTINGS)
     dialog._apply_translation(1, Translation(title="???", confidence=0.2))
     assert dialog.table.item(0, COL_USE).checkState() == Qt.Unchecked
-    assert "check it" in dialog.table.item(0, COL_NOTE).text()
+    assert "Unsure" in dialog.table.item(0, COL_NOTE).text()
 
 
 def test_dialog_leaves_a_song_already_in_the_language_alone(qapp):
@@ -308,7 +308,7 @@ def test_dialog_leaves_a_song_already_in_the_language_alone(qapp):
         1, Translation(title="夜に駆ける", confidence=0.9, already_target=True)
     )
     assert dialog.table.item(0, COL_USE).checkState() == Qt.Unchecked
-    assert "Already in" in dialog.table.item(0, COL_NOTE).text()
+    assert "Already" in dialog.table.item(0, COL_NOTE).text()
 
 
 def test_dialog_restyles_when_the_style_changes(qapp):
@@ -353,5 +353,4 @@ def test_dialog_artist_checkbox_clears_the_artist_column(qapp):
     assert dialog.table.item(0, COL_ARTIST).text() == "YOASOBI"
 
     dialog.artist_check.setChecked(False)
-    dialog._restyle_rows()
     assert dialog.table.item(0, COL_ARTIST).text() == ""

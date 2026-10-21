@@ -355,6 +355,9 @@ class SettingsDialog(QDialog):
         self.ai_provider_combo.addItem(
             "Another compatible API (needs a key)", ("openai", "")
         )
+        self.ai_provider_combo.addItem(
+            "Anthropic-style API (needs a key)", ("anthropic", "")
+        )
         index = self._ai_provider_index()
         self.ai_provider_combo.setCurrentIndex(index)
         self.ai_provider_combo.currentIndexChanged.connect(
@@ -438,6 +441,8 @@ class SettingsDialog(QDialog):
         url = self.settings.ai_base_url.rstrip("/")
         if provider == "openai":
             return 2
+        if provider == "anthropic":
+            return 3
         if url == "https://ollama.com":
             return 1
         return 0
@@ -447,6 +452,15 @@ class SettingsDialog(QDialog):
         # Always set the address for the chosen provider: leaving the old one
         # in place made "another compatible API" silently point at Ollama.
         self.ai_url_edit.setText(url or "")
+        if not url:
+            # Say what kind of address belongs here, rather than leaving the
+            # Ollama example in place.
+            self.ai_url_edit.setPlaceholderText(
+                "https://api.anthropic.com" if provider == "anthropic"
+                else "https://your-server.example/v1"
+            )
+        else:
+            self.ai_url_edit.setPlaceholderText(url)
         if provider == "ollama" and url == "http://localhost:11434":
             self.ai_key_edit.setPlaceholderText(
                 "Not needed for Ollama on this computer"
@@ -471,6 +485,13 @@ class SettingsDialog(QDialog):
             api_key=self.ai_key_edit.text().strip(),
         )
 
+    def done(self, result: int) -> None:
+        """Stop watching for a slow check once the dialog is closing."""
+        timer = getattr(self, "_task_timer", None)
+        if timer is not None:
+            timer.stop()
+        super().done(result)
+
     def _run_task(
         self,
         work: Callable[[], object],
@@ -488,6 +509,9 @@ class SettingsDialog(QDialog):
         here.
         """
         if getattr(self, "_task_busy", False):
+            status_label.setText(
+                "Please wait for the check that is already running."
+            )
             return
         self._task_busy = True
         self._task_result: list = []
@@ -507,6 +531,7 @@ class SettingsDialog(QDialog):
 
         timer = QTimer(self)
         timer.setInterval(120)
+        self._task_timer = timer
 
         def check() -> None:
             if not self._task_result:

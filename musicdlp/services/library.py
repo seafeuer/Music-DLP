@@ -197,11 +197,24 @@ class LibraryService:
                 self._delete_files(row.track)
                 self.db.delete_track(row.track.id)
 
-    def delete_track(self, track_id: int, *, delete_files: bool = False) -> None:
+    def delete_track(
+        self,
+        track_id: int,
+        *,
+        delete_files: bool = False,
+        forget: bool = False,
+    ) -> None:
+        """Remove a track from the library.
+
+        By default the song is only unlinked from its sources, so a playlist
+        refresh can bring it back. ``forget`` also drops the row, which is
+        what removing a duplicate copy means: the entry is gone for good.
+        """
         track = self.db.get_track(track_id)
         self.db.unlink_track_everywhere(track_id)
         if delete_files and track is not None:
             self._delete_files(track)
+        if (delete_files or forget) and track is not None:
             self.db.delete_track(track_id)
 
     def _delete_files(self, track) -> None:

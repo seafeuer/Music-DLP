@@ -46,6 +46,7 @@ class LookupDialog(QDialog):
         self._results: queue.Queue = queue.Queue()
         self._stop = threading.Event()
         self._poll: Optional[QTimer] = None
+        self._found_count = 0
 
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
@@ -182,7 +183,6 @@ class LookupDialog(QDialog):
 
     def _drain(self) -> None:
         finished = False
-        found_count = 0
         while True:
             try:
                 kind, payload = self._results.get_nowait()
@@ -199,7 +199,8 @@ class LookupDialog(QDialog):
             if kind == "result":
                 track_id, found = payload
                 if self._apply_lookup(track_id, found):
-                    found_count += 1
+                    # Counted across polls: results arrive one at a time.
+                    self._found_count += 1
 
         if not finished:
             return
@@ -208,6 +209,7 @@ class LookupDialog(QDialog):
             self._poll.stop()
         self.go_button.setEnabled(True)
         self._update_apply_state()
+        found_count = self._found_count
         if found_count:
             self.status.setText(
                 f"Found details for {found_count} song"
@@ -285,6 +287,13 @@ class LookupDialog(QDialog):
         self.accept()
 
     # ---------------------------------------------------------------- close
+
+    def accept(self) -> None:
+        # Apply can close the dialog while lookups are still queued.
+        self._stop.set()
+        if self._poll is not None:
+            self._poll.stop()
+        super().accept()
 
     def reject(self) -> None:
         self._stop.set()

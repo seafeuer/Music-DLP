@@ -660,13 +660,22 @@ class MainWindow(QMainWindow):
             }
 
         self._current_source_id = source_id
-        self.settings.last_source_id = source_id
+        # The remembered source is a real link, not the search view, so
+        # opening the app later returns to the link the user was working on.
+        if source_id != ALL_SONGS_ID:
+            self.settings.last_source_id = source_id
         self._visible_ids = {row.track.id for row in rows}
         visible_checked = self._checked & self._visible_ids
 
         self.track_table.set_source(
             source, rows, visible_checked, selected_track_id=keep_selected
         )
+        # Reloading a view clears the table's own search. While the library
+        # search is in use, put the query back so the list keeps matching
+        # what the box says.
+        query = self.search_edit.text().strip()
+        if query and source_id == ALL_SONGS_ID:
+            self.track_table.search.setText(query)
         if keep_selected is None:
             self.inspector.set_row(None)
         else:
@@ -675,8 +684,9 @@ class MainWindow(QMainWindow):
         self._update_actions()
 
         # Leaving the library search for a specific link clears the box, so
-        # the two searches do not fight each other.
-        if source_id != ALL_SONGS_ID and self.search_edit.text():
+        # the two searches do not fight each other. The search box's own
+        # switch is guarded, so typing does not clear what was just typed.
+        if not self._search_guard and self.search_edit.text():
             self._search_guard = True
             self.search_edit.clear()
             self._search_guard = False
@@ -701,7 +711,9 @@ class MainWindow(QMainWindow):
 
         if self._current_source_id != ALL_SONGS_ID:
             self._search_from = self._current_source_id
+            self._search_guard = True
             self._load_source(ALL_SONGS_ID)
+            self._search_guard = False
 
         # The table clears its own search when a source loads, so set it
         # after the switch.
@@ -754,12 +766,17 @@ class MainWindow(QMainWindow):
                 continue
             snapshot[track.id] = (
                 track.meta_title, track.meta_artist,
-                track.meta_album, track.meta_track,
+                track.meta_album, track.meta_track, track.cover_path,
+                track.smart_title, track.smart_artist,
+                track.smart_confidence, track.smart_reason,
             )
         return snapshot
 
     def _restore_metadata(self, snapshot: dict) -> None:
-        for track_id, (title, artist, album, number) in snapshot.items():
+        for track_id, values in snapshot.items():
+            (title, artist, album, number, cover,
+             smart_title, smart_artist, smart_confidence,
+             smart_reason) = values
             track = self.db.get_track(track_id)
             if track is None:
                 continue
@@ -769,6 +786,13 @@ class MainWindow(QMainWindow):
                 meta_artist=artist,
                 meta_album=album,
                 meta_track=number,
+                cover_path=cover,
+                # Undoing a rename also brings back the suggestion it used
+                # up, so the row can be reviewed again.
+                smart_title=smart_title,
+                smart_artist=smart_artist,
+                smart_confidence=smart_confidence,
+                smart_reason=smart_reason,
                 needs_update=1 if is_converted(track.status) else 0,
             )
 
@@ -784,14 +808,33 @@ class MainWindow(QMainWindow):
             int(track_id): self.db.track_links(int(track_id))
             for track_id in track_ids
         }
+        # A one-song link disappears when its song is moved out. Remember
+        # those rows so undo can bring the link back too.
+        doomed = []
+        for track_id in links:
+            for source_id, _position in links[track_id]:
+                source = self.db.get_source(source_id)
+                if source is None:
+                    continue
+                if source.kind == "item" and \
+                        self.db.count_source_tracks(source_id) <= 1:
+                    doomed.append(source)
         if links:
             self._push_undo(
-                label, lambda: self._restore_links(links)
+                label, lambda: self._restore_links(links, doomed)
             )
 
-    def _restore_links(self, links: dict) -> None:
+    def _restore_links(self, links: dict, doomed=()) -> None:
+        for source in doomed:
+            self.db.restore_source(source)
         for track_id, track_links in links.items():
             self.db.restore_track_links(track_id, track_links)
+
+    def _restore_tracks(self, snapshot) -> None:
+        """Put removed songs back, with the links they had."""
+        for track, links in snapshot:
+            self.db.restore_track(track)
+            self.db.restore_track_links(track.id, links)
 
     def _rename_folder(self, folder_id: int) -> None:
         folder = self.db.get_source(folder_id)
@@ -940,14 +983,21 @@ class MainWindow(QMainWindow):
         )
         if not ok or not name.strip():
             return
+        existing = self.db.get_folder_by_name(name.strip())
         folder_id = self.db.add_folder(name.strip())
         self._refresh_sources(folder_id)
-        self._push_undo(
-            "Creating a folder", lambda: self.db.delete_folder(folder_id)
-        )
-        self.status.set_idle(
-            f"Created “{name.strip()}”. Drag songs onto it to file them."
-        )
+        if existing is None:
+            # Only a folder this action created can be undone away.
+            self._push_undo(
+                "Creating a folder", lambda: self.db.delete_folder(folder_id)
+            )
+            self.status.set_idle(
+                f"Created “{name.strip()}”. Drag songs onto it to file them."
+            )
+        else:
+            self.status.set_idle(
+                f"“{existing.title}” already exists — opened it instead."
+            )
 
     def _move_to_folder(self, source_id: int) -> None:
         """Put a link in a library folder, creating the folder if needed."""
@@ -1381,6 +1431,7 @@ class MainWindow(QMainWindow):
         stages: list[str],
         *,
         force: bool = False,
+        only_synced: bool = False,
     ) -> None:
         if self._is_busy():
             self.status.set_idle("A job is already running.")
@@ -1389,7 +1440,9 @@ class MainWindow(QMainWindow):
             BatchItem(source=row.source, track=row.track, position=row.position)
             for row in rows
         ]
-        if not self.ctx.pipeline.start(items, stages, force=force):
+        if not self.ctx.pipeline.start(
+            items, stages, force=force, only_synced=only_synced
+        ):
             self.status.set_idle("Could not start the job.")
             return
 
@@ -1593,7 +1646,9 @@ class MainWindow(QMainWindow):
             self.ctx.library.set_metadata(
                 track_id,
                 title=title,
-                artist=artist,
+                # The suggestion may name only the title. An empty artist
+                # column must not erase an artist that is already set.
+                artist=artist or (track.meta_artist or ""),
                 album=track.display_album,
                 track_number=track.display_track,
             )
@@ -1669,24 +1724,31 @@ class MainWindow(QMainWindow):
             "Translating song names",
             [track_id for track_id, _title, _artist in dialog.accepted_values],
         )
-        for track_id, title, artist in dialog.accepted_values:
+        count = self._apply_translations(dialog.accepted_values)
+        self.status.set_idle(
+            f"Translated {count} song{'' if count == 1 else 's'}. "
+            "Press Re-convert to write the new names into the files."
+        )
+
+    def _apply_translations(self, values) -> int:
+        """Write reviewed translations into the library."""
+        applied = 0
+        for track_id, title, artist in values:
             track = self.db.get_track(track_id)
             if track is None:
                 continue
             self.ctx.library.set_metadata(
                 track_id,
                 title=title,
-                artist=artist,
+                # An empty artist cell means "leave the artist alone", not
+                # "delete it" — that happens when artist translation is off.
+                artist=artist or (track.meta_artist or ""),
                 album=track.display_album,
                 track_number=track.display_track,
             )
-
+            applied += 1
         self._reload_current_source()
-        count = len(dialog.accepted_values)
-        self.status.set_idle(
-            f"Translated {count} song{'' if count == 1 else 's'}. "
-            "Press Re-convert to write the new names into the files."
-        )
+        return applied
 
     def _translate_one(self, track) -> Optional[tuple[str, str]]:
         """Translate a single song for the Edit details dialog.
@@ -1863,8 +1925,22 @@ class MainWindow(QMainWindow):
             return
 
         delete_files = reply == QMessageBox.Yes
+        snapshot = []
+        if not delete_files:
+            # With the files kept, the songs can be put back.
+            for track_id in dialog.remove_ids:
+                track = self.db.get_track(track_id)
+                if track is not None:
+                    snapshot.append((track, self.db.track_links(track_id)))
         for track_id in dialog.remove_ids:
-            self.ctx.library.delete_track(track_id, delete_files=delete_files)
+            self.ctx.library.delete_track(
+                track_id, delete_files=delete_files, forget=True
+            )
+        if snapshot:
+            self._push_undo(
+                "Removing duplicate songs",
+                lambda: self._restore_tracks(snapshot),
+            )
 
         self._refresh_sources(self._current_source_id)
         self.status.set_idle(
@@ -2005,7 +2081,7 @@ class MainWindow(QMainWindow):
         if any(row.track.synced_at for row in rows):
             stages.append("sync")
 
-        self._start_pipeline(rows, stages, force=True)
+        self._start_pipeline(rows, stages, force=True, only_synced=True)
         self.status.set_busy(
             f"Updating {len(rows)} file{'' if len(rows) == 1 else 's'}…"
         )

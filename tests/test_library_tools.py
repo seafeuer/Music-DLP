@@ -282,6 +282,31 @@ def test_undo_removes_a_new_folder(window):
     assert db.get_source(folder_id) is None
 
 
+def test_undo_brings_back_a_one_song_link(window):
+    """Moving a single-song link's song out deletes the link; undo restores it."""
+    main, db, _data = window
+    single = db.add_source(
+        url="https://x.com/user/status/1", kind="item", platform="twitter",
+        external_id="1", title="A single post", uploader="Poster",
+        item_count=1, thumbnail_url=None,
+    )
+    track_id = db.upsert_track(
+        platform="twitter", media_id="1", url="https://x.com/user/status/1",
+        title="Single song", uploader="Poster", duration=60,
+    )
+    db.set_source_tracks(single, [(track_id, 1)])
+    folder_id = db.add_folder("Favourites")
+
+    main._tracks_dropped(folder_id, [track_id])
+    assert db.get_source(single) is None
+
+    main._undo_last()
+
+    restored = db.get_source(single)
+    assert restored is not None
+    assert [row.track.id for row in db.get_tracks_for_source(single)] == [track_id]
+
+
 def test_undo_with_nothing_to_undo_says_so(window):
     main, _db, _data = window
     main._undo_last()
@@ -424,3 +449,146 @@ def test_update_files_reports_when_nothing_changed(window):
     main._update_files()
 
     assert "Nothing to update" in main.status.status_label.text()
+
+
+# ------------------------------------------------------- translation wiring
+
+
+def test_applying_a_translation_without_an_artist_keeps_the_artist(window):
+    """Regression: an empty artist cell used to wipe meta_artist."""
+    main, db, data = window
+    track_id = data["tracks"][0]
+    db.update_track(track_id, meta_artist="The Band")
+
+    main._apply_translations([(track_id, "夜に駆ける", "")])
+
+    track = db.get_track(track_id)
+    assert track.display_title == "夜に駆ける"
+    assert track.meta_artist == "The Band"
+
+
+def test_applying_a_translation_writes_the_new_artist(window):
+    main, db, data = window
+    track_id = data["tracks"][0]
+
+    main._apply_translations([(track_id, "夜に駆ける", "ヨアソビ")])
+
+    assert db.get_track(track_id).meta_artist == "ヨアソビ"
+
+
+def test_translation_dialog_opens_with_the_saved_choices(qapp, window):
+    from musicdlp.ui.dialogs.translate import TranslationDialog
+
+    main, db, data = window
+    rows = db.get_tracks_for_source(data["playlist"])
+    dialog = TranslationDialog(
+        rows, language="Hebrew", style="transliterated",
+        translate_artist=False,
+    )
+    assert dialog.language_combo.currentText() == "Hebrew"
+    assert dialog.style_combo.currentData() == "transliterated"
+    assert dialog.artist_check.isChecked() is False
+
+
+# --------------------------------------------------------------- settings
+
+
+def test_anthropic_is_selectable_in_settings(qapp, window):
+    from musicdlp.ui.dialogs.settings import SettingsDialog
+
+    main, _db, _data = window
+    dialog = SettingsDialog(
+        Settings(ai_provider="anthropic", ai_base_url="https://example.test",
+                 ai_model="m"),
+        main.ctx.ffmpeg, main.ctx.ytdlp, main.ctx.spotify,
+    )
+    items = [
+        dialog.ai_provider_combo.itemData(i)
+        for i in range(dialog.ai_provider_combo.count())
+    ]
+    assert ("anthropic", "") in items
+    assert dialog._ai_provider_index() == 3
+
+
+# ------------------------------------------------------------------- search
+
+
+def test_a_reload_keeps_the_library_search_applied(window, qtbot):
+    main, _db, _data = window
+    main.search_edit.setText("song")
+    qtbot.wait(30)
+
+    main._load_source(0)  # what a refresh or an undo does
+
+    assert main.track_table.search.text() == "song"
+
+
+# --------------------------------------------------------------- duplicates
+
+
+def test_removing_a_duplicate_forgets_the_row(library):
+    from musicdlp.services.library import LibraryService
+
+    db, data = library
+    service = LibraryService(db, Settings(), ytdlp=None)
+    service.delete_track(data["duplicate"], forget=True)
+
+    assert db.get_track(data["duplicate"]) is None
+
+
+def test_a_removed_duplicate_can_be_put_back(window):
+    main, db, data = window
+    track_id = data["tracks"][0]
+    track = db.get_track(track_id)
+    links = db.track_links(track_id)
+
+    main.ctx.library.delete_track(track_id, forget=True)
+    assert db.get_track(track_id) is None
+
+    main._restore_tracks([(track, links)])
+
+    assert db.get_track(track_id) is not None
+    assert [row.track.id for row in db.get_tracks_for_source(
+        data["playlist"]
+    )] == data["tracks"]
+
+
+def test_undoing_a_rename_brings_back_the_suggestion(window):
+    main, db, data = window
+    track_id = data["tracks"][0]
+    db.update_track(
+        track_id, smart_title="Suggested", smart_artist="Artist",
+        smart_confidence=0.5, smart_reason="rule",
+    )
+    main._push_metadata_undo("Renaming songs", [track_id])
+
+    main.ctx.library.set_metadata(track_id, title="Applied")
+    main.ctx.library.clear_suggestion(track_id)
+    assert db.get_track(track_id).smart_title is None
+
+    main._undo_last()
+
+    assert db.get_track(track_id).smart_title == "Suggested"
+
+
+def test_creating_an_existing_folder_cannot_be_undone(window, monkeypatch):
+    main, db, _data = window
+    existing = db.add_folder("Shiurim")
+    monkeypatch.setattr(
+        QInputDialog, "getText",
+        staticmethod(lambda *args, **kwargs: ("Shiurim", True)),
+    )
+
+    main._new_folder()
+
+    assert main.undo_action.isEnabled() is False
+    assert db.get_source(existing) is not None
+
+
+def test_a_stale_link_undo_does_not_unlink_the_song(window):
+    main, db, data = window
+    track_id = data["tracks"][0]
+
+    main._restore_links({track_id: [(9999, 1)]})  # source no longer exists
+
+    assert db.track_links(track_id) == [(data["playlist"], 1)]

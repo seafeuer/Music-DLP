@@ -51,7 +51,7 @@ class TranslationDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Translate titles")
-        self.resize(1080, 640)
+        self.resize(1080, 620)
 
         self.rows = list(rows)
         self.ai_settings = ai_settings
@@ -98,6 +98,7 @@ class TranslationDialog(QDialog):
                        COL_TITLE, COL_ARTIST):
             header.setSectionResizeMode(column, QHeaderView.Stretch)
         header.setSectionResizeMode(COL_NOTE, QHeaderView.ResizeToContents)
+        header.setMinimumSectionSize(60)
         self.table.setColumnWidth(COL_USE, 44)
         # Ticking a row by hand must enable Apply as well.
         self.table.itemChanged.connect(lambda _item: self._update_apply_state())
@@ -141,6 +142,7 @@ class TranslationDialog(QDialog):
 
         self._update_go_button()
         self._update_apply_state()
+        self.set_options(language, style, translate_artist)
 
     # --------------------------------------------------------------- options
 
@@ -167,7 +169,8 @@ class TranslationDialog(QDialog):
             self.style_combo.addItem(STYLE_LABELS[value], value)
         self.style_combo.setToolTip(
             "Japanese, Hebrew, and similar languages have two useful forms: "
-            "the native script, and the same sounds in Latin letters."
+            "the native script (夜に駆ける), the same sounds in Latin letters "
+            "(Yoru ni Kakeru), or both together."
         )
         row.addWidget(self.style_combo, 1)
 
@@ -179,6 +182,7 @@ class TranslationDialog(QDialog):
         row.addWidget(self.artist_check)
 
         self.style_combo.currentIndexChanged.connect(self._restyle_rows)
+        self.artist_check.toggled.connect(self._restyle_rows)
         return box
 
     def set_options(self, language: str, style: str, translate_artist: bool) -> None:
@@ -216,11 +220,11 @@ class TranslationDialog(QDialog):
         self.table.setItem(index, COL_TITLE, QTableWidgetItem(""))
         self.table.setItem(index, COL_ARTIST, QTableWidgetItem(""))
 
-        note = QTableWidgetItem("Not translated yet")
+        note = QTableWidgetItem("Not yet")
         note.setFlags(Qt.ItemIsEnabled)
         self.table.setItem(index, COL_NOTE, note)
 
-    def _restyle_rows(self) -> None:
+    def _restyle_rows(self, *_args) -> None:
         """Re-render rows whose text the user has not edited by hand."""
         style = self._style()
         for track_id, translation in self._translations.items():
@@ -387,17 +391,23 @@ class TranslationDialog(QDialog):
         language = self._language()
         if translation.already_target:
             self.table.item(index, COL_USE).setCheckState(Qt.Unchecked)
-            note = f"Already in {language} — left as it is"
+            note = "Already there"
+            tooltip = f"This song is already in {language}, so it is left as it is."
         elif translation.confidence >= CONFIDENT:
             self.table.item(index, COL_USE).setCheckState(Qt.Checked)
-            percent = int(round(translation.confidence * 100))
-            note = f"Translated ({percent}% sure)"
+            note = f"{int(round(translation.confidence * 100))}% sure"
+            tooltip = "Translated. Untick it if the name is wrong."
         else:
             self.table.item(index, COL_USE).setCheckState(Qt.Unchecked)
-            percent = int(round(translation.confidence * 100))
-            note = f"Unsure ({percent}% sure) — check it before ticking"
+            note = f"Unsure {int(round(translation.confidence * 100))}%"
+            tooltip = (
+                "The model was not sure. Check the name, then tick the box "
+                "if it is right."
+            )
 
-        self.table.item(index, COL_NOTE).setText(note)
+        item = self.table.item(index, COL_NOTE)
+        item.setText(note)
+        item.setToolTip(tooltip)
         self._update_apply_state()
         return True
 
@@ -436,6 +446,14 @@ class TranslationDialog(QDialog):
         self.accept()
 
     # --------------------------------------------------------------- close
+
+    def accept(self) -> None:
+        # Apply closes the dialog while a run may still be going; stop it so
+        # no further requests are sent on behalf of a closed window.
+        self._stop.set()
+        if self._poll is not None:
+            self._poll.stop()
+        super().accept()
 
     def reject(self) -> None:
         self._stop.set()
