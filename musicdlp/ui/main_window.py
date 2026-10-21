@@ -1737,15 +1737,20 @@ class MainWindow(QMainWindow):
             track = self.db.get_track(track_id)
             if track is None:
                 continue
-            self.ctx.library.set_metadata(
-                track_id,
-                title=title,
-                # An empty artist cell means "leave the artist alone", not
-                # "delete it" — that happens when artist translation is off.
-                artist=artist or (track.meta_artist or ""),
-                album=track.display_album,
-                track_number=track.display_track,
-            )
+            try:
+                self.ctx.library.set_metadata(
+                    track_id,
+                    title=title,
+                    # An empty artist cell means "leave the artist alone",
+                    # not "delete it" — that happens when artist translation
+                    # is off.
+                    artist=artist or (track.meta_artist or ""),
+                    album=track.display_album,
+                    track_number=track.display_track,
+                )
+            except Exception:  # noqa: BLE001 - one bad row must not stop the rest
+                self.logger.exception("Could not save the translation for %s", track_id)
+                continue
             applied += 1
         self._reload_current_source()
         return applied

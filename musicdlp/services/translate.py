@@ -56,6 +56,9 @@ STYLE_LABELS = {
 # round trips. Bigger batches risk the model losing track of ids.
 BATCH_SIZE = 10
 
+# Upload titles can be enormous; a prompt does not need all of it.
+MAX_TITLE_CHARS = 300
+
 SYSTEM_PROMPT = """You translate song titles and artist names for a music library.
 
 Reply with JSON only, in exactly this shape:
@@ -203,7 +206,10 @@ def _build_prompt(
         lines.append("")
     lines.append("Songs:")
     for track_id, title, artist in items:
-        lines.append(f'- id "{track_id}": title "{title}", artist "{artist}"')
+        lines.append(
+            f'- id "{track_id}": title "{title[:MAX_TITLE_CHARS]}", '
+            f'artist "{artist[:MAX_TITLE_CHARS]}"'
+        )
     lines.append("")
     lines.append("Return the JSON object now.")
     return "\n".join(lines)
