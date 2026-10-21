@@ -501,8 +501,10 @@ class SourceListWidget(QWidget):
         enabled = not busy
         self.add_button.setEnabled(enabled)
         self.folder_button.setEnabled(enabled)
-        self.refresh_button.setEnabled(enabled)
         self.remove_button.setEnabled(enabled)
+        self.refresh_button.setEnabled(enabled)
+        # Re-apply the per-row rules: a folder has nothing to refresh.
+        self._update_buttons()
 
     def set_sources(
         self,

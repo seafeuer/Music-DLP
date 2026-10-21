@@ -341,12 +341,18 @@ class Database:
             self.add_folder(name)
 
     def move_tracks_to_folder(
-        self, track_ids: Iterable[int], folder_id: int
+        self,
+        track_ids: Iterable[int],
+        folder_id: int,
+        *,
+        keep_in_playlists: bool = False,
     ) -> int:
-        """Move songs into a folder, removing them from their old lists.
+        """Move songs into a folder.
 
-        Single-video entries that become empty are deleted, so an
-        individually added song stops having its own library entry.
+        With ``keep_in_playlists`` the song is added to the folder but left
+        in the link it came from, so a folder can act as a view rather than
+        a move. Single-video entries that become empty are deleted either
+        way, so an individually added song stops having its own entry.
         """
         ids = [int(value) for value in track_ids]
         if not ids:
@@ -363,11 +369,12 @@ class Database:
                 ).fetchall()
                 affected.update(int(row["source_id"]) for row in rows)
 
-                conn.execute(
-                    "DELETE FROM source_tracks "
-                    "WHERE track_id = ? AND source_id <> ?",
-                    (track_id, folder_id),
-                )
+                if not keep_in_playlists:
+                    conn.execute(
+                        "DELETE FROM source_tracks "
+                        "WHERE track_id = ? AND source_id <> ?",
+                        (track_id, folder_id),
+                    )
                 present = conn.execute(
                     "SELECT 1 FROM source_tracks "
                     "WHERE source_id = ? AND track_id = ?",
@@ -415,9 +422,21 @@ class Database:
             )
 
     def delete_folder(self, folder_id: int) -> None:
-        """Remove a folder. Its songs stay in the library."""
+        """Remove a folder. Its songs stay in the library.
+
+        Links that pointed at the folder have their folder name cleared, so
+        the folder is not immediately recreated from them.
+        """
+        folder = self.get_source(folder_id)
+        if folder is None:
+            return
         conn = self._conn()
         with conn:
+            conn.execute(
+                "UPDATE sources SET folder = '' "
+                "WHERE folder = ? COLLATE NOCASE",
+                (folder.title,),
+            )
             conn.execute("DELETE FROM sources WHERE id = ?", (folder_id,))
 
     def get_folders(self) -> list[str]:
@@ -622,6 +641,29 @@ class Database:
             {self._HOME_SOURCE_JOIN}
             ORDER BY t.id
             """
+        ).fetchall()
+        return self._rows_with_sources(rows)
+
+    def get_tracks_for_folder(self, folder_id: int) -> list[TrackRow]:
+        """Songs filed in a folder, including those in links filed there."""
+        folder = self.get_source(folder_id)
+        if folder is None:
+            return []
+
+        rows = self._conn().execute(
+            """
+            SELECT t.*, st.position AS position, st.source_id AS source_id
+            FROM source_tracks st
+            JOIN tracks t ON t.id = st.track_id
+            JOIN sources s ON s.id = st.source_id
+            WHERE st.source_id = ?
+               OR (s.kind <> 'folder'
+                   AND TRIM(s.folder) <> ''
+                   AND s.folder = ? COLLATE NOCASE)
+            GROUP BY t.id
+            ORDER BY t.id
+            """,
+            (folder_id, folder.title),
         ).fetchall()
         return self._rows_with_sources(rows)
 

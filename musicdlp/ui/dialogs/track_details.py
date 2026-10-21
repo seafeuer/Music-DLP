@@ -58,6 +58,7 @@ class TrackDetailsDialog(QDialog):
         self.artwork = QLabel()
         self.artwork.setFixedSize(168, 168)
         self.artwork.setAlignment(Qt.AlignCenter)
+        self.artwork.setWordWrap(True)
         self.artwork.setStyleSheet(
             "border: 1px solid palette(mid); border-radius: 8px;"
         )
@@ -73,6 +74,13 @@ class TrackDetailsDialog(QDialog):
         )
         self.find_art_button.clicked.connect(self._find_art)
         art_box.addWidget(self.find_art_button)
+
+        self.art_status_label = QLabel("")
+        self.art_status_label.setWordWrap(True)
+        self.art_status_label.setObjectName("mutedSmall")
+        self.art_status_label.setFixedWidth(168)
+        self.art_status_label.hide()
+        art_box.addWidget(self.art_status_label)
 
         self.video_button = QPushButton("Use video thumbnail")
         self.video_button.clicked.connect(self._use_video_thumbnail)
@@ -196,7 +204,8 @@ class TrackDetailsDialog(QDialog):
         title = self.title_edit.text().strip()
         artist = self.artist_edit.text().strip()
         if not title:
-            self.find_art_button.setText("Add a title first")
+            self._art_status = "Add a title first"
+            self.find_art_button.setText(self._art_status)
             return
 
         self.find_art_button.setEnabled(False)
@@ -211,19 +220,30 @@ class TrackDetailsDialog(QDialog):
                 title,
                 destination,
                 album=self.album_edit.text().strip(),
+                refresh=True,
             )
         except Exception:
             found = None
 
         self.find_art_button.setEnabled(True)
         if found is None:
-            self.find_art_button.setText("No cover found")
+            self._art_status = "No cover found — try another title"
+            self.find_art_button.setText("Find cover art")
+            self._show_art_status()
             return
 
+        self._art_status = ""
         self.find_art_button.setText("Find cover art")
         self.cover_path = str(found)
         self.cover_changed = True
         self._refresh_artwork()
+
+    def _show_art_status(self) -> None:
+        if self._art_status:
+            self.art_status_label.setText(self._art_status)
+            self.art_status_label.show()
+        else:
+            self.art_status_label.hide()
 
     def _use_video_thumbnail(self) -> None:
         self.cover_path = None

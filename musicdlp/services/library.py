@@ -256,6 +256,20 @@ class LibraryService:
             smart_reason=(reason or "").strip() or None,
         )
 
+    def clear_suggestion(self, track_id: int) -> None:
+        """Forget a suggestion once its name has been applied.
+
+        Without this the row keeps offering a suggestion that is already in
+        use, because the stored name still differs from the old upload title.
+        """
+        self.db.update_track(
+            track_id,
+            smart_title=None,
+            smart_artist=None,
+            smart_confidence=None,
+            smart_reason=None,
+        )
+
     def set_cover(self, track_id: int, image_path: Optional[Path]) -> Optional[Path]:
         """Use a user-chosen image as the cover art for a track.
 

@@ -493,6 +493,17 @@ class MainWindow(QMainWindow):
         sources = self.db.get_sources()
         counts = {source.id: self.db.status_counts(source.id) for source in sources}
 
+        # A folder's count covers the links filed inside it.
+        for folder in (s for s in sources if s.is_folder):
+            total: dict[str, int] = dict(counts.get(folder.id, {}))
+            for link in sources:
+                if link.is_folder or link.id == ALL_SONGS_ID:
+                    continue
+                if (link.folder or "").lower() == folder.title.lower():
+                    for status, value in counts.get(link.id, {}).items():
+                        total[status] = total.get(status, 0) + value
+            counts[folder.id] = total
+
         target = selected_id
         if target is None:
             target = self._current_source_id
@@ -553,7 +564,10 @@ class MainWindow(QMainWindow):
             source = self.db.get_source(source_id)
             if source is None:
                 return
-            rows = self.db.get_tracks_for_source(source_id)
+            if source.is_folder:
+                rows = self.db.get_tracks_for_folder(source_id)
+            else:
+                rows = self.db.get_tracks_for_source(source_id)
 
         current = self.track_table.current_row()
         keep_selected = current.track.id if current is not None else None
@@ -610,12 +624,67 @@ class MainWindow(QMainWindow):
         folder = self.db.get_source(folder_id)
         if folder is None:
             return
-        moved = self.db.move_tracks_to_folder(track_ids, folder_id)
+
+        keep = False
+        from_playlists = self._tracks_in_multi_song_sources(track_ids)
+        if from_playlists:
+            choice = self._ask_move_or_keep(from_playlists[0])
+            if not choice:
+                return
+            keep = choice == "keep"
+
+        moved = self.db.move_tracks_to_folder(
+            track_ids, folder_id, keep_in_playlists=keep
+        )
         self._refresh_sources(folder_id)
+        where = "added to" if keep else "moved into"
         self.status.set_idle(
-            f"Moved {moved} song{'' if moved == 1 else 's'} into "
+            f"{moved} song{'' if moved == 1 else 's'} {where} "
             f"“{folder.title}”."
         )
+
+    def _ask_move_or_keep(self, playlist_title: str) -> str:
+        """Ask whether songs leaving a playlist should be removed from it.
+
+        Returns ``"move"``, ``"keep"`` or ``""`` when the user cancels. The
+        buttons say what they do, rather than Yes and No.
+        """
+        box = QMessageBox(self)
+        box.setWindowTitle("Move these songs?")
+        box.setIcon(QMessageBox.Question)
+        box.setText(
+            f"Some of these songs are also in “{playlist_title}”."
+        )
+        box.setInformativeText(
+            "Move them into the folder and take them out of that list, or "
+            "keep them in both places?"
+        )
+        move_button = box.addButton("Move them", QMessageBox.AcceptRole)
+        keep_button = box.addButton("Keep in both", QMessageBox.ActionRole)
+        box.addButton(QMessageBox.Cancel)
+        box.setDefaultButton(keep_button)
+        box.exec()
+        if box.clickedButton() is move_button:
+            return "move"
+        if box.clickedButton() is keep_button:
+            return "keep"
+        return ""
+
+    def _tracks_in_multi_song_sources(self, track_ids: list) -> list[str]:
+        """Names of multi-song lists these songs belong to."""
+        names: list[str] = []
+        for track_id in track_ids:
+            rows = self.db._conn().execute(
+                "SELECT s.title, s.kind, "
+                "(SELECT COUNT(*) FROM source_tracks x WHERE x.source_id = s.id) AS n "
+                "FROM source_tracks st JOIN sources s ON s.id = st.source_id "
+                "WHERE st.track_id = ? AND s.kind <> 'folder'",
+                (int(track_id),),
+            ).fetchall()
+            for row in rows:
+                if int(row["n"]) > 1 and row["title"] not in names:
+                    names.append(row["title"])
+        return names
 
     def _source_dropped(self, source_id: int, folder_id: int) -> None:
         """A whole link dragged onto a folder is filed there."""
@@ -1253,7 +1322,7 @@ class MainWindow(QMainWindow):
             rows,
             self,
             ai_settings=self._ai_settings(),
-            on_ai_result=self.ctx.library.set_suggestion,
+            on_setup_ai=self._open_ai_settings,
         )
         if dialog.exec() != QDialog.Accepted or not dialog.accepted_values:
             return
@@ -1269,6 +1338,7 @@ class MainWindow(QMainWindow):
                 album=track.display_album,
                 track_number=track.display_track,
             )
+            self.ctx.library.clear_suggestion(track_id)
 
         self._reload_current_source()
         count = len(dialog.accepted_values)
@@ -1276,6 +1346,21 @@ class MainWindow(QMainWindow):
             f"Updated {count} song name{'' if count == 1 else 's'}. "
             "Press Re-convert to write them into the files."
         )
+
+    def _open_ai_settings(self) -> None:
+        """Open Settings on the AI tab, for an unconfigured setup."""
+        if self._is_busy():
+            return
+        dialog = SettingsDialog(
+            self.settings, self.ctx.ffmpeg, self.ctx.ytdlp,
+            self.ctx.spotify, self, start_tab="AI",
+        )
+        if dialog.exec() == QDialog.Accepted and dialog.result_settings:
+            self.ctx.rebuild(dialog.result_settings)
+            self.settings = self.ctx.settings
+            apply_theme(QApplication.instance(), self.settings.theme)
+            self._sync_mode_combo()
+            self._update_theme_button()
 
     def _ai_settings(self) -> AISettings:
         return AISettings(
@@ -1442,6 +1527,26 @@ class MainWindow(QMainWindow):
         source = self.db.get_source(source_id)
         if source is None:
             return
+
+        if source.is_folder:
+            reply = QMessageBox.question(
+                self,
+                "Remove folder",
+                f"Remove the folder “{source.title}”?\n\n"
+                "The songs in it stay in your library; they are just no "
+                "longer filed under this folder.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
+            self.db.delete_folder(source_id)
+            if self._current_source_id == source_id:
+                self._current_source_id = None
+            self._refresh_sources()
+            self.status.set_idle(f"Removed the folder “{source.title}”.")
+            return
+
         reply = QMessageBox.question(
             self,
             "Remove source",

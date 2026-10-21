@@ -56,6 +56,13 @@ class AIImportDialog(QDialog):
         if clipboard.strip().startswith(("[", "{")):
             self.text.setPlainText(clipboard)
 
+        # Once the text changes, an old complaint no longer describes it.
+        self.text.textChanged.connect(self._clear_error)
+
+    def _clear_error(self) -> None:
+        if self.error.text():
+            self.error.clear()
+
     def _open_file(self) -> None:
         filename, _ = QFileDialog.getOpenFileName(
             self, "Open AI reply", "", "Text files (*.txt *.json);;All files (*)"

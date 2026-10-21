@@ -97,10 +97,15 @@ def test_dropping_a_single_song_removes_its_own_entry(window):
     assert db.get_track(data["single_track"]) is not None
 
 
-def test_dropping_a_playlist_song_keeps_the_playlist(window):
+def test_dropping_a_playlist_song_keeps_the_playlist(window, monkeypatch):
     main, db, data = window
     folder_id = db.add_folder("Shiurim")
 
+    # The app asks whether to move the song out of its playlist or keep it
+    # in both.
+    monkeypatch.setattr(
+        main, "_ask_move_or_keep", lambda playlist_title: "move"
+    )
     main._tracks_dropped(folder_id, [data["playlist_tracks"][0]])
 
     assert db.get_source(data["playlist"]) is not None
@@ -110,6 +115,19 @@ def test_dropping_a_playlist_song_keeps_the_playlist(window):
     assert data["playlist_tracks"][0] not in remaining
     assert data["playlist_tracks"][1] in remaining
     assert db.get_source(data["playlist"]).item_count == 1
+
+
+def test_dropping_a_playlist_song_can_keep_it_in_both(window, monkeypatch):
+    main, db, data = window
+    folder_id = db.add_folder("Shiurim")
+
+    monkeypatch.setattr(
+        main, "_ask_move_or_keep", lambda playlist_title: "keep"
+    )
+    main._tracks_dropped(folder_id, [data["playlist_tracks"][0]])
+
+    assert len(db.get_tracks_for_source(folder_id)) == 1
+    assert len(db.get_tracks_for_source(data["playlist"])) == 2
 
 
 def test_dragging_several_songs_at_once(window):

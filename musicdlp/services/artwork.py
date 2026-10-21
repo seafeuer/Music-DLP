@@ -152,10 +152,15 @@ def find_cover(
     destination: Path,
     *,
     album: str = "",
+    refresh: bool = False,
 ) -> Optional[Path]:
-    """Find and save square cover art. Returns None when nothing is found."""
+    """Find and save square cover art. Returns None when nothing is found.
+
+    ``refresh`` ignores an already-cached image, for when the song's details
+    have changed since the last lookup.
+    """
     destination = Path(destination)
-    if destination.exists() and destination.stat().st_size > 0:
+    if not refresh and destination.exists() and destination.stat().st_size > 0:
         return destination
 
     artist = _clean(artist)

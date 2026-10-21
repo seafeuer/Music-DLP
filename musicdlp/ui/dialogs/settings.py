@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import copy
 import shutil
+import threading
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
@@ -18,7 +19,7 @@ from PySide6.QtWidgets import (
 from musicdlp.core.config import Settings
 from musicdlp.core.paths import config_path, db_path, log_dir, start_directory
 from musicdlp.services.ai import (
-    AIError, AISettings, list_models, test_connection,
+    AIError, AISettings, friendly_error, list_models, test_connection,
 )
 from musicdlp.services.filenames import render_template
 from musicdlp.services.ffmpeg import FFmpegService
@@ -34,15 +35,17 @@ class SettingsDialog(QDialog):
         ytdlp: YtDlpService,
         spotify: SpotifyService,
         parent=None,
+        start_tab: str = "",
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.resize(720, 620)
+        self.resize(760, 660)
         self.result_settings: Optional[Settings] = None
         self._ffmpeg = ffmpeg
         self._ytdlp = ytdlp
         self._spotify = spotify
         self.settings = copy.deepcopy(settings)
+        self._start_tab = start_tab
 
         layout = QVBoxLayout(self)
         self.tabs = QTabWidget()
@@ -384,11 +387,14 @@ class SettingsDialog(QDialog):
         show_key = QToolButton()
         show_key.setText("Show")
         show_key.setCheckable(True)
-        show_key.toggled.connect(
-            lambda shown: self.ai_key_edit.setEchoMode(
+
+        def toggle_key(shown: bool) -> None:
+            self.ai_key_edit.setEchoMode(
                 QLineEdit.Normal if shown else QLineEdit.Password
             )
-        )
+            show_key.setText("Hide" if shown else "Show")
+
+        show_key.toggled.connect(toggle_key)
         key_row = QHBoxLayout()
         key_row.addWidget(self.ai_key_edit, 1)
         key_row.addWidget(show_key)
@@ -409,11 +415,23 @@ class SettingsDialog(QDialog):
         form.addRow("Cover art", self.ai_artwork_check)
         self._hint(
             form,
-            "Uses free catalogue lookups (iTunes and MusicBrainz). No account "
-            "needed, and the video picture is used when nothing is found.",
+            "Runs automatically when a song is converted. Uses free catalogue "
+            "lookups (iTunes and MusicBrainz), not AI, and needs no account. "
+            "The video picture is used when nothing is found.",
         )
 
         self.tabs.addTab(tab, "AI")
+
+        if self._start_tab:
+            index = self._tab_index(self._start_tab)
+            if index >= 0:
+                self.tabs.setCurrentIndex(index)
+
+    def _tab_index(self, name: str) -> int:
+        for index in range(self.tabs.count()):
+            if self.tabs.tabText(index).lower() == name.lower():
+                return index
+        return -1
 
     def _ai_provider_index(self) -> int:
         provider = self.settings.ai_provider
@@ -426,8 +444,21 @@ class SettingsDialog(QDialog):
 
     def _on_ai_provider_changed(self, index: int) -> None:
         provider, url = self.ai_provider_combo.itemData(index)
-        if url:
-            self.ai_url_edit.setText(url)
+        # Always set the address for the chosen provider: leaving the old one
+        # in place made "another compatible API" silently point at Ollama.
+        self.ai_url_edit.setText(url or "")
+        if provider == "ollama" and url == "http://localhost:11434":
+            self.ai_key_edit.setPlaceholderText(
+                "Not needed for Ollama on this computer"
+            )
+        elif provider == "ollama":
+            self.ai_key_edit.setPlaceholderText(
+                "Your ollama.com API key"
+            )
+        else:
+            self.ai_key_edit.setPlaceholderText(
+                "The API key for that server"
+            )
         self.ai_model_combo.clear()
         self.ai_status.setText("")
 
@@ -440,38 +471,102 @@ class SettingsDialog(QDialog):
             api_key=self.ai_key_edit.text().strip(),
         )
 
+    def _run_ai_task(
+        self,
+        work: Callable[[], object],
+        on_done: Callable[[object, Optional[BaseException]], None],
+        busy_text: str,
+    ) -> None:
+        """Run a network call off the UI thread and report back on it.
+
+        Talking to a model server can take many seconds, and a frozen dialog
+        looks broken. The result is handed back through a short timer rather
+        than from the worker, so widgets are only ever touched here.
+        """
+        if getattr(self, "_ai_busy", False):
+            return
+        self._ai_busy = True
+        self._ai_result: list = []
+        self.ai_status.setStyleSheet("")
+        self.ai_status.setText(busy_text)
+        self.ai_test_button.setEnabled(False)
+        self.ai_refresh_button.setEnabled(False)
+
+        def runner() -> None:
+            try:
+                self._ai_result.append((work(), None))
+            except BaseException as exc:  # noqa: BLE001 - shown to the user
+                self._ai_result.append((None, exc))
+
+        threading.Thread(target=runner, daemon=True).start()
+
+        timer = QTimer(self)
+        timer.setInterval(120)
+
+        def check() -> None:
+            if not self._ai_result:
+                return
+            timer.stop()
+            timer.deleteLater()
+            self._ai_busy = False
+            self.ai_test_button.setEnabled(True)
+            self.ai_refresh_button.setEnabled(True)
+            value, error = self._ai_result[0]
+            on_done(value, error)
+
+        timer.timeout.connect(check)
+        timer.start()
+
     def _refresh_ai_models(self) -> None:
         settings = self._ai_settings()
         if not settings.base_url:
             self.ai_status.setText("Enter the server address first.")
             return
-        self.ai_status.setText("Asking the server for its models…")
-        try:
-            models = list_models(settings)
-        except AIError as exc:
-            self.ai_status.setText(self._ai_error_text(exc))
-            return
-        if not models:
-            self.ai_status.setText(
-                "The server has no models yet. Install one, then refresh."
-            )
-            return
-        current = self.ai_model_combo.currentText()
-        self.ai_model_combo.clear()
-        self.ai_model_combo.addItems(models)
-        if current:
-            self.ai_model_combo.setCurrentText(current)
-        self.ai_status.setText(f"Found {len(models)} model(s).")
+
+        def done(models, error) -> None:
+            if error is not None:
+                if isinstance(error, AIError):
+                    message, hint = friendly_error(error)
+                else:
+                    message, hint = "The server could not be reached.", str(error)
+                self.ai_status.setText(
+                    f"{message}\n{hint}" if hint else message
+                )
+                self.ai_status.setStyleSheet("color: #d97706;")
+                return
+            if not models:
+                self.ai_status.setText(
+                    "The server has no models yet. Install one, then refresh."
+                )
+                return
+            current = self.ai_model_combo.currentText()
+            self.ai_model_combo.clear()
+            self.ai_model_combo.addItems(list(models))
+            if current:
+                self.ai_model_combo.setCurrentText(current)
+            self.ai_status.setText(f"Found {len(models)} model(s).")
+
+        self._run_ai_task(
+            lambda: list_models(settings),
+            done,
+            "Asking the server for its models…",
+        )
 
     def _test_ai(self) -> None:
         settings = self._ai_settings()
-        self.ai_status.setText("Testing…")
-        QApplication.processEvents()
-        ok, message = test_connection(settings)
-        self.ai_status.setText(message)
-        self.ai_status.setStyleSheet(
-            "color: #16a34a;" if ok else "color: #d97706;"
-        )
+
+        def done(result, error) -> None:
+            if error is not None:
+                self.ai_status.setText(f"Could not test: {error}")
+                self.ai_status.setStyleSheet("color: #d97706;")
+                return
+            ok, message = result
+            self.ai_status.setText(message)
+            self.ai_status.setStyleSheet(
+                "color: #16a34a;" if ok else "color: #d97706;"
+            )
+
+        self._run_ai_task(lambda: test_connection(settings), done, "Testing…")
 
     @staticmethod
     def _ai_error_text(exc: AIError) -> str:
@@ -698,6 +793,25 @@ class SettingsDialog(QDialog):
         except OSError as exc:
             QMessageBox.critical(self, "Could not save settings", str(exc))
             return
+
+        # A half-filled AI setup would leave "Ask AI" greyed out with no
+        # explanation, so say so now.
+        if settings.ai_model or settings.ai_base_url:
+            if not settings.ai_configured:
+                QMessageBox.warning(
+                    self,
+                    "AI is not finished",
+                    "Songs will still be named by the built-in rules, but AI "
+                    "naming is not ready.\n\n"
+                    "Set both a server address and a model on the AI tab.",
+                )
+            elif not settings.ai_base_url.startswith(("http://", "https://")):
+                QMessageBox.warning(
+                    self,
+                    "AI address looks wrong",
+                    "The server address should start with http:// or "
+                    "https://.\n\nAI naming will not work until it does.",
+                )
 
         self.result_settings = settings
         self.accept()

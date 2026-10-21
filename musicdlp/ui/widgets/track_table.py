@@ -122,6 +122,7 @@ class TrackTableWidget(QWidget):
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search titles or channels…")
         self.search.setClearButtonEnabled(True)
+        self.search.setMinimumWidth(150)
         self.search.textChanged.connect(self.proxy.set_search)
         filter_row.addWidget(self.search, 1)
 
@@ -154,6 +155,31 @@ class TrackTableWidget(QWidget):
         select_menu.addAction("Clear selection", self.model.clear_checks)
         self.select_button.setMenu(select_menu)
         filter_row.addWidget(self.select_button)
+
+        # A single menu for the same actions when there is no room for them.
+        self.actions_button = QToolButton()
+        self.actions_button.setText("⋯")
+        self.actions_button.setMinimumWidth(34)
+        self.actions_button.setPopupMode(QToolButton.InstantPopup)
+        self.actions_button.setToolTip("More actions for the song list")
+        actions_menu = QMenu(self.actions_button)
+        self._edit_action = actions_menu.addAction(
+            "Edit details…", self._edit_current
+        )
+        self._suggestions_action = actions_menu.addAction(
+            "Suggested titles…", self.suggestions_requested
+        )
+        actions_menu.addSeparator()
+        actions_menu.addAction("Select all", self.model.check_all)
+        actions_menu.addAction(
+            "Select not downloaded", lambda: self.model.check_status(NEW)
+        )
+        actions_menu.addAction(
+            "Select needs attention", self.model.check_problems
+        )
+        actions_menu.addAction("Clear selection", self.model.clear_checks)
+        self.actions_button.setMenu(actions_menu)
+        filter_row.addWidget(self.actions_button)
 
         layout.addLayout(filter_row)
 
@@ -237,11 +263,13 @@ class TrackTableWidget(QWidget):
             self.subtitle_label.setText("Add a link to get started.")
         else:
             self.title_label.setText(source.title)
-            uploader = source.uploader or "Unknown channel"
             count = len(self.model.rows)
-            self.subtitle_label.setText(
-                f"{uploader} · {count} song{'' if count == 1 else 's'}"
-            )
+            songs = f"{count} song{'' if count == 1 else 's'}"
+            if source.is_folder:
+                self.subtitle_label.setText(f"Folder · {songs}")
+            else:
+                uploader = source.uploader or "Unknown channel"
+                self.subtitle_label.setText(f"{uploader} · {songs}")
 
         # Keep the highlighted song across a refresh, so the details panel
         # does not lose the song the user was working on.
@@ -311,6 +339,14 @@ class TrackTableWidget(QWidget):
         self.table.setColumnHidden(COL_PROGRESS, not show_progress)
         self.table.setColumnHidden(COL_ARTIST, not show_channel)
 
+        # Below this width the buttons clip, so the same actions move into
+        # one menu rather than being cut off mid-word.
+        compact = self.width() < 1080
+        for widget in (self.edit_button, self.titles_button,
+                       self.select_button):
+            widget.setVisible(not compact)
+        self.actions_button.setVisible(compact)
+
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._apply_column_visibility()
@@ -342,10 +378,16 @@ class TrackTableWidget(QWidget):
         pending = sum(
             1 for row in self.model.rows if row.track.has_suggestion
         )
-        self.titles_button.setText(
+        label = (
             f"Suggested titles ({pending})" if pending else "Suggested titles…"
         )
+        self.titles_button.setText(label)
         self.titles_button.setEnabled(pending > 0)
+        self._suggestions_action.setText(
+            f"Suggested titles ({pending})" if pending else "Suggested titles…"
+        )
+        self._suggestions_action.setEnabled(pending > 0)
+        self._edit_action.setEnabled(self.current_row() is not None)
 
     def _update_empty_state(self) -> None:
         if self.model.rowCount() == 0:
@@ -360,6 +402,12 @@ class TrackTableWidget(QWidget):
                     "<b>3.</b> Pick the songs you want, then press "
                     "<b>Download to Spotify</b>."
                     "</div>"
+                )
+            elif self.source.is_folder:
+                self.empty_label.setText(
+                    "This folder is empty.<br><br>"
+                    "Drag songs from another link onto it in the library "
+                    "on the left."
                 )
             else:
                 self.empty_label.setText(

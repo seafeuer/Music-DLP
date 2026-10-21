@@ -110,6 +110,13 @@ def _headers(settings: AISettings) -> dict:
     return headers
 
 
+def friendly_error(exc: AIError) -> tuple[str, str]:
+    """Split an AIError into a headline and a hint for display."""
+    message = exc.args[0] if exc.args else "The AI request failed."
+    hint = exc.args[1] if len(exc.args) > 1 else ""
+    return str(message), str(hint)
+
+
 def _post(settings: AISettings, path: str, payload: dict) -> dict:
     url = _endpoint(settings, path)
     try:
@@ -127,7 +134,7 @@ def _post(settings: AISettings, path: str, payload: dict) -> dict:
     except requests.exceptions.ConnectionError as exc:
         raise AIError(
             "Could not reach the AI server.",
-            "Check the address, and that the server is running.",
+            "Check the server address, and that the server is running.",
         ) from exc
 
     if response.status_code == 401:
@@ -230,8 +237,16 @@ def list_models(settings: AISettings) -> list[str]:
     url = _endpoint(settings, path)
     try:
         response = requests.get(url, headers=_headers(settings), timeout=20)
+    except requests.exceptions.ConnectionError as exc:
+        raise AIError(
+            "Could not reach the AI server.",
+            "If it should be on this computer, start Ollama and try again.",
+        ) from exc
     except requests.exceptions.RequestException as exc:
-        raise AIError("Could not reach the AI server.", str(exc)) from exc
+        raise AIError(
+            "Could not reach the AI server.",
+            "Check the server address.",
+        ) from exc
     if response.status_code >= 400:
         raise AIError(
             "The server would not list its models.",
@@ -259,7 +274,11 @@ def test_connection(settings: AISettings) -> tuple[bool, str]:
             "Reply with the single word: ready",
         )
     except AIError as exc:
-        return False, f"{exc}\n\n{exc.args[1] if len(exc.args) > 1 else ''}".strip()
+        # Never format the exception itself: a two-argument AIError would
+        # print as a Python tuple.
+        message = exc.args[0] if exc.args else "The connection test failed."
+        hint = exc.args[1] if len(exc.args) > 1 else ""
+        return False, f"{message}\n{hint}".strip() if hint else str(message)
 
     text = (reply or "").strip()
     if not text:
