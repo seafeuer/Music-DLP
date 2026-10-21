@@ -12,7 +12,7 @@ from musicdlp.services.urls import (
 )
 
 
-def test_youtube_playlist():
+def test_playlist_url_stays_a_playlist():
     info = classify_url("https://www.youtube.com/playlist?list=PLabc123")
     assert info.platform == PLATFORM_YOUTUBE
     assert info.kind == KIND_PLAYLIST
@@ -33,6 +33,28 @@ def test_watch_url_with_playlist_is_a_video():
     )
     assert info.kind == KIND_ITEM
     assert info.media_id == "dQw4w9WgXcQ"
+
+
+def test_watch_url_with_radio_mix_is_a_single_video():
+    """A "&list=RD..." radio link used to expand an endless queue."""
+    info = classify_url(
+        "https://www.youtube.com/watch?v=gjRoRUM93eE&list=RDgjRoRUM93eE"
+        "&start_radio=1"
+    )
+    assert info.kind == KIND_ITEM
+    assert info.media_id == "gjRoRUM93eE"
+    assert info.url == "https://www.youtube.com/watch?v=gjRoRUM93eE"
+
+
+def test_radio_playlist_url_is_not_treated_as_a_playlist():
+    assert classify_url(
+        "https://www.youtube.com/playlist?list=RDgjRoRUM93eE"
+    ) is None
+    info = classify_url(
+        "https://www.youtube.com/playlist?list=RDgjRoRUM93eE&v=gjRoRUM93eE"
+    )
+    assert info.kind == KIND_ITEM
+    assert info.media_id == "gjRoRUM93eE"
 
 
 def test_youtu_be_and_shorts():

@@ -95,6 +95,12 @@ class YtDlpService:
     def extract(self, url: str, cancel_event=None) -> ExtractedSource:
         info = classify_url(url)
         source_hint = info.platform if info else "other"
+        is_item = bool(info and info.kind == KIND_ITEM)
+
+        # Use the canonical URL. A YouTube watch link can carry
+        # "&list=RD..." (a "radio" mix), and yt-dlp will otherwise try to
+        # enumerate that endless playlist instead of reading one video.
+        target = info.url if info else url
 
         opts = self._base_opts()
         opts.update({
@@ -102,14 +108,15 @@ class YtDlpService:
             # A single link needs full extraction so that a post with no
             # video (a text-only tweet, a dead link) fails now, while the
             # user is adding it, instead of later during the download.
-            "extract_flat": False if (info and info.kind == KIND_ITEM)
-            else "in_playlist",
+            "extract_flat": False if is_item else "in_playlist",
         })
+        if is_item:
+            opts["noplaylist"] = True
 
-        logger.info("Reading link: %s", url)
+        logger.info("Reading link: %s", target)
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
-                data = ydl.extract_info(url, download=False)
+                data = ydl.extract_info(target, download=False)
         except Exception as exc:
             if cancel_event is not None and cancel_event.is_set():
                 raise Cancelled()
@@ -123,9 +130,9 @@ class YtDlpService:
         platform = platform_key(data.get("extractor_key"), source_hint)
 
         if is_playlist:
-            return self._build_playlist(url, data, platform)
+            return self._build_playlist(target, data, platform)
 
-        return self._build_single(url, data, platform)
+        return self._build_single(target, data, platform)
 
     def _build_playlist(self, url: str, data: dict, platform: str) -> ExtractedSource:
         entries = [entry for entry in (data.get("entries") or []) if entry]

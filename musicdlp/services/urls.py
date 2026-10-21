@@ -81,6 +81,16 @@ def _youtube(parsed, normalized: str) -> Optional[LinkInfo]:
     if path.rstrip("/") == "/playlist":
         playlist_id = (query.get("list") or [None])[0]
         if playlist_id:
+            # "RD" is a YouTube radio mix: an endless auto-generated queue.
+            # If the link also names a video, take just that video.
+            if playlist_id.startswith("RD"):
+                video_id = (query.get("v") or [None])[0]
+                if video_id and YOUTUBE_ID_RE.match(video_id):
+                    return LinkInfo(
+                        f"https://www.youtube.com/watch?v={video_id}",
+                        PLATFORM_YOUTUBE, KIND_ITEM, video_id,
+                    )
+                return None
             return LinkInfo(
                 f"https://www.youtube.com/playlist?list={playlist_id}",
                 PLATFORM_YOUTUBE, KIND_PLAYLIST, playlist_id,
@@ -90,12 +100,15 @@ def _youtube(parsed, normalized: str) -> Optional[LinkInfo]:
     if path.rstrip("/") == "/watch":
         video_id = (query.get("v") or [None])[0]
         if video_id and YOUTUBE_ID_RE.match(video_id):
+            # Drop "&list=..." on purpose: a watch link with a radio or
+            # playlist parameter still means "this one video", and following
+            # the list would expand an endless queue.
             return LinkInfo(
                 f"https://www.youtube.com/watch?v={video_id}",
                 PLATFORM_YOUTUBE, KIND_ITEM, video_id,
             )
         playlist_id = (query.get("list") or [None])[0]
-        if playlist_id:
+        if playlist_id and not playlist_id.startswith("RD"):
             return LinkInfo(
                 f"https://www.youtube.com/playlist?list={playlist_id}",
                 PLATFORM_YOUTUBE, KIND_PLAYLIST, playlist_id,

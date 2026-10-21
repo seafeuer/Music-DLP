@@ -6,6 +6,7 @@ import logging
 import os
 import subprocess
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -171,6 +172,9 @@ class MainWindow(QMainWindow):
         self._current_source_id: Optional[int] = None
         self._add_running = False
         self._add_cancel = threading.Event()
+        self._add_started = 0.0
+        self._add_label = ""
+        self._add_timer: Optional[QTimer] = None
         self._active_signals: Optional[LibrarySignals] = None
         self._tray: Optional[QSystemTrayIcon] = None
 
@@ -547,8 +551,11 @@ class MainWindow(QMainWindow):
 
         self._add_running = True
         self._add_cancel = threading.Event()
+        self._add_started = time.monotonic()
+        self._add_label = f"Reading {len(links)} link(s)…"
         self._set_controls_enabled(False)
-        self.status.set_busy(f"Reading {len(links)} link(s)…")
+        self.status.set_busy(self._add_label)
+        self._start_add_ticker()
 
         signals = LibrarySignals()
         signals.progress.connect(self._on_add_progress)
@@ -559,11 +566,32 @@ class MainWindow(QMainWindow):
         task = AddLinksTask(self.ctx.library, links, self._add_cancel, signals)
         QThreadPool.globalInstance().start(task)
 
+    def _start_add_ticker(self) -> None:
+        """Show elapsed time while reading, so it never looks frozen."""
+        if self._add_timer is None:
+            self._add_timer = QTimer(self)
+            self._add_timer.setInterval(500)
+            self._add_timer.timeout.connect(self._tick_add)
+        self._add_timer.start()
+
+    def _stop_add_ticker(self) -> None:
+        if self._add_timer is not None:
+            self._add_timer.stop()
+
+    def _tick_add(self) -> None:
+        if not self._add_running:
+            self._stop_add_ticker()
+            return
+        seconds = int(time.monotonic() - self._add_started)
+        self.status.set_busy(f"{self._add_label} ({seconds}s)")
+
     def _on_add_progress(self, current: int, total: int, url: str) -> None:
+        self._add_label = f"Reading link {min(current + 1, total)}/{total}…"
         self.status.set_add_progress(current, total, url)
 
     def _on_add_finished(self, result: AddResult) -> None:
         self._add_running = False
+        self._stop_add_ticker()
         self._set_controls_enabled(True)
 
         if result.sources:
@@ -592,6 +620,7 @@ class MainWindow(QMainWindow):
 
     def _on_add_failed(self, message: str) -> None:
         self._add_running = False
+        self._stop_add_ticker()
         self._set_controls_enabled(True)
         self.status.set_idle("Could not read the link.")
         self.logger.error(message)
@@ -932,7 +961,14 @@ class MainWindow(QMainWindow):
             self.status.set_busy("Cancelling…")
         elif self._add_running:
             self._add_cancel.set()
-            self.status.set_busy("Cancelling…")
+            self._stop_add_ticker()
+            self.status.set_busy(
+                "Cancelling… this stops as soon as the site responds."
+            )
+            # Reading a link cannot be interrupted mid-request, so release
+            # the controls now and ignore the result when it arrives.
+            self._add_running = False
+            self._set_controls_enabled(True)
 
     # ------------------------------------------------------------- track ops
 
