@@ -426,6 +426,7 @@ class MainWindow(QMainWindow):
         self.sidebar.select_all_requested.connect(self._select_every_song)
         self.sidebar.move_to_folder_requested.connect(self._move_to_folder)
         self.sidebar.tracks_dropped.connect(self._tracks_dropped)
+        self.sidebar.source_dropped.connect(self._source_dropped)
         self.sidebar.new_folder_requested.connect(self._new_folder)
         self.sidebar.rename_folder_requested.connect(self._rename_folder)
 
@@ -598,6 +599,16 @@ class MainWindow(QMainWindow):
             f"Moved {moved} song{'' if moved == 1 else 's'} into "
             f"“{folder.title}”."
         )
+
+    def _source_dropped(self, source_id: int, folder_id: int) -> None:
+        """A whole link dragged onto a folder is filed there."""
+        folder = self.db.get_source(folder_id)
+        source = self.db.get_source(source_id)
+        if folder is None or source is None or source.is_folder:
+            return
+        self.db.set_source_folder(source_id, folder.title)
+        self._refresh_sources(folder_id)
+        self.status.set_idle(f"Moved “{source.title}” into “{folder.title}”.")
 
     def _new_folder(self) -> None:
         name, ok = QInputDialog.getText(

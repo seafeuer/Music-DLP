@@ -24,29 +24,45 @@ from musicdlp.ui.models.track_model import (
 class TrackTableView(QTableView):
     """Table view that lets selected rows be dragged into a library folder."""
 
-    def startDrag(self, supported_actions) -> None:
-        indexes = self.selectionModel().selectedRows()
-        if not indexes:
-            return
+    def selected_track_ids(self) -> list[int]:
         model = self.model()
+        if model is None:
+            return []
         ids: list[int] = []
-        for index in indexes:
+        for index in self.selectionModel().selectedRows():
             source_index = model.mapToSource(index)
             row = model.sourceModel().rows[source_index.row()]
             ids.append(row.track.id)
-        if not ids:
-            return
+        return ids
 
+    def build_drag_mime(self) -> Optional[QMimeData]:
+        """The payload for dragging the selected songs.
+
+        Kept separate from startDrag so it can be tested without driving a
+        real drag-and-drop session.
+        """
         from musicdlp.ui.widgets.source_list import TRACKS_MIME
 
-        payload = QMimeData()
-        payload.setData(TRACKS_MIME, ",".join(str(i) for i in ids).encode("ascii"))
-        payload.setText(
-            ", ".join(model.sourceModel().rows[
-                model.mapToSource(i).row()
-            ].display_title for i in indexes[:5])
-        )
+        model = self.model()
+        ids = self.selected_track_ids()
+        if not ids or model is None:
+            return None
 
+        payload = QMimeData()
+        payload.setData(
+            TRACKS_MIME, ",".join(str(i) for i in ids).encode("ascii")
+        )
+        titles = [
+            model.sourceModel().rows[model.mapToSource(index).row()].display_title
+            for index in self.selectionModel().selectedRows()[:5]
+        ]
+        payload.setText(", ".join(titles))
+        return payload
+
+    def startDrag(self, supported_actions) -> None:
+        payload = self.build_drag_mime()
+        if payload is None:
+            return
         drag = QDrag(self)
         drag.setMimeData(payload)
         drag.exec(Qt.MoveAction)

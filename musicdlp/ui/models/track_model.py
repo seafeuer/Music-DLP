@@ -171,7 +171,9 @@ class TrackTableModel(QAbstractTableModel):
     def flags(self, index: QModelIndex):
         if not index.isValid():
             return Qt.NoItemFlags
-        flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
+        # ItemIsDragEnabled is required: without it Qt refuses to start a
+        # drag no matter what the view says, which made dragging do nothing.
+        flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled
         if index.column() == COL_CHECK:
             flags |= Qt.ItemIsUserCheckable
         return flags

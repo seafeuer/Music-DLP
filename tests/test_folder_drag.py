@@ -179,3 +179,74 @@ def test_folder_rows_are_marked_for_the_view(window):
     # The link assigned to the folder is shown indented beneath it.
     indented = [entry for entry in entries if entry[0] == "source" and entry[3]]
     assert indented
+
+
+# --------------------------------------------------------------- drag itself
+
+
+def test_song_rows_advertise_that_they_can_be_dragged(window):
+    """Regression: without ItemIsDragEnabled Qt never starts a drag."""
+    main, _db, _data = window
+    model = main.track_table.model
+    index = model.index(0, 0)
+    assert model.flags(index) & Qt.ItemIsDragEnabled
+
+
+def test_dragging_builds_a_payload_for_the_selected_songs(window):
+    main, _db, data = window
+    main._load_source(data["playlist"])
+    main.track_table.table.selectRow(0)
+
+    payload = main.track_table.table.build_drag_mime()
+    assert payload is not None
+
+    from musicdlp.ui.widgets.source_list import TRACKS_MIME
+
+    assert payload.hasFormat(TRACKS_MIME)
+    raw = bytes(payload.data(TRACKS_MIME)).decode("ascii")
+    assert raw == str(data["playlist_tracks"][0])
+
+
+def test_dragging_several_rows_builds_one_payload(window):
+    main, _db, data = window
+    main._load_source(data["playlist"])
+    main.track_table.table.selectAll()
+
+    payload = main.track_table.table.build_drag_mime()
+    from musicdlp.ui.widgets.source_list import TRACKS_MIME
+
+    ids = bytes(payload.data(TRACKS_MIME)).decode("ascii").split(",")
+    assert set(int(value) for value in ids) == set(data["playlist_tracks"])
+
+
+def test_no_payload_without_a_selection(window):
+    main, _db, _data = window
+    main.track_table.table.clearSelection()
+    assert main.track_table.table.build_drag_mime() is None
+
+
+def test_folder_rows_accept_drops(window):
+    main, db, _data = window
+    folder_id = db.add_folder("Shiurim")
+    main._refresh_sources(folder_id)
+
+    row = main.sidebar.model.row_for_id(folder_id)
+    index = main.sidebar.model.index(row, 0)
+    assert main.sidebar.model.flags(index) & Qt.ItemIsDropEnabled
+
+
+def test_link_rows_can_be_dragged(window):
+    main, _db, data = window
+    main._refresh_sources(data["playlist"])
+    row = main.sidebar.model.row_for_id(data["playlist"])
+    index = main.sidebar.model.index(row, 0)
+    assert main.sidebar.model.flags(index) & Qt.ItemIsDragEnabled
+
+
+def test_dropping_a_link_onto_a_folder_files_it(window):
+    main, db, data = window
+    folder_id = db.add_folder("Shiurim")
+
+    main._source_dropped(data["playlist"], folder_id)
+
+    assert db.get_source(data["playlist"]).folder == "Shiurim"

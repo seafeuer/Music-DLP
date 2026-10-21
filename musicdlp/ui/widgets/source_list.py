@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from typing import Iterable, Optional
 
-from PySide6.QtCore import QAbstractListModel, QModelIndex, QSize, QSortFilterProxyModel, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
+from PySide6.QtCore import (
+    QAbstractListModel, QMimeData, QModelIndex, QSize, QSortFilterProxyModel,
+    Qt, Signal,
+)
+from PySide6.QtGui import QColor, QDrag, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication, QHBoxLayout, QLabel, QLineEdit, QListView, QMenu,
     QPushButton, QStyle, QStyledItemDelegate, QStyleOptionViewItem,
@@ -19,6 +22,7 @@ from musicdlp.core.models import (
 COUNT_ROLE = Qt.UserRole + 1
 INDENT_ROLE = Qt.UserRole + 2
 TRACKS_MIME = "application/x-musicdlp-tracks"
+SOURCE_MIME = "application/x-musicdlp-source"
 
 
 def _downloaded_count(counts: dict[str, int]) -> int:
@@ -66,9 +70,16 @@ class SourceListModel(QAbstractListModel):
     def flags(self, index: QModelIndex):
         if not index.isValid():
             return Qt.NoItemFlags
-        if self.rows[index.row()][0] == "header":
+        entry = self.rows[index.row()]
+        if entry[0] == "header":
             return Qt.NoItemFlags  # headings cannot be selected
-        return Qt.ItemIsEnabled | Qt.ItemIsSelectable
+        source = entry[1]
+        flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
+        if source.id != ALL_SONGS_ID and not source.is_folder:
+            flags |= Qt.ItemIsDragEnabled
+        if source.is_folder:
+            flags |= Qt.ItemIsDropEnabled
+        return flags
 
     def set_sources(
         self,
@@ -314,21 +325,34 @@ class SourceDelegate(QStyledItemDelegate):
 
 
 class SourceListView(QListView):
-    """The library list, which accepts songs dragged onto a folder."""
+    """The library list: accepts songs and links dragged onto a folder."""
 
     tracks_dropped = Signal(int, list)
+    source_dropped = Signal(int, int)  # source_id, folder_id
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setAcceptDrops(True)
         self.setDropIndicatorShown(False)
-        self.setDragDropMode(QListView.DropOnly)
+        self.setDragDropMode(QListView.DragDrop)
+        self.setDragEnabled(True)
+        self.setDefaultDropAction(Qt.MoveAction)
         self._hovered_folder: Optional[int] = None
 
-    # ------------------------------------------------------------------ drop
+    # ---------------------------------------------------------------- drag
 
-    def _folder_at(self, position) -> Optional[int]:
-        index = self.indexAt(position)
+    def startDrag(self, supported_actions) -> None:
+        source = self._source_at(self.currentIndex())
+        if source is None or source.is_folder or source.id == ALL_SONGS_ID:
+            return
+        payload = QMimeData()
+        payload.setData(SOURCE_MIME, str(source.id).encode("ascii"))
+        payload.setText(source.title)
+        drag = QDrag(self)
+        drag.setMimeData(payload)
+        drag.exec(Qt.MoveAction)
+
+    def _source_at(self, index: QModelIndex) -> Optional[Source]:
         if not index.isValid():
             return None
         model = self.model()
@@ -339,18 +363,31 @@ class SourceListView(QListView):
         if not entries or not (0 <= source_index.row() < len(entries)):
             return None
         entry = entries[source_index.row()]
-        if entry[0] != "source" or not entry[1].is_folder:
+        if entry[0] != "source":
             return None
-        return entry[1].id
+        return entry[1]
+
+    # ------------------------------------------------------------------ drop
+
+    def _folder_at(self, position) -> Optional[int]:
+        source = self._source_at(self.indexAt(position))
+        if source is None or not source.is_folder:
+            return None
+        return source.id
 
     def dragEnterEvent(self, event) -> None:
-        if event.mimeData().hasFormat(TRACKS_MIME):
+        if self._accepts(event):
             event.acceptProposedAction()
         else:
             super().dragEnterEvent(event)
 
+    @staticmethod
+    def _accepts(event) -> bool:
+        data = event.mimeData()
+        return data.hasFormat(TRACKS_MIME) or data.hasFormat(SOURCE_MIME)
+
     def dragMoveEvent(self, event) -> None:
-        if not event.mimeData().hasFormat(TRACKS_MIME):
+        if not self._accepts(event):
             super().dragMoveEvent(event)
             return
         folder_id = self._folder_at(event.position().toPoint())
@@ -365,7 +402,7 @@ class SourceListView(QListView):
         super().dragLeaveEvent(event)
 
     def dropEvent(self, event) -> None:
-        if not event.mimeData().hasFormat(TRACKS_MIME):
+        if not self._accepts(event):
             super().dropEvent(event)
             return
         folder_id = self._folder_at(event.position().toPoint())
@@ -374,11 +411,20 @@ class SourceListView(QListView):
             event.ignore()
             return
 
-        raw = bytes(event.mimeData().data(TRACKS_MIME)).decode("ascii")
-        ids = [int(value) for value in raw.split(",") if value.strip()]
-        if ids:
-            self.tracks_dropped.emit(folder_id, ids)
-            event.acceptProposedAction()
+        data = event.mimeData()
+        if data.hasFormat(TRACKS_MIME):
+            raw = bytes(data.data(TRACKS_MIME)).decode("ascii")
+            ids = [int(value) for value in raw.split(",") if value.strip()]
+            if ids:
+                self.tracks_dropped.emit(folder_id, ids)
+                event.acceptProposedAction()
+            return
+
+        if data.hasFormat(SOURCE_MIME):
+            raw = bytes(data.data(SOURCE_MIME)).decode("ascii").strip()
+            if raw.isdigit():
+                self.source_dropped.emit(int(raw), folder_id)
+                event.acceptProposedAction()
 
     def _set_hover(self, folder_id: Optional[int]) -> None:
         if folder_id == self._hovered_folder:
@@ -396,6 +442,7 @@ class SourceListWidget(QWidget):
     select_all_requested = Signal()
     move_to_folder_requested = Signal(int)
     tracks_dropped = Signal(int, list)
+    source_dropped = Signal(int, int)
     new_folder_requested = Signal()
     rename_folder_requested = Signal(int)
 
@@ -429,6 +476,7 @@ class SourceListWidget(QWidget):
         self.view.customContextMenuRequested.connect(self._context_menu)
         self.view.selectionModel().currentChanged.connect(self._on_current_changed)
         self.view.tracks_dropped.connect(self.tracks_dropped)
+        self.view.source_dropped.connect(self.source_dropped)
         layout.addWidget(self.view, 1)
 
         footer = QHBoxLayout()

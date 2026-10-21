@@ -24,8 +24,9 @@ track number per song before converting.
   keep going. One **Download to Spotify (n)** sends everything you ticked.
   **All songs** at the top of the library shows the whole collection, and
   Ctrl+Shift+A selects all of it.
-- **Library folders** — right-click a link → **Move to folder…** to group
-  links (for example *Shiurim*). Folders are headings in the library list.
+- **Library folders** — press **Folder** to create one, then drag songs (or a
+  whole link) onto it. Dragging a song out of its own entry moves it and
+  removes that entry; dragging it out of a playlist files just that song.
 - **Guided setup** — Help → Set up Music DLP installs FFmpeg for you and walks
   through the Spotify steps in plain language, with a "Check again" button.
 - **Smart titles** — turns `DRAKE - AT THE GATES FT LIL UZI VERT (CDQ)` into
