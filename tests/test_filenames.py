@@ -82,3 +82,16 @@ def test_unique_path_respects_length(tmp_path):
     )
     assert len(str(path)) <= limit
     assert path.suffix == ".mp3"
+
+
+def test_render_template_accepts_a_number_format_spec():
+    assert render_template(
+        "{track:02d} - {title}", title="Song", track=3
+    ) == "03 - Song"
+    assert render_template("{track:d}. {title}", title="Song", track=3) == "3. Song"
+
+
+def test_render_template_accepts_media_id_as_a_placeholder():
+    assert render_template(
+        "{media_id} - {title}", title="Song", media_id="abc123"
+    ) == "abc123 - Song"

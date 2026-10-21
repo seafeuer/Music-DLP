@@ -66,6 +66,7 @@ class SmartTitlesDialog(QDialog):
         self._worker: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._pending: list[TrackRow] = []
+        self._named_count = 0
 
         layout = QVBoxLayout(self)
 
@@ -224,6 +225,7 @@ class SmartTitlesDialog(QDialog):
 
         self._pending = targets
         self._stop.clear()
+        self._named_count = 0
         self.error_label.hide()
         self.ai_button.setEnabled(False)
         self.status.setText(f"Asking the AI about {len(targets)} song(s)…")
@@ -262,7 +264,6 @@ class SmartTitlesDialog(QDialog):
 
     def _drain(self) -> None:
         finished = False
-        named = 0
         while True:
             try:
                 kind, payload = self._results.get_nowait()
@@ -283,7 +284,7 @@ class SmartTitlesDialog(QDialog):
             if kind == "result":
                 track_id, result = payload
                 if self._apply_ai_result(track_id, result):
-                    named += 1
+                    self._named_count += 1
 
         if not finished:
             return
@@ -291,6 +292,9 @@ class SmartTitlesDialog(QDialog):
         if getattr(self, "_poll", None) is not None:
             self._poll.stop()
         self.ai_button.setEnabled(True)
+
+        # Results arrive a few at a time; count them across polls.
+        named = self._named_count
 
         if self.error_label.isVisible():
             self.status.setText(

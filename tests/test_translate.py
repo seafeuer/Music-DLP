@@ -354,3 +354,43 @@ def test_dialog_artist_checkbox_clears_the_artist_column(qapp):
 
     dialog.artist_check.setChecked(False)
     assert dialog.table.item(0, COL_ARTIST).text() == ""
+
+
+def test_dialog_counts_results_across_polls(qapp):
+    """Results land a few at a time; the final status must count them all."""
+    rows = [_row(track_id=1), _row(track_id=2)]
+    dialog = TranslationDialog(rows, ai_settings=SETTINGS)
+
+    dialog._results.put(
+        ("result", (1, Translation(title="一つ目", confidence=0.9)))
+    )
+    dialog._drain()
+    dialog._results.put(
+        ("result", (2, Translation(title="二つ目", confidence=0.9)))
+    )
+    dialog._results.put(("done", None))
+    dialog._drain()
+
+    assert "Translated 2 songs" in dialog.status.text()
+
+
+def test_smart_titles_counts_ai_names_across_polls(qapp):
+    from musicdlp.services.ai import AIResult
+    from musicdlp.ui.dialogs.smart_titles import SmartTitlesDialog
+
+    rows = [_row(track_id=1), _row(track_id=2)]
+    for row in rows:
+        row.track.smart_confidence = 0.1
+    dialog = SmartTitlesDialog(rows, ai_settings=SETTINGS)
+
+    dialog._results.put(
+        ("result", (1, AIResult(title="One", confidence=0.9)))
+    )
+    dialog._drain()
+    dialog._results.put(
+        ("result", (2, AIResult(title="Two", confidence=0.9)))
+    )
+    dialog._results.put(("done", None))
+    dialog._drain()
+
+    assert "AI named 2 songs" in dialog.status.text()

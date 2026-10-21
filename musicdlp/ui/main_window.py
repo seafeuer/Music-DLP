@@ -1283,6 +1283,11 @@ class MainWindow(QMainWindow):
         self.translate_all_action.setEnabled(
             self._current_source_id is not None and not busy
         )
+        self.translate_all_action.setText(
+            "Translate every song in the library…"
+            if self._current_source_id == ALL_SONGS_ID
+            else "Translate every song in this link…"
+        )
         self.update_files_action.setEnabled(count > 0 and not busy)
         self.album_action.setEnabled(count > 0 and not busy)
         self.lookup_action.setEnabled(
@@ -1918,8 +1923,8 @@ class MainWindow(QMainWindow):
         reply = QMessageBox.question(
             self,
             "Remove duplicate songs",
-            f"Remove {count} duplicate copy"
-            f"{'' if count == 1 else 'ies'} from the library?\n\n"
+            f"Remove {count} duplicate cop"
+            f"{'y' if count == 1 else 'ies'} from the library?\n\n"
             "Yes — also delete their audio files from disk.\n"
             "No — keep the files, just remove them from the library.\n"
             "Cancel — do nothing.",

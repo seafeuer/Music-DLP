@@ -193,3 +193,164 @@ def test_settings_round_trip_including_ai(tmp_path):
     assert loaded.ai_model == "gpt-oss:20b"
     assert loaded.ai_api_key == "secret"
     assert loaded.ai_find_artwork is False
+
+
+# ------------------------------------------------------- reasoning models
+
+def _settings(provider="anthropic"):
+    return AISettings(
+        provider=provider, base_url="http://localhost:9", model="a-model"
+    )
+
+
+def test_anthropic_text_is_read_alongside_a_thinking_block(monkeypatch):
+    monkeypatch.setattr(
+        ai, "_post",
+        lambda *args, **kwargs: {
+            "content": [
+                {"type": "thinking", "thinking": "considering"},
+                {"type": "text", "text": '{"title": "Song"}'},
+            ],
+            "stop_reason": "end_turn",
+        },
+    )
+    assert ai.chat(_settings(), "system", "user") == '{"title": "Song"}'
+
+
+def test_a_reply_cut_off_by_the_token_limit_is_explained(monkeypatch):
+    # A reasoning model can spend the whole budget thinking and never write
+    # an answer. That used to surface as "the AI returned an empty answer".
+    monkeypatch.setattr(
+        ai, "_post",
+        lambda *args, **kwargs: {
+            "content": [{"type": "thinking", "thinking": "still thinking"}],
+            "stop_reason": "max_tokens",
+        },
+    )
+    with pytest.raises(AIError) as caught:
+        ai.chat(_settings(), "system", "user")
+    assert "ran out of room" in caught.value.args[0]
+
+
+def test_the_anthropic_request_asks_for_a_reasoning_sized_budget(monkeypatch):
+    seen = {}
+
+    def fake_post(settings, path, payload):
+        seen.update(payload)
+        return {"content": [{"type": "text", "text": "ok"}]}
+
+    monkeypatch.setattr(ai, "_post", fake_post)
+    ai.chat(_settings(), "system", "user")
+    assert seen["max_tokens"] >= 8192
+
+
+def test_openai_content_parts_are_joined(monkeypatch):
+    monkeypatch.setattr(
+        ai, "_post",
+        lambda *args, **kwargs: {
+            "choices": [{
+                "message": {"content": [
+                    {"type": "text", "text": '{"title": '},
+                    {"type": "text", "text": '"Song"}'},
+                ]},
+                "finish_reason": "stop",
+            }]
+        },
+    )
+    assert ai.chat(_settings("openai"), "s", "u") == '{"title": "Song"}'
+
+
+def test_an_openai_reply_cut_off_for_length_is_explained(monkeypatch):
+    monkeypatch.setattr(
+        ai, "_post",
+        lambda *args, **kwargs: {
+            "choices": [{"message": {"content": ""}, "finish_reason": "length"}]
+        },
+    )
+    with pytest.raises(AIError) as caught:
+        ai.chat(_settings("openai"), "s", "u")
+    assert "ran out of room" in caught.value.args[0]
+
+
+def test_a_model_with_a_smaller_output_cap_is_retried(monkeypatch):
+    """Older models reject max_tokens=8192; the request is retried at 4096."""
+    seen = []
+
+    def fake_post(settings, path, payload):
+        seen.append(payload["max_tokens"])
+        if payload["max_tokens"] > 4096:
+            raise AIError(
+                "The AI server returned an error (400).",
+                "max_tokens: 8192 > 4096, which is the maximum allowed",
+            )
+        return {"content": [{"type": "text", "text": "ok"}]}
+
+    monkeypatch.setattr(ai, "_post", fake_post)
+    assert ai.chat(_settings(), "s", "u") == "ok"
+    assert seen == [8192, 4096]
+
+
+def test_an_unrelated_400_is_not_retried(monkeypatch):
+    seen = []
+
+    def fake_post(settings, path, payload):
+        seen.append(payload["max_tokens"])
+        raise AIError("The AI server returned an error (400).", "bad request")
+
+    monkeypatch.setattr(ai, "_post", fake_post)
+    with pytest.raises(AIError):
+        ai.chat(_settings(), "s", "u")
+    assert seen == [8192]
+
+
+# ------------------------------------------------------------ addresses
+
+def test_a_v1_address_does_not_become_v1_v1():
+    """The app tells people to type a /v1 address, so that has to work."""
+    settings = AISettings(
+        provider="openai", base_url="https://api.example.com/v1", model="m"
+    )
+    assert ai._endpoint(settings, "/v1/chat/completions") == \
+        "https://api.example.com/v1/chat/completions"
+
+
+def test_a_pasted_full_endpoint_is_accepted():
+    for base in (
+        "https://api.example.com/v1/chat/completions",
+        "https://api.example.com/v1/models",
+    ):
+        settings = AISettings(provider="openai", base_url=base, model="m")
+        assert ai._endpoint(settings, "/v1/chat/completions") == \
+            "https://api.example.com/v1/chat/completions"
+
+
+def test_anthropic_accepts_a_v1_address():
+    settings = AISettings(
+        provider="anthropic", base_url="https://api.anthropic.com/v1",
+        model="m",
+    )
+    assert ai._endpoint(settings, "/v1/messages") == \
+        "https://api.anthropic.com/v1/messages"
+
+
+def test_ollama_accepts_an_api_address():
+    for base in ("http://localhost:11434/api",
+                 "http://localhost:11434/api/chat",
+                 "http://localhost:11434/"):
+        settings = AISettings(provider="ollama", base_url=base, model="m")
+        assert ai._endpoint(settings, "/api/chat") == \
+            "http://localhost:11434/api/chat"
+
+
+def test_a_proxy_path_is_left_alone():
+    settings = AISettings(
+        provider="openai", base_url="https://host/proxy/v1", model="m"
+    )
+    assert ai._endpoint(settings, "/v1/chat/completions") == \
+        "https://host/proxy/v1/chat/completions"
+
+
+def test_an_empty_address_is_still_an_error():
+    with pytest.raises(AIError):
+        ai._endpoint(AISettings(provider="openai", base_url="", model="m"),
+                     "/v1/chat/completions")

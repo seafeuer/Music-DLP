@@ -82,7 +82,10 @@ class AISettings:
     model: str = ""
     api_key: str = ""
     timeout: int = 120
-    max_tokens: int = 2048
+    # Models that reason before they answer spend part of this budget on
+    # that reasoning. 2048 was small enough that a batch of songs could be
+    # cut off before any answer text was written.
+    max_tokens: int = 8192
 
     @property
     def enabled(self) -> bool:
@@ -94,11 +97,40 @@ class AISettings:
         return f"{self.model} on {self.base_url}"
 
 
+# Endpoints the providers expose, longest first so a pasted full URL is
+# recognised before its shorter prefix.
+_KNOWN_ENDPOINTS = (
+    "/v1/chat/completions",
+    "/v1/models",
+    "/v1/messages",
+    "/api/chat",
+    "/api/tags",
+)
+
+
+def _strip_endpoint_suffix(base: str, path: str) -> str:
+    """Drop the part of an address that the request path already adds.
+
+    People paste what they were told to paste: ``https://host/v1``, or
+    sometimes the whole ``https://host/v1/chat/completions``. Appending
+    ``/v1/chat/completions`` to either would give ``/v1/v1/...`` and a
+    404, so the duplicate is removed here instead of failing later.
+    """
+    lowered = base.lower()
+    for known in (path,) + _KNOWN_ENDPOINTS:
+        if lowered.endswith(known.lower()):
+            return base[: -len(known)].rstrip("/")
+    for prefix in ("/v1", "/api"):
+        if lowered.endswith(prefix):
+            return base[: -len(prefix)].rstrip("/")
+    return base
+
+
 def _endpoint(settings: AISettings, path: str) -> str:
     base = settings.base_url.strip().rstrip("/")
     if not base:
         raise AIError("No server address is set.")
-    return f"{base}{path}"
+    return f"{_strip_endpoint_suffix(base, path)}{path}"
 
 
 def _headers(settings: AISettings) -> dict:
@@ -192,6 +224,20 @@ def _error_text(response) -> str:
     return json.dumps(data)[:300]
 
 
+def _raise_if_truncated(reason: object) -> None:
+    """Explain a reply that stopped because the model ran out of room.
+
+    Reasoning models can spend the whole output budget thinking and then
+    write no answer at all, which otherwise looks like an empty reply.
+    """
+    if str(reason or "").strip().lower() in ("max_tokens", "length"):
+        raise AIError(
+            "The model ran out of room before it answered.",
+            "It may think before it replies. Try again, or send fewer "
+            "songs at a time.",
+        )
+
+
 # ------------------------------------------------------------------ requests
 
 
@@ -218,28 +264,41 @@ def chat(settings: AISettings, system: str, user: str) -> str:
             },
         )
         message = data.get("message") or {}
-        return str(message.get("content") or "")
+        text = str(message.get("content") or "")
+        if not text.strip():
+            _raise_if_truncated(data.get("done_reason"))
+        return text
 
     if settings.provider == PROVIDER_ANTHROPIC:
-        data = _post(
-            settings,
-            "/v1/messages",
-            {
-                "model": settings.model,
-                "max_tokens": max(256, int(settings.max_tokens or 2048)),
-                "temperature": 0.2,
-                "system": system,
-                "messages": [{"role": "user", "content": user}],
-            },
-        )
+        payload = {
+            "model": settings.model,
+            "max_tokens": max(256, int(settings.max_tokens or 8192)),
+            "temperature": 0.2,
+            "system": system,
+            "messages": [{"role": "user", "content": user}],
+        }
+        try:
+            data = _post(settings, "/v1/messages", payload)
+        except AIError as exc:
+            # Older models cap their output at 4096 and reject a larger
+            # request outright. Asking again with a smaller budget is
+            # better than telling the user their model is broken.
+            detail = str(exc.args[1]) if len(exc.args) > 1 else ""
+            if "max_tokens" not in detail or payload["max_tokens"] <= 4096:
+                raise
+            payload["max_tokens"] = 4096
+            data = _post(settings, "/v1/messages", payload)
         blocks = data.get("content") or []
         if isinstance(blocks, str):
             return blocks
-        return "".join(
+        text = "".join(
             str(block.get("text") or "")
             for block in blocks
             if isinstance(block, dict)
         )
+        if not text.strip():
+            _raise_if_truncated(data.get("stop_reason"))
+        return text
 
     data = _post(
         settings,
@@ -256,8 +315,21 @@ def chat(settings: AISettings, system: str, user: str) -> str:
     choices = data.get("choices") or []
     if not choices:
         raise AIError("The AI server returned no answer.")
-    message = choices[0].get("message") or {}
-    return str(message.get("content") or "")
+    choice = choices[0] if isinstance(choices[0], dict) else {}
+    message = choice.get("message") or {}
+    content = message.get("content")
+    if isinstance(content, list):
+        # Some compatible servers return content as a list of parts.
+        text = "".join(
+            str(part.get("text") or "")
+            for part in content
+            if isinstance(part, dict)
+        )
+    else:
+        text = str(content or "")
+    if not text.strip():
+        _raise_if_truncated(choice.get("finish_reason"))
+    return text
 
 
 def list_models(settings: AISettings) -> list[str]:
@@ -277,6 +349,11 @@ def list_models(settings: AISettings) -> list[str]:
             "Check the server address.",
         ) from exc
     if response.status_code >= 400:
+        if response.status_code == 404:
+            raise AIError(
+                "That server does not list its models.",
+                "Type the model name in the box instead.",
+            )
         raise AIError(
             "The server would not list its models.",
             _error_text(response),

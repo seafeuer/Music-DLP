@@ -127,6 +127,11 @@ connection** to check the key. Then use **AI → Name songs with AI…** or the
 **Ask AI** button in Suggested titles. The model fills in the suggestion
 columns; you still press Apply.
 
+Addresses are forgiving: `https://api.example.com`, `…/v1`, or the whole
+`…/v1/chat/completions` all work. For Ollama on this computer, install
+Ollama and pull a model first (`ollama pull llama3.2`); **Refresh list**
+then shows what is available.
+
 **Without a model.** **AI → Export songs for a chatbot…** writes a text file
 containing the songs that need names. Paste the whole file into any chatbot,
 then use **AI → Import a chatbot's reply…** and paste the answer back. The
@@ -229,7 +234,8 @@ Switch modes from the toolbar at any time; the selection is preserved.
 - **Download → Cookies** — browser cookies are the easiest fix for YouTube
   sign-in checks and protected X posts.
 - **Output → Filename template** — `{title}` by default. Also supports
-  `{artist}`, `{album}`, `{track}`, `{id}`, `{source}`.
+  `{artist}`, `{album}`, `{track}`, `{id}`, `{media_id}`, `{source}`, and a
+  number format such as `{track:02d}`.
 - **Output → Normalize** — two-pass loudness normalization to −14 LUFS.
 - **Spotify → When sending** — copy (keep the output file) or move.
 - **Advanced** — FFmpeg path, diagnostics, log folder, and **Update yt-dlp**.

@@ -150,6 +150,7 @@ class LookupDialog(QDialog):
         if not self.rows:
             return
         self._stop.clear()
+        self._found_count = 0
         self.error_label.hide()
         self.go_button.setEnabled(False)
         self.status.setText(f"Looking up {len(self.rows)} song(s)…")

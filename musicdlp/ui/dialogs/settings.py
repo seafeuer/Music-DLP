@@ -620,6 +620,17 @@ class SettingsDialog(QDialog):
 
     def _update_ytdlp(self) -> None:
         """Install the newest yt-dlp, which fixes most site breakages."""
+        import sys
+
+        if getattr(sys, "frozen", False):
+            # A packaged build has yt-dlp inside it. Running pip from there
+            # would relaunch this app instead of installing anything.
+            self.ytdlp_status.setText(
+                "This is the packaged app, so yt-dlp is built in. Install "
+                "a newer Music DLP to get the newest yt-dlp."
+            )
+            return
+
         reply = QMessageBox.question(
             self,
             "Update yt-dlp",
@@ -901,6 +912,11 @@ class SettingsDialog(QDialog):
             ai_model=self.ai_model_combo.currentText().strip(),
             ai_api_key=self.ai_key_edit.text().strip(),
             ai_find_artwork=self.ai_artwork_check.isChecked(),
+            # The Translate dialog remembers these; this dialog does not
+            # show them, so carry them over rather than resetting them.
+            translate_language=self.settings.translate_language,
+            translate_style=self.settings.translate_style,
+            translate_artist=self.settings.translate_artist,
             log_level=self.log_level_combo.currentData(),
             ffmpeg_path=self.ffmpeg_edit.text().strip(),
             window_geometry=self.settings.window_geometry,

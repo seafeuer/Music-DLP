@@ -12,6 +12,7 @@ from musicdlp.core.models import Source
 from musicdlp.services import metadata_lookup
 from musicdlp.services.metadata_lookup import Lookup, lookup
 from musicdlp.ui.dialogs.duplicates import DuplicateDialog
+from musicdlp.ui.dialogs.settings import SettingsDialog
 from musicdlp.ui.main_window import MainWindow, build_context
 
 
@@ -592,3 +593,167 @@ def test_a_stale_link_undo_does_not_unlink_the_song(window):
     main._restore_links({track_id: [(9999, 1)]})  # source no longer exists
 
     assert db.track_links(track_id) == [(data["playlist"], 1)]
+
+
+def _run_lookup(monkeypatch, recordings, *, official=None):
+    """Feed a canned recording list to lookup(), by query type."""
+    def fake_get(*args, **kwargs):
+        query = (kwargs.get("params") or {}).get("query", "")
+        if "status:official" in query:
+            return FakeResponse({"recordings": official or []})
+        return FakeResponse({"recordings": recordings})
+
+    monkeypatch.setattr(metadata_lookup.requests, "get", fake_get)
+    monkeypatch.setattr(metadata_lookup, "_wait_for_turn", lambda: None)
+
+
+def test_lookup_prefers_a_studio_album_over_a_bootleg(monkeypatch):
+    bootleg = {
+        "title": "Same Song",
+        "score": 100,
+        "artist-credit": [{"name": "The Band"}],
+        "releases": [{
+            "title": "Live in 1995", "date": "1995", "status": "Bootleg",
+            "release-group": {"primary-type": "Album",
+                              "secondary-types": ["Live"]},
+            "media": [{"track-offset": 0}],
+        }],
+    }
+    studio = {
+        "title": "Same Song",
+        "score": 100,
+        "artist-credit": [{"name": "The Band"}],
+        "releases": [{
+            "title": "Great Album", "date": "1994", "status": "Official",
+            "release-group": {"primary-type": "Album"},
+            "media": [{"track-offset": 4}],
+        }],
+    }
+    _run_lookup(monkeypatch, [bootleg, studio])
+    found = lookup("The Band", "Same Song")
+    assert found.album == "Great Album"
+    assert found.track == 5
+
+
+def test_lookup_asks_again_for_official_releases(monkeypatch):
+    """When every first-pass hit is a bootleg, a second query finds the album."""
+    bootleg = {
+        "title": "Same Song",
+        "score": 100,
+        "artist-credit": [{"name": "The Band"}],
+        "releases": [{
+            "title": "Live in 1995", "date": "1995", "status": "Bootleg",
+            "release-group": {"primary-type": "Album",
+                              "secondary-types": ["Live"]},
+            "media": [{"track-offset": 0}],
+        }],
+    }
+    official = {
+        "title": "Same Song",
+        "score": 100,
+        "artist-credit": [{"name": "The Band"}],
+        "releases": [{
+            "title": "Great Album", "date": "1994", "status": "Official",
+            "release-group": {"primary-type": "Album"},
+            "media": [{"track-offset": 1}],
+        }],
+    }
+    _run_lookup(monkeypatch, [bootleg], official=[official])
+    found = lookup("The Band", "Same Song")
+    assert found.album == "Great Album"
+    assert found.track == 2
+
+
+def test_lookup_ignores_a_different_artist_with_the_same_title(monkeypatch):
+    """A film composer called Christopher Drake must not beat Drake."""
+    wrong = {
+        "title": "At the Gates",
+        "score": 98,
+        "artist-credit": [{"name": "Christopher Drake"}],
+        "releases": [{
+            "title": "Wonder Woman", "date": "2010", "status": "Official",
+            "release-group": {"primary-type": "Album"},
+            "media": [{"track-offset": 13}],
+        }],
+    }
+    right = {
+        "title": "At the Gates",
+        "score": 100,
+        "artist-credit": [{"name": "Drake, Lil Uzi Vert"}],
+        "releases": [{
+            "title": "Care Package 2", "date": "2023", "status": "Official",
+            "release-group": {"primary-type": "Album"},
+            "media": [{"track-offset": 3}],
+        }],
+    }
+    _run_lookup(monkeypatch, [wrong, right])
+    found = lookup("Drake", "At the Gates")
+    assert found.album == "Care Package 2"
+    assert found.artist == "Drake, Lil Uzi Vert"
+
+
+def test_lookup_prefers_an_album_over_a_compilation(monkeypatch):
+    compilation = {
+        "title": "Same Song",
+        "score": 100,
+        "artist-credit": [{"name": "The Band"}],
+        "releases": [{
+            "title": "Now That's Music 52", "date": "2019",
+            "status": "Official",
+            "release-group": {"primary-type": "Album",
+                              "secondary-types": ["Compilation"]},
+            "media": [{"track-offset": 8}],
+        }],
+    }
+    album = {
+        "title": "Same Song",
+        "score": 100,
+        "artist-credit": [{"name": "The Band"}],
+        "releases": [{
+            "title": "Great Album", "date": "2019-03-29",
+            "status": "Official",
+            "release-group": {"primary-type": "Album"},
+            "media": [{"track-offset": 1}],
+        }],
+    }
+    _run_lookup(monkeypatch, [compilation, album])
+    found = lookup("The Band", "Same Song")
+    assert found.album == "Great Album"
+
+
+def test_saving_settings_keeps_the_translation_choices(qapp, window, monkeypatch):
+    """The Settings dialog does not show these, so it must not reset them."""
+    # Saving with AI left unconfigured asks a question; it is not what this
+    # test is about.
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
+    main, db, _data = window
+    main.settings.translate_language = "Hebrew"
+    main.settings.translate_style = "transliterated"
+    main.settings.translate_artist = False
+
+    dialog = SettingsDialog(
+        main.settings, main.ctx.ffmpeg, main.ctx.ytdlp, main.ctx.spotify, main
+    )
+    dialog._save()
+
+    saved = dialog.result_settings
+    assert saved is not None
+    assert saved.translate_language == "Hebrew"
+    assert saved.translate_style == "transliterated"
+    assert saved.translate_artist is False
+
+
+def test_the_ytdlp_updater_explains_itself_in_a_packaged_build(
+    qapp, window, monkeypatch
+):
+    """A frozen build has no pip; it must say so instead of failing."""
+    import sys
+
+    main, _db, _data = window
+    dialog = SettingsDialog(
+        main.settings, main.ctx.ffmpeg, main.ctx.ytdlp, main.ctx.spotify, main,
+        start_tab="Advanced",
+    )
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    dialog._update_ytdlp()
+    assert "packaged app" in dialog.ytdlp_status.text()

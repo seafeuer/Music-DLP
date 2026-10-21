@@ -47,6 +47,29 @@ class _SafeDict(dict):
         return ""
 
 
+class _TrackNumber(int):
+    """A track number that renders zero-padded by default.
+
+    ``{track}`` has always produced ``03``. A format spec such as
+    ``{track:02d}`` or ``{track:d}`` has to be applied to the number
+    itself, so the padding happens here rather than in a pre-made string.
+    """
+
+    def __format__(self, spec: str) -> str:
+        if not spec:
+            return f"{int(self):02d}"
+        return format(int(self), spec)
+
+
+def _track_value(track: Optional[int]) -> object:
+    if not track:
+        return ""
+    try:
+        return _TrackNumber(track)
+    except (TypeError, ValueError):
+        return ""
+
+
 def render_template(
     template: str,
     *,
@@ -60,16 +83,19 @@ def render_template(
 ) -> str:
     """Render a filename template and sanitize the result.
 
-    Supported placeholders: {title}, {artist}, {album}, {track}, {id}, {source}.
-    The default template is ``{title}`` so files keep the published title.
+    Supported placeholders: {title}, {artist}, {album}, {track}, {id},
+    {media_id}, {source}. ``{track}`` is zero-padded; ``{track:02d}`` and
+    the other number format specs also work. The default template is
+    ``{title}`` so files keep the published title.
     """
     template = (template or DEFAULT_TEMPLATE).strip() or DEFAULT_TEMPLATE
     values = _SafeDict(
         title=title or "",
         artist=artist or "",
         album=album or "",
-        track=f"{track:02d}" if track else "",
+        track=_track_value(track),
         id=media_id or "",
+        media_id=media_id or "",
         source=source or "",
     )
     try:

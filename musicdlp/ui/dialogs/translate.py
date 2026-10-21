@@ -60,6 +60,9 @@ class TranslationDialog(QDialog):
 
         self._translations: dict[int, Translation] = {}
         self._rendered: dict[int, tuple[str, str]] = {}
+        # Counted across polls: results land a few at a time, so a per-poll
+        # counter would report only the last handful.
+        self._translated_count = 0
         self._results: queue.Queue = queue.Queue()
         self._stop = threading.Event()
         self._worker: Optional[threading.Thread] = None
@@ -300,6 +303,7 @@ class TranslationDialog(QDialog):
             return
 
         self._stop.clear()
+        self._translated_count = 0
         self.error_label.hide()
         self.go_button.setEnabled(False)
         self.status.setText(f"Translating {len(items)} song(s)…")
@@ -340,7 +344,6 @@ class TranslationDialog(QDialog):
 
     def _drain(self) -> None:
         finished = False
-        added = 0
         while True:
             try:
                 kind, payload = self._results.get_nowait()
@@ -359,8 +362,7 @@ class TranslationDialog(QDialog):
                 continue
             if kind == "result":
                 track_id, translation = payload
-                if self._apply_translation(track_id, translation):
-                    added += 1
+                self._apply_translation(track_id, translation)
 
         if not finished:
             return
@@ -370,6 +372,7 @@ class TranslationDialog(QDialog):
         self.go_button.setEnabled(True)
         self._update_apply_state()
 
+        added = self._translated_count
         if added:
             self.status.setText(
                 f"Translated {added} song{'' if added == 1 else 's'}. "
@@ -386,6 +389,7 @@ class TranslationDialog(QDialog):
             return False
 
         self._translations[track_id] = translation
+        self._translated_count += 1
         self._fill_row(index, translation, self._style())
 
         language = self._language()
