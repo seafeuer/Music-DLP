@@ -34,6 +34,14 @@ track number per song before converting.
   when the app is confident; anything uncertain appears under
   **Suggested titles** for you to accept. It learns artist names from your own
   edits, so titles with no separator get easier over time.
+- **AI naming (optional)** — press **Ask AI** to have a model name the songs
+  the rules could not work out. Works with Ollama on your computer, Ollama
+  cloud with an API key, or any compatible API. Nothing is applied without
+  your review.
+- **Chatbot export/import** — no key or model needed: export the songs that
+  need names to a text file, paste it into any chatbot, then import the reply.
+- **Real album art** — looks the song up in free music catalogues and embeds
+  the actual cover instead of the video still. Falls back to the video image.
 - **Dark theme** — the default, with a one-click switch to light.
 - **Browser cookies** — use Chrome/Edge/Firefox cookies directly, or a
   `cookies.txt` file, for sign-in checks and protected posts.
@@ -100,6 +108,38 @@ Rules:
 - Artist names you confirm are remembered, so later uploads with no separator
   (`... MONDAY MORNING YOUNG THUG`) can be split.
 - Turn it off in Settings → Output → Smart titles.
+
+### AI naming
+
+Two ways, both optional and both review-first.
+
+**With a model (Settings → AI).** Three providers:
+
+| Provider | Address | Key |
+|---|---|---|
+| Ollama on this computer | `http://localhost:11434` | none |
+| Ollama cloud | `https://ollama.com` | required |
+| Another compatible API | any `/v1` address | required |
+
+Press **Refresh list** to see the models the server offers, and **Test
+connection** to check the key. Then use **AI → Name songs with AI…** or the
+**Ask AI** button in Suggested titles. The model fills in the suggestion
+columns; you still press Apply.
+
+**Without a model.** **AI → Export songs for a chatbot…** writes a text file
+containing the songs that need names. Paste the whole file into any chatbot,
+then use **AI → Import a chatbot's reply…** and paste the answer back. The
+names land in Suggested titles for review.
+
+AI never overwrites a song you have edited, and never applies a name by
+itself.
+
+### Cover art
+
+With **Settings → AI → Look up real album art** on, converting a song looks it
+up in the iTunes catalogue and MusicBrainz and embeds the real cover. If
+nothing is found, the video thumbnail is used as before. **Edit details → Find
+cover art** does the same lookup for one song.
 
 Converted files go to `Music\MusicDLP\MP3` (and `M4A` if enabled). Files sent to
 Spotify are copied to `Music\MusicDLP\Spotify` by default.

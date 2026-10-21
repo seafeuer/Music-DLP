@@ -34,6 +34,8 @@ from musicdlp.core.models import (
     BatchItem,
     Track,
 )
+from musicdlp.core.paths import art_cache_dir
+from musicdlp.services.artwork import find_cover
 from musicdlp.services.filenames import render_template, unique_path
 from musicdlp.services.ffmpeg import FFmpegService
 from musicdlp.services.spotify import SpotifyService
@@ -462,6 +464,23 @@ class Pipeline(QObject):
                         if track.cover_path and Path(track.cover_path).exists()
                         else None
                     )
+
+                    # Prefer real album art over the video still, when the
+                    # user has that turned on.
+                    if settings.ai_find_artwork:
+                        album_art = find_cover(
+                            track.display_artist,
+                            track.display_title,
+                            art_cache_dir()
+                            / f"album_{track.platform}_{track.media_id}.jpg",
+                            album=track.display_album,
+                        )
+                        if album_art is not None:
+                            cover = album_art
+                            self.db.update_track(
+                                track.id, cover_path=str(album_art)
+                            )
+
                     if cover is None:
                         fallbacks = (
                             youtube_fallbacks(track.media_id)

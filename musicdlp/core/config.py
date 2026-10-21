@@ -53,6 +53,14 @@ class Settings:
 
     notifications: bool = True
     smart_titles: bool = True
+
+    # AI is optional and only runs when the user asks for it.
+    ai_provider: str = "ollama"
+    ai_base_url: str = "http://localhost:11434"
+    ai_model: str = ""
+    ai_api_key: str = ""
+    ai_find_artwork: bool = True
+
     log_level: str = "INFO"
 
     ffmpeg_path: str = ""
@@ -76,7 +84,10 @@ class Settings:
             return cls()
 
         try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
+            # utf-8-sig tolerates a byte-order mark. Editors on Windows
+            # often add one, and a plain utf-8 read then fails and silently
+            # discards every setting.
+            raw = json.loads(path.read_text(encoding="utf-8-sig"))
         except (OSError, ValueError):
             return cls()
 
@@ -141,6 +152,14 @@ class Settings:
             self.filename_template = "{title}"
         if self.log_level not in ("DEBUG", "INFO", "WARNING", "ERROR"):
             self.log_level = "INFO"
+        if self.ai_provider not in ("ollama", "openai"):
+            self.ai_provider = "ollama"
+        self.ai_base_url = (self.ai_base_url or "").strip()
+        self.ai_model = (self.ai_model or "").strip()
+
+    @property
+    def ai_configured(self) -> bool:
+        return bool(self.ai_model and self.ai_base_url)
 
     # ------------------------------------------------------------- accessors
 

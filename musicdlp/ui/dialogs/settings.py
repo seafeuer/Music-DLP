@@ -11,12 +11,15 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
-    QLineEdit, QMessageBox, QPushButton, QSpinBox, QTabWidget, QVBoxLayout,
-    QWidget,
+    QLineEdit, QMessageBox, QPushButton, QSpinBox, QTabWidget, QToolButton,
+    QVBoxLayout, QWidget,
 )
 
 from musicdlp.core.config import Settings
 from musicdlp.core.paths import config_path, db_path, log_dir, start_directory
+from musicdlp.services.ai import (
+    AIError, AISettings, list_models, test_connection,
+)
 from musicdlp.services.filenames import render_template
 from musicdlp.services.ffmpeg import FFmpegService
 from musicdlp.services.spotify import SpotifyService
@@ -48,6 +51,7 @@ class SettingsDialog(QDialog):
         self._build_general()
         self._build_download()
         self._build_output()
+        self._build_ai()
         self._build_spotify()
         self._build_advanced()
 
@@ -326,6 +330,155 @@ class SettingsDialog(QDialog):
 
         self.tabs.addTab(tab, "Spotify")
 
+    def _build_ai(self) -> None:
+        tab = QWidget()
+        form = QFormLayout(tab)
+
+        intro = QLabel(
+            "AI is optional. It is used only when you press “Ask AI” to name "
+            "songs the app could not work out by itself."
+        )
+        intro.setWordWrap(True)
+        intro.setObjectName("muted")
+        form.addRow(intro)
+
+        self.ai_provider_combo = QComboBox()
+        self.ai_provider_combo.addItem(
+            "Ollama on this computer", ("ollama", "http://localhost:11434")
+        )
+        self.ai_provider_combo.addItem(
+            "Ollama cloud (needs an API key)", ("ollama", "https://ollama.com")
+        )
+        self.ai_provider_combo.addItem(
+            "Another compatible API (needs a key)", ("openai", "")
+        )
+        index = self._ai_provider_index()
+        self.ai_provider_combo.setCurrentIndex(index)
+        self.ai_provider_combo.currentIndexChanged.connect(
+            self._on_ai_provider_changed
+        )
+        form.addRow("Provider", self.ai_provider_combo)
+
+        self.ai_url_edit = QLineEdit(self.settings.ai_base_url)
+        self.ai_url_edit.setPlaceholderText("http://localhost:11434")
+        form.addRow("Server address", self.ai_url_edit)
+
+        model_row = QHBoxLayout()
+        self.ai_model_combo = QComboBox()
+        self.ai_model_combo.setEditable(True)
+        self.ai_model_combo.setMinimumWidth(240)
+        if self.settings.ai_model:
+            self.ai_model_combo.addItem(self.settings.ai_model)
+            self.ai_model_combo.setCurrentText(self.settings.ai_model)
+        self.ai_refresh_button = QPushButton("Refresh list")
+        self.ai_refresh_button.clicked.connect(self._refresh_ai_models)
+        model_row.addWidget(self.ai_model_combo, 1)
+        model_row.addWidget(self.ai_refresh_button)
+        form.addRow("Model", self._wrap(model_row))
+
+        self.ai_key_edit = QLineEdit(self.settings.ai_api_key)
+        self.ai_key_edit.setEchoMode(QLineEdit.Password)
+        self.ai_key_edit.setPlaceholderText(
+            "Not needed for Ollama on this computer"
+        )
+        show_key = QToolButton()
+        show_key.setText("Show")
+        show_key.setCheckable(True)
+        show_key.toggled.connect(
+            lambda shown: self.ai_key_edit.setEchoMode(
+                QLineEdit.Normal if shown else QLineEdit.Password
+            )
+        )
+        key_row = QHBoxLayout()
+        key_row.addWidget(self.ai_key_edit, 1)
+        key_row.addWidget(show_key)
+        form.addRow("API key", self._wrap(key_row))
+
+        self.ai_test_button = QPushButton("Test connection")
+        self.ai_test_button.clicked.connect(self._test_ai)
+        form.addRow("", self.ai_test_button)
+
+        self.ai_status = QLabel("")
+        self.ai_status.setWordWrap(True)
+        form.addRow("", self.ai_status)
+
+        self.ai_artwork_check = QCheckBox(
+            "Look up real album art instead of the video still"
+        )
+        self.ai_artwork_check.setChecked(self.settings.ai_find_artwork)
+        form.addRow("Cover art", self.ai_artwork_check)
+        self._hint(
+            form,
+            "Uses free catalogue lookups (iTunes and MusicBrainz). No account "
+            "needed, and the video picture is used when nothing is found.",
+        )
+
+        self.tabs.addTab(tab, "AI")
+
+    def _ai_provider_index(self) -> int:
+        provider = self.settings.ai_provider
+        url = self.settings.ai_base_url.rstrip("/")
+        if provider == "openai":
+            return 2
+        if url == "https://ollama.com":
+            return 1
+        return 0
+
+    def _on_ai_provider_changed(self, index: int) -> None:
+        provider, url = self.ai_provider_combo.itemData(index)
+        if url:
+            self.ai_url_edit.setText(url)
+        self.ai_model_combo.clear()
+        self.ai_status.setText("")
+
+    def _ai_settings(self) -> AISettings:
+        provider, _default_url = self.ai_provider_combo.currentData()
+        return AISettings(
+            provider=provider,
+            base_url=self.ai_url_edit.text().strip(),
+            model=self.ai_model_combo.currentText().strip(),
+            api_key=self.ai_key_edit.text().strip(),
+        )
+
+    def _refresh_ai_models(self) -> None:
+        settings = self._ai_settings()
+        if not settings.base_url:
+            self.ai_status.setText("Enter the server address first.")
+            return
+        self.ai_status.setText("Asking the server for its models…")
+        try:
+            models = list_models(settings)
+        except AIError as exc:
+            self.ai_status.setText(self._ai_error_text(exc))
+            return
+        if not models:
+            self.ai_status.setText(
+                "The server has no models yet. Install one, then refresh."
+            )
+            return
+        current = self.ai_model_combo.currentText()
+        self.ai_model_combo.clear()
+        self.ai_model_combo.addItems(models)
+        if current:
+            self.ai_model_combo.setCurrentText(current)
+        self.ai_status.setText(f"Found {len(models)} model(s).")
+
+    def _test_ai(self) -> None:
+        settings = self._ai_settings()
+        self.ai_status.setText("Testing…")
+        QApplication.processEvents()
+        ok, message = test_connection(settings)
+        self.ai_status.setText(message)
+        self.ai_status.setStyleSheet(
+            "color: #16a34a;" if ok else "color: #d97706;"
+        )
+
+    @staticmethod
+    def _ai_error_text(exc: AIError) -> str:
+        if len(exc.args) > 1 and exc.args[1]:
+            return f"{exc.args[0]}\n{exc.args[1]}"
+        return str(exc)
+
     def _build_advanced(self) -> None:
         tab = QWidget()
         form = QFormLayout(tab)
@@ -528,6 +681,11 @@ class SettingsDialog(QDialog):
             sleep_min=self.sleep_min_spin.value(),
             sleep_max=self.sleep_max_spin.value(),
             notifications=self.notifications_check.isChecked(),
+            ai_provider=self.ai_provider_combo.currentData()[0],
+            ai_base_url=self.ai_url_edit.text().strip(),
+            ai_model=self.ai_model_combo.currentText().strip(),
+            ai_api_key=self.ai_key_edit.text().strip(),
+            ai_find_artwork=self.ai_artwork_check.isChecked(),
             log_level=self.log_level_combo.currentData(),
             ffmpeg_path=self.ffmpeg_edit.text().strip(),
             window_geometry=self.settings.window_geometry,

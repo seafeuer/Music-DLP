@@ -239,6 +239,23 @@ class LibraryService:
             needs_update=1 if track and is_converted(track.status) else 0,
         )
 
+    def set_suggestion(
+        self,
+        track_id: int,
+        title: str,
+        artist: str,
+        confidence: float,
+        reason: str,
+    ) -> None:
+        """Record a suggestion without applying it to the song."""
+        self.db.update_track(
+            track_id,
+            smart_title=(title or "").strip() or None,
+            smart_artist=(artist or "").strip() or None,
+            smart_confidence=float(confidence or 0.0),
+            smart_reason=(reason or "").strip() or None,
+        )
+
     def set_cover(self, track_id: int, image_path: Optional[Path]) -> Optional[Path]:
         """Use a user-chosen image as the cover art for a track.
 

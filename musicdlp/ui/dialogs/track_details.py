@@ -8,12 +8,14 @@ from typing import Optional
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
-    QCheckBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
-    QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox, QVBoxLayout,
-    QWidget,
+    QApplication, QCheckBox, QDialog, QDialogButtonBox, QFileDialog,
+    QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox,
+    QVBoxLayout, QWidget,
 )
 
 from musicdlp.core.models import Track, is_converted
+from musicdlp.core.paths import art_cache_dir
+from musicdlp.services.artwork import find_cover
 from musicdlp.services.filenames import render_template
 
 
@@ -64,6 +66,13 @@ class TrackDetailsDialog(QDialog):
         choose = QPushButton("Choose picture…")
         choose.clicked.connect(self._choose_picture)
         art_box.addWidget(choose)
+
+        self.find_art_button = QPushButton("Find cover art")
+        self.find_art_button.setToolTip(
+            "Look the song up in free music catalogues and use the real cover"
+        )
+        self.find_art_button.clicked.connect(self._find_art)
+        art_box.addWidget(self.find_art_button)
 
         self.video_button = QPushButton("Use video thumbnail")
         self.video_button.clicked.connect(self._use_video_thumbnail)
@@ -179,6 +188,40 @@ class TrackDetailsDialog(QDialog):
         if not filename:
             return
         self.cover_path = filename
+        self.cover_changed = True
+        self._refresh_artwork()
+
+    def _find_art(self) -> None:
+        """Look the song up and use its real cover, if one is found."""
+        title = self.title_edit.text().strip()
+        artist = self.artist_edit.text().strip()
+        if not title:
+            self.find_art_button.setText("Add a title first")
+            return
+
+        self.find_art_button.setEnabled(False)
+        self.find_art_button.setText("Looking…")
+        QApplication.processEvents()
+        try:
+            destination = art_cache_dir() / (
+                f"album_{self.track.platform}_{self.track.media_id}.jpg"
+            )
+            found = find_cover(
+                artist,
+                title,
+                destination,
+                album=self.album_edit.text().strip(),
+            )
+        except Exception:
+            found = None
+
+        self.find_art_button.setEnabled(True)
+        if found is None:
+            self.find_art_button.setText("No cover found")
+            return
+
+        self.find_art_button.setText("Find cover art")
+        self.cover_path = str(found)
         self.cover_changed = True
         self._refresh_artwork()
 

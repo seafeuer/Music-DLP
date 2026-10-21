@@ -29,15 +29,18 @@ from musicdlp.core.models import (
 )
 from musicdlp.core.paths import art_cache_dir, is_writable
 from musicdlp.services.ffmpeg import FFmpegService
+from musicdlp.services.ai import AISettings
 from musicdlp.services.legacy_import import (
     ImportSummary, find_legacy_db, import_legacy,
 )
 from musicdlp.services.library import AddResult, LibraryService
+from musicdlp.services.ai_export import songs_needing_help, write_prompt
 from musicdlp.services.pipeline import Pipeline
 from musicdlp.services.spotify import SpotifyService
 from musicdlp.services.thumbnails import ThumbnailService
 from musicdlp.services.urls import split_links
 from musicdlp.services.ytdlp import YtDlpService
+from musicdlp.ui.dialogs.ai_import import AIImportDialog
 from musicdlp.ui.dialogs.bulk_add import BulkAddDialog
 from musicdlp.ui.dialogs.settings import SettingsDialog
 from musicdlp.ui.dialogs.setup import SetupDialog
@@ -374,6 +377,20 @@ class MainWindow(QMainWindow):
         clear_selection = QAction("Clear selection", self)
         clear_selection.triggered.connect(self.track_table.model.clear_checks)
         edit_menu.addAction(clear_selection)
+
+        ai_menu = self.menuBar().addMenu("&AI")
+        ask_action = QAction("Name songs with AI…", self)
+        ask_action.triggered.connect(lambda: self._open_suggestions(True))
+        ai_menu.addAction(ask_action)
+
+        ai_menu.addSeparator()
+        export_action = QAction("Export songs for a chatbot…", self)
+        export_action.triggered.connect(self._export_for_ai)
+        ai_menu.addAction(export_action)
+
+        import_action_ai = QAction("Import a chatbot's reply…", self)
+        import_action_ai.triggered.connect(self._import_from_ai)
+        ai_menu.addAction(import_action_ai)
 
         view_menu = self.menuBar().addMenu("&View")
         self.logs_action = QAction("Show activity log", self)
@@ -1158,29 +1175,114 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------- track ops
 
-    def _open_suggestions(self) -> None:
-        """Review song/artist names worked out from upload titles."""
-        rows = self.track_table.suggestion_rows()
-        dialog = SmartTitlesDialog(rows, self)
-        if dialog.exec() != QDialog.Accepted or not dialog.accepted_ids:
+    def _export_for_ai(self) -> None:
+        """Write a prompt file the user can paste into any chatbot."""
+        rows = self._visible_rows()
+        songs = songs_needing_help(rows)
+        if not songs:
+            QMessageBox.information(
+                self,
+                "Nothing to export",
+                "Every song here already has a confident name.\n\n"
+                "If you want to redo one, edit it by hand in Edit details.",
+            )
             return
 
-        for track_id in dialog.accepted_ids:
+        default = self.settings.output_path / "songs-for-ai.txt"
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save the list for your chatbot",
+            str(default),
+            "Text files (*.txt);;All files (*)",
+        )
+        if not filename:
+            return
+
+        try:
+            write_prompt(Path(filename), songs)
+        except OSError as exc:
+            QMessageBox.critical(self, "Could not save", str(exc))
+            return
+
+        QMessageBox.information(
+            self,
+            "Ready to paste",
+            f"Saved {len(songs)} song(s) to:\n{filename}\n\n"
+            "Open that file, paste the whole thing into a chatbot, then use "
+            "AI → Import a chatbot's reply.",
+        )
+        self.status.set_idle(f"Exported {len(songs)} song(s) for a chatbot.")
+
+    def _import_from_ai(self) -> None:
+        dialog = AIImportDialog(self)
+        if dialog.exec() != QDialog.Accepted or not dialog.results:
+            return
+
+        known = {row.track.id for row in self.db.get_all_track_rows()}
+        applied = 0
+        for item in dialog.results:
+            if item.id not in known:
+                continue
+            self.ctx.library.set_suggestion(
+                item.id, item.title, item.artist, item.confidence,
+                "AI reply",
+            )
+            applied += 1
+
+        self._reload_current_source()
+        self.status.set_idle(
+            f"Imported {applied} suggestion{'' if applied == 1 else 's'}. "
+            "Press “Suggested titles” to review them."
+        )
+
+    def _visible_rows(self) -> list:
+        return list(self.track_table.model.rows)
+
+    def _open_suggestions(self, include_all: bool = False) -> None:
+        """Review song/artist names, and optionally ask AI to name songs."""
+        if include_all:
+            rows = [
+                row for row in self._visible_rows()
+                if (row.track.smart_confidence or 0) < 0.8
+                or row.track.has_suggestion
+            ]
+        else:
+            rows = self.track_table.suggestion_rows()
+
+        dialog = SmartTitlesDialog(
+            rows,
+            self,
+            ai_settings=self._ai_settings(),
+            on_ai_result=self.ctx.library.set_suggestion,
+        )
+        if dialog.exec() != QDialog.Accepted or not dialog.accepted_values:
+            return
+
+        for track_id, title, artist in dialog.accepted_values:
             track = self.db.get_track(track_id)
-            if track is None or not track.smart_title:
+            if track is None:
                 continue
             self.ctx.library.set_metadata(
                 track_id,
-                title=track.smart_title,
-                artist=track.smart_artist or "",
+                title=title,
+                artist=artist,
                 album=track.display_album,
                 track_number=track.display_track,
             )
 
         self._reload_current_source()
+        count = len(dialog.accepted_values)
         self.status.set_idle(
-            f"Updated {len(dialog.accepted_ids)} song name(s). "
+            f"Updated {count} song name{'' if count == 1 else 's'}. "
             "Press Re-convert to write them into the files."
+        )
+
+    def _ai_settings(self) -> AISettings:
+        return AISettings(
+            provider=self.settings.ai_provider,
+            base_url=self.settings.ai_base_url,
+            model=self.settings.ai_model,
+            api_key=self.settings.ai_api_key,
         )
 
     def _open_details(self, track_id: int) -> None:
