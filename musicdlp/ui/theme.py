@@ -147,6 +147,16 @@ def build_stylesheet(theme: str) -> str:
     QTableView::indicator:checked:hover, QListView::indicator:checked:hover {{
         background: {ACCENT_HOVER};
     }}
+    QCheckBox::indicator {{
+        width: 15px; height: 15px; border-radius: 3px;
+        border: 1px solid {checkbox_border}; background: {checkbox_bg};
+    }}
+    QCheckBox::indicator:checked {{
+        background: {ACCENT}; border: 1px solid {ACCENT};
+    }}
+    QCheckBox::indicator:disabled {{
+        border: 1px solid {border}; background: {disabled_bg};
+    }}
     QHeaderView::section {{
         background: {panel}; border: none; border-bottom: 1px solid {border};
         padding: 7px 6px; font-weight: 600;

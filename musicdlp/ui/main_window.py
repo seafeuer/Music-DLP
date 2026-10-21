@@ -39,6 +39,7 @@ from musicdlp.services.ytdlp import YtDlpService
 from musicdlp.ui.dialogs.bulk_add import BulkAddDialog
 from musicdlp.ui.dialogs.settings import SettingsDialog
 from musicdlp.ui.dialogs.setup import SetupDialog
+from musicdlp.ui.dialogs.smart_titles import SmartTitlesDialog
 from musicdlp.ui.dialogs.spotify_setup import SpotifyDialog
 from musicdlp.ui.dialogs.track_details import TrackDetailsDialog
 from musicdlp.ui.theme import apply_theme
@@ -288,6 +289,12 @@ class MainWindow(QMainWindow):
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         layout.addWidget(self.mode_combo)
 
+        self.theme_button = QToolButton()
+        self.theme_button.setToolTip("Switch between dark and light")
+        self.theme_button.clicked.connect(self._toggle_theme)
+        layout.addWidget(self.theme_button)
+        self._update_theme_button()
+
         self.action_area = QWidget()
         self.action_layout = QHBoxLayout(self.action_area)
         self.action_layout.setContentsMargins(0, 0, 0, 0)
@@ -411,6 +418,7 @@ class MainWindow(QMainWindow):
 
         self.track_table.checked_changed.connect(self._on_checked_changed)
         self.track_table.edit_details_requested.connect(self._open_details)
+        self.track_table.suggestions_requested.connect(self._open_suggestions)
         self.track_table.retry_requested.connect(self._retry_track)
         self.track_table.reconvert_requested.connect(self._reconvert_track)
         self.track_table.remove_requested.connect(self._remove_track)
@@ -604,6 +612,8 @@ class MainWindow(QMainWindow):
                 summary += f", {result.tracks_new} new"
             if result.tracks_owned:
                 summary += f", {result.tracks_owned} already downloaded"
+            if result.titles_fixed:
+                summary += f", {result.titles_fixed} name(s) tidied"
             if result.errors:
                 summary += f" · {len(result.errors)} link(s) failed (see Logs)"
             self.status.set_idle(summary)
@@ -972,6 +982,31 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------- track ops
 
+    def _open_suggestions(self) -> None:
+        """Review song/artist names worked out from upload titles."""
+        rows = self.track_table.suggestion_rows()
+        dialog = SmartTitlesDialog(rows, self)
+        if dialog.exec() != QDialog.Accepted or not dialog.accepted_ids:
+            return
+
+        for track_id in dialog.accepted_ids:
+            track = self.db.get_track(track_id)
+            if track is None or not track.smart_title:
+                continue
+            self.ctx.library.set_metadata(
+                track_id,
+                title=track.smart_title,
+                artist=track.smart_artist or "",
+                album=track.display_album,
+                track_number=track.display_track,
+            )
+
+        self._reload_current_source()
+        self.status.set_idle(
+            f"Updated {len(dialog.accepted_ids)} song name(s). "
+            "Press Re-convert to write them into the files."
+        )
+
     def _open_details(self, track_id: int) -> None:
         """Edit one song's title, artist, album, track number, and picture."""
         if self._is_busy():
@@ -1175,6 +1210,25 @@ class MainWindow(QMainWindow):
         SpotifyService.open_folder(log_dir())
 
     # -------------------------------------------------------------- settings
+
+    def _update_theme_button(self) -> None:
+        dark = self.settings.theme == "dark"
+        self.theme_button.setText("Light" if dark else "Dark")
+        self.theme_button.setToolTip(
+            "Switch to the light theme" if dark else "Switch to the dark theme"
+        )
+
+    def _toggle_theme(self) -> None:
+        self.settings.theme = "light" if self.settings.theme == "dark" else "dark"
+        try:
+            self.settings.save()
+        except OSError:
+            pass
+        apply_theme(QApplication.instance(), self.settings.theme)
+        self._update_theme_button()
+        self.status.set_idle(
+            f"{self.settings.theme.title()} theme on."
+        )
 
     def _open_setup(self) -> None:
         """Open the guided setup checklist."""

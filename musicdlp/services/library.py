@@ -13,6 +13,7 @@ from musicdlp.core.errors import AppError, Cancelled
 from musicdlp.core.models import is_converted, is_downloaded
 from musicdlp.core.paths import art_cache_dir
 from musicdlp.services.filenames import safe_stem
+from musicdlp.services.smart_titles import suggest as smart_suggest
 from musicdlp.services.ytdlp import YtDlpService
 
 logger = logging.getLogger("musicdlp.library")
@@ -24,6 +25,7 @@ class AddResult:
     tracks_total: int = 0
     tracks_new: int = 0
     tracks_owned: int = 0
+    titles_fixed: int = 0
     errors: list[str] = field(default_factory=list)
 
     @property
@@ -119,6 +121,8 @@ class LibraryService:
 
     def _store_tracks(self, tracks, result: AddResult) -> list[tuple[int, int]]:
         links: list[tuple[int, int]] = []
+        known = self.db.known_artists() if self.settings.smart_titles else set()
+
         for track in tracks:
             existing = self.db.get_track_by_media(track.platform, track.media_id)
             track_id = self.db.upsert_track(
@@ -137,7 +141,47 @@ class LibraryService:
                 result.tracks_new += 1
             elif is_downloaded(existing.status):
                 result.tracks_owned += 1
+
+            if self.settings.smart_titles:
+                applied = self._apply_smart_title(track_id, track, known)
+                if applied:
+                    result.titles_fixed += 1
+
         return links
+
+    def _apply_smart_title(self, track_id: int, track, known: set[str]) -> bool:
+        """Store a suggestion, and use it when the parser is confident.
+
+        A track whose details the user has already edited is never touched.
+        """
+        stored = self.db.get_track(track_id)
+        if stored is None:
+            return False
+
+        suggestion = smart_suggest(
+            track.title,
+            channel=track.uploader,
+            description=track.description,
+            known_artists=known,
+        )
+        if not suggestion.title:
+            return False
+
+        update: dict = {
+            "smart_title": suggestion.title,
+            "smart_artist": suggestion.artist or None,
+            "smart_confidence": suggestion.confidence,
+            "smart_reason": suggestion.reason,
+        }
+
+        untouched = stored.meta_title is None and stored.meta_artist is None
+        if suggestion.confident and untouched:
+            update["meta_title"] = suggestion.title
+            if suggestion.artist:
+                update["meta_artist"] = suggestion.artist
+
+        self.db.update_track(track_id, **update)
+        return bool(suggestion.confident and untouched)
 
     # ------------------------------------------------------------- delete
 

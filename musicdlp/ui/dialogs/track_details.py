@@ -51,7 +51,6 @@ class TrackDetailsDialog(QDialog):
 
         body = QHBoxLayout()
         body.setSpacing(16)
-
         # Cover art -----------------------------------------------------
         art_box = QVBoxLayout()
         self.artwork = QLabel()
@@ -99,6 +98,22 @@ class TrackDetailsDialog(QDialog):
         for edit in (self.title_edit, self.artist_edit, self.album_edit):
             edit.textChanged.connect(self._update_preview)
         self.track_spin.valueChanged.connect(self._update_preview)
+
+        # A suggestion worked out from the upload title, if it differs from
+        # what is filled in.
+        self.suggestion_box = QWidget()
+        suggestion_layout = QHBoxLayout(self.suggestion_box)
+        suggestion_layout.setContentsMargins(0, 0, 0, 0)
+        suggestion_layout.setSpacing(8)
+        self.suggestion_label = QLabel("")
+        self.suggestion_label.setWordWrap(True)
+        self.suggestion_label.setObjectName("muted")
+        suggestion_layout.addWidget(self.suggestion_label, 1)
+        self.use_suggestion_button = QPushButton("Use suggestion")
+        self.use_suggestion_button.clicked.connect(self._use_suggestion)
+        suggestion_layout.addWidget(self.use_suggestion_button)
+        layout.addWidget(self.suggestion_box)
+        self._update_suggestion()
 
         # What happens on save ------------------------------------------
         converted = is_converted(track.status)
@@ -175,6 +190,36 @@ class TrackDetailsDialog(QDialog):
         )
 
     # ------------------------------------------------------------- preview
+
+    def _update_suggestion(self) -> None:
+        track = self.track
+        if not track.smart_title:
+            self.suggestion_box.hide()
+            return
+
+        suggested = track.smart_title
+        artist = track.smart_artist or ""
+        current_title = self.title_edit.text().strip()
+        current_artist = self.artist_edit.text().strip()
+
+        if suggested == current_title and artist == current_artist:
+            self.suggestion_box.hide()
+            return
+
+        confidence = int(round((track.smart_confidence or 0) * 100))
+        text = f"From the upload title: “{suggested}”"
+        if artist:
+            text += f" — {artist}"
+        text += f"  ({confidence}% sure)"
+        self.suggestion_label.setText(text)
+        self.suggestion_box.show()
+
+    def _use_suggestion(self) -> None:
+        if self.track.smart_title:
+            self.title_edit.setText(self.track.smart_title)
+        if self.track.smart_artist:
+            self.artist_edit.setText(self.track.smart_artist)
+        self.suggestion_box.hide()
 
     def _update_preview(self) -> None:
         stem = render_template(

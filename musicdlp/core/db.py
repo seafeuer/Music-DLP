@@ -62,6 +62,10 @@ CREATE TABLE IF NOT EXISTS tracks (
     synced_at     TEXT,
     sync_error    TEXT,
     needs_update  INTEGER NOT NULL DEFAULT 0,
+    smart_title   TEXT,
+    smart_artist  TEXT,
+    smart_confidence REAL,
+    smart_reason  TEXT,
     UNIQUE(platform, media_id)
 );
 
@@ -90,7 +94,8 @@ TRACK_UPDATABLE = {
     "status", "error", "meta_title", "meta_artist", "meta_album", "meta_track",
     "raw_path", "mp3_path", "m4a_path", "cover_path",
     "downloaded_at", "converted_at", "synced_at", "sync_error",
-    "needs_update",
+    "needs_update", "smart_title", "smart_artist", "smart_confidence",
+    "smart_reason",
 }
 
 SOURCE_UPDATABLE = {
@@ -169,6 +174,15 @@ class Database:
                 "ALTER TABLE tracks ADD COLUMN needs_update INTEGER NOT NULL DEFAULT 0"
             )
             logger.info("Migration: added tracks.needs_update")
+        for column, kind in (
+            ("smart_title", "TEXT"),
+            ("smart_artist", "TEXT"),
+            ("smart_confidence", "REAL"),
+            ("smart_reason", "TEXT"),
+        ):
+            if column not in columns:
+                conn.execute(f"ALTER TABLE tracks ADD COLUMN {column} {kind}")
+                logger.info("Migration: added tracks.%s", column)
 
     # --------------------------------------------------------------- sources
 
@@ -395,6 +409,24 @@ class Database:
             (track_id,),
         ).fetchone()
         return int(row["n"]) if row else 0
+
+    def known_artists(self) -> set[str]:
+        """Artist names the user has confirmed.
+
+        Smart titles use these to split titles that have no separator, so
+        the parser gets better as the library grows.
+        """
+        rows = self._conn().execute(
+            "SELECT DISTINCT meta_artist FROM tracks "
+            "WHERE meta_artist IS NOT NULL AND TRIM(meta_artist) <> ''"
+        ).fetchall()
+        names: set[str] = set()
+        for row in rows:
+            for part in str(row["meta_artist"]).split(","):
+                part = part.strip()
+                if len(part) >= 3:
+                    names.add(part)
+        return names
 
     def unlink_track_everywhere(self, track_id: int) -> None:
         """Remove a track from every source and refresh those counts."""

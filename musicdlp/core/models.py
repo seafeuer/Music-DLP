@@ -142,6 +142,10 @@ class Track:
     synced_at: Optional[str]
     sync_error: Optional[str] = None
     needs_update: bool = False
+    smart_title: Optional[str] = None
+    smart_artist: Optional[str] = None
+    smart_confidence: Optional[float] = None
+    smart_reason: Optional[str] = None
 
     @classmethod
     def from_row(cls, row: Mapping[str, Any]) -> "Track":
@@ -173,6 +177,23 @@ class Track:
             needs_update=bool(
                 row["needs_update"] if "needs_update" in row.keys() else 0
             ),
+            smart_title=row["smart_title"] if "smart_title" in row.keys() else None,
+            smart_artist=row["smart_artist"] if "smart_artist" in row.keys() else None,
+            smart_confidence=(
+                row["smart_confidence"]
+                if "smart_confidence" in row.keys() else None
+            ),
+            smart_reason=row["smart_reason"] if "smart_reason" in row.keys() else None,
+        )
+
+    @property
+    def has_suggestion(self) -> bool:
+        """True when a smart title exists and is not what is already used."""
+        if not self.smart_title:
+            return False
+        return (
+            self.smart_title != self.display_title
+            or (self.smart_artist or "") != (self.display_artist or "")
         )
 
     @property

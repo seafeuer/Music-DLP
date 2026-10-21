@@ -22,6 +22,12 @@ track number per song before converting.
   the file and refreshes the Spotify copy in one step.
 - **Guided setup** — Help → Set up Music DLP installs FFmpeg for you and walks
   through the Spotify steps in plain language, with a "Check again" button.
+- **Smart titles** — turns `DRAKE - AT THE GATES FT LIL UZI VERT (CDQ)` into
+  the song *At The Gates* by *Drake, Lil Uzi Vert*. Applied automatically only
+  when the app is confident; anything uncertain appears under
+  **Suggested titles** for you to accept. It learns artist names from your own
+  edits, so titles with no separator get easier over time.
+- **Dark theme** — the default, with a one-click switch to light.
 - **Browser cookies** — use Chrome/Edge/Firefox cookies directly, or a
   `cookies.txt` file, for sign-in checks and protected posts.
 - **Import old library** — brings sources, tracks, and output paths over from
@@ -59,6 +65,26 @@ the app (or in a `ffmpeg\` subfolder). The first-run wizard can also locate it.
 
 The three steps at the top always show where you are. To change a song's
 details, highlight it and click **Edit details…** (or double-click the row).
+
+### Smart titles
+
+Titles are cleaned when a link is added:
+
+| Upload title | Song | Artist |
+|---|---|---|
+| `DRAKE - AT THE GATES FT LIL UZI VERT (OG) (CDQ QUALITY)` | At The Gates | Drake, Lil Uzi Vert |
+| `Yoru ni Kakeru` on a `- Topic` channel | Yoru ni Kakeru | YOASOBI |
+| `Plastic Love (Official Music Video) [HD]` | Plastic Love | — |
+
+Rules:
+
+- Only applied when the app is confident (80% or better).
+- Songs whose details you have edited are never changed.
+- Anything uncertain is listed under **Suggested titles**, where you tick what
+  to accept. Nothing is renamed until you do.
+- Artist names you confirm are remembered, so later uploads with no separator
+  (`... MONDAY MORNING YOUNG THUG`) can be split.
+- Turn it off in Settings → Output → Smart titles.
 
 Converted files go to `Music\MusicDLP\MP3` (and `M4A` if enabled). Files sent to
 Spotify are copied to `Music\MusicDLP\Spotify` by default.

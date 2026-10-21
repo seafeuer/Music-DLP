@@ -23,6 +23,7 @@ from musicdlp.ui.models.track_model import (
 class TrackTableWidget(QWidget):
     checked_changed = Signal()
     edit_details_requested = Signal(int)
+    suggestions_requested = Signal()
     retry_requested = Signal(int)
     reconvert_requested = Signal(int)
     remove_requested = Signal(int)
@@ -84,6 +85,13 @@ class TrackTableWidget(QWidget):
         self.edit_button.clicked.connect(self._edit_current)
         self.edit_button.setEnabled(False)
         filter_row.addWidget(self.edit_button)
+
+        self.titles_button = QPushButton("Suggested titles…")
+        self.titles_button.setToolTip(
+            "Review song and artist names worked out from the upload titles"
+        )
+        self.titles_button.clicked.connect(self.suggestions_requested)
+        filter_row.addWidget(self.titles_button)
 
         # Selection lives in one menu so the row stays readable when the
         # window is narrow.
@@ -279,6 +287,14 @@ class TrackTableWidget(QWidget):
             bits.append(f"{checked} selected")
         self.subtitle_label.setText(" · ".join(bits))
 
+        pending = sum(
+            1 for row in self.model.rows if row.track.has_suggestion
+        )
+        self.titles_button.setText(
+            f"Suggested titles ({pending})" if pending else "Suggested titles…"
+        )
+        self.titles_button.setEnabled(pending > 0)
+
     def _update_empty_state(self) -> None:
         if self.model.rowCount() == 0:
             if self.source is None:
@@ -316,6 +332,9 @@ class TrackTableWidget(QWidget):
         row = self.current_row()
         if row is not None:
             self.edit_details_requested.emit(row.track.id)
+
+    def suggestion_rows(self) -> list[TrackRow]:
+        return [row for row in self.model.rows if row.track.has_suggestion]
 
     def _context_menu(self, position) -> None:
         index = self.table.indexAt(position)

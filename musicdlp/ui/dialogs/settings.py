@@ -229,6 +229,18 @@ class SettingsDialog(QDialog):
         self.keep_raw_check.setChecked(self.settings.keep_raw)
         form.addRow("", self.keep_raw_check)
 
+        self.smart_titles_check = QCheckBox(
+            "Work out song and artist names from the upload title"
+        )
+        self.smart_titles_check.setChecked(self.settings.smart_titles)
+        form.addRow("Smart titles", self.smart_titles_check)
+        self._hint(
+            form,
+            "Turns “DRAKE - AT THE GATES FT LIL UZI VERT (CDQ)” into the "
+            "song “At The Gates” by “Drake, Lil Uzi Vert”. Only used when "
+            "the app is confident; anything unsure is offered for review.",
+        )
+
         self.template_edit = QLineEdit(self.settings.filename_template)
         self.template_edit.textChanged.connect(self._update_preview)
         form.addRow("Filename template", self.template_edit)
@@ -507,6 +519,7 @@ class SettingsDialog(QDialog):
             m4a_bitrate=self.m4a_bitrate.currentData(),
             normalize=self.normalize_check.isChecked(),
             keep_raw=self.keep_raw_check.isChecked(),
+            smart_titles=self.smart_titles_check.isChecked(),
             filename_template=self.template_edit.text().strip() or "{title}",
             cookies_mode=self.cookies_combo.currentData(),
             cookies_browser=self.browser_combo.currentData(),

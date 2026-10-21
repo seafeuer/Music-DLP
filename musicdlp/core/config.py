@@ -27,7 +27,7 @@ BROWSERS = ("chrome", "edge", "firefox", "brave", "opera", "vivaldi", "chromium"
 class Settings:
     """All persisted user preferences."""
 
-    theme: str = "system"
+    theme: str = "dark"
     mode: str = "easy"
 
     output_dir: str = ""
@@ -52,6 +52,7 @@ class Settings:
     sleep_max: float = 3.0
 
     notifications: bool = True
+    smart_titles: bool = True
     log_level: str = "INFO"
 
     ffmpeg_path: str = ""
@@ -104,7 +105,7 @@ class Settings:
     def validate(self) -> None:
         """Coerce values into supported ranges instead of failing."""
         if self.theme not in THEMES:
-            self.theme = "system"
+            self.theme = "dark"
         if self.mode not in MODES:
             self.mode = "easy"
 
