@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS sources (
     uploader      TEXT,
     item_count    INTEGER NOT NULL DEFAULT 0,
     thumbnail_url TEXT,
+    folder        TEXT NOT NULL DEFAULT '',
     added_at      TEXT NOT NULL DEFAULT (datetime('now')),
     refreshed_at  TEXT
 );
@@ -100,6 +101,7 @@ TRACK_UPDATABLE = {
 
 SOURCE_UPDATABLE = {
     "title", "uploader", "item_count", "thumbnail_url", "refreshed_at",
+    "url", "folder",
 }
 
 
@@ -184,6 +186,15 @@ class Database:
                 conn.execute(f"ALTER TABLE tracks ADD COLUMN {column} {kind}")
                 logger.info("Migration: added tracks.%s", column)
 
+        source_columns = [
+            row[1] for row in conn.execute("PRAGMA table_info(sources)")
+        ]
+        if "folder" not in source_columns:
+            conn.execute(
+                "ALTER TABLE sources ADD COLUMN folder TEXT NOT NULL DEFAULT ''"
+            )
+            logger.info("Migration: added sources.folder")
+
     # --------------------------------------------------------------- sources
 
     def add_source(
@@ -198,6 +209,26 @@ class Database:
         thumbnail_url: Optional[str],
     ) -> int:
         conn = self._conn()
+
+        # Reuse an existing entry for the same playlist or video, whatever
+        # URL form it was pasted in, so re-adding or refreshing a link never
+        # creates a second section in the library.
+        existing = self.get_source_by_identity(platform, external_id)
+        if existing is not None:
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE sources SET
+                        url = ?, kind = ?, platform = ?, external_id = ?,
+                        title = ?, uploader = ?, item_count = ?,
+                        thumbnail_url = ?, refreshed_at = datetime('now')
+                    WHERE id = ?
+                    """,
+                    (url, kind, platform, external_id, title, uploader,
+                     item_count, thumbnail_url, existing.id),
+                )
+            return existing.id
+
         with conn:
             conn.execute(
                 """
@@ -235,9 +266,38 @@ class Database:
         ).fetchone()
         return Source.from_row(row) if row else None
 
+    def get_source_by_identity(
+        self, platform: str, external_id: Optional[str]
+    ) -> Optional[Source]:
+        """Find a source by the item it points at, not by its URL.
+
+        The same playlist can be pasted with different tracking parameters,
+        and re-adding it must update the existing entry rather than create a
+        second section in the library.
+        """
+        if not external_id:
+            return None
+        row = self._conn().execute(
+            "SELECT * FROM sources WHERE platform = ? AND external_id = ? "
+            "ORDER BY id LIMIT 1",
+            (platform, external_id),
+        ).fetchone()
+        return Source.from_row(row) if row else None
+
+    def set_source_folder(self, source_id: int, folder: str) -> None:
+        self.update_source(source_id, folder=(folder or "").strip())
+
+    def get_folders(self) -> list[str]:
+        rows = self._conn().execute(
+            "SELECT DISTINCT folder FROM sources "
+            "WHERE TRIM(folder) <> '' ORDER BY folder COLLATE NOCASE"
+        ).fetchall()
+        return [row["folder"] for row in rows]
+
     def get_sources(self) -> list[Source]:
         rows = self._conn().execute(
-            "SELECT * FROM sources ORDER BY added_at DESC, id DESC"
+            "SELECT * FROM sources "
+            "ORDER BY folder COLLATE NOCASE, added_at DESC, id DESC"
         ).fetchall()
         return [Source.from_row(row) for row in rows]
 
@@ -382,6 +442,82 @@ class Database:
                      position=int(row["position"]))
             for row in rows
         ]
+
+    # One row per track, joined to a single "home" source: the first one it
+    # was linked to. A track can belong to several sources; for naming and
+    # album purposes one is enough.
+    _HOME_SOURCE_JOIN = """
+        LEFT JOIN source_tracks st
+               ON st.track_id = t.id
+              AND NOT EXISTS (
+                    SELECT 1 FROM source_tracks st2
+                    WHERE st2.track_id = st.track_id
+                      AND (st2.source_id < st.source_id
+                           OR (st2.source_id = st.source_id
+                               AND st2.position < st.position))
+              )
+    """
+
+    def _rows_with_sources(self, rows: list[sqlite3.Row]) -> list[TrackRow]:
+        sources = {source.id: source for source in self.get_sources()}
+        result: list[TrackRow] = []
+        for row in rows:
+            source_id = row["source_id"]
+            source = sources.get(int(source_id)) if source_id is not None else None
+            if source is None:
+                source = Source(
+                    id=-1, url="", kind="item", platform="other",
+                    external_id=None, title="Unlinked songs", uploader="",
+                    item_count=0, thumbnail_url=None,
+                    added_at=None, refreshed_at=None,
+                )
+            result.append(
+                TrackRow(
+                    source=source,
+                    track=Track.from_row(row),
+                    position=int(row["position"] or 1),
+                )
+            )
+        return result
+
+    def get_all_track_rows(self) -> list[TrackRow]:
+        """Every song in the library, with the source it belongs to."""
+        rows = self._conn().execute(
+            f"""
+            SELECT t.*, st.position AS position, st.source_id AS source_id
+            FROM tracks t
+            {self._HOME_SOURCE_JOIN}
+            ORDER BY t.id
+            """
+        ).fetchall()
+        return self._rows_with_sources(rows)
+
+    def get_track_rows_by_ids(self, track_ids: Iterable[int]) -> list[TrackRow]:
+        ids = [int(value) for value in track_ids]
+        if not ids:
+            return []
+        placeholders = ",".join("?" * len(ids))
+        rows = self._conn().execute(
+            f"""
+            SELECT t.*, st.position AS position, st.source_id AS source_id
+            FROM tracks t
+            {self._HOME_SOURCE_JOIN}
+            WHERE t.id IN ({placeholders})
+            ORDER BY t.id
+            """,
+            ids,
+        ).fetchall()
+        return self._rows_with_sources(rows)
+
+    def all_status_counts(self) -> dict[str, int]:
+        rows = self._conn().execute(
+            "SELECT status, COUNT(*) AS n FROM tracks GROUP BY status"
+        ).fetchall()
+        return {row["status"]: int(row["n"]) for row in rows}
+
+    def count_tracks(self) -> int:
+        row = self._conn().execute("SELECT COUNT(*) AS n FROM tracks").fetchone()
+        return int(row["n"]) if row else 0
 
     def status_counts(self, source_id: int) -> dict[str, int]:
         rows = self._conn().execute(

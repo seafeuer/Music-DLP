@@ -9,12 +9,13 @@ def _db(tmp_path) -> Database:
     return Database(tmp_path / "library.db")
 
 
-def _source(db, url="https://www.youtube.com/playlist?list=PLx", title="List"):
+def _source(db, url="https://www.youtube.com/playlist?list=PLx", title="List",
+            external_id="PLx"):
     return db.add_source(
         url=url,
         kind="playlist",
         platform="youtube",
-        external_id="PLx",
+        external_id=external_id,
         title=title,
         uploader="Channel",
         item_count=0,
@@ -84,8 +85,10 @@ def test_refresh_replaces_links_but_keeps_tracks(tmp_path):
 
 def test_same_track_can_belong_to_two_sources(tmp_path):
     db = _db(tmp_path)
-    one = _source(db, url="https://www.youtube.com/playlist?list=PL1", title="One")
-    two = _source(db, url="https://www.youtube.com/playlist?list=PL2", title="Two")
+    one = _source(db, url="https://www.youtube.com/playlist?list=PL1",
+                  title="One", external_id="PL1")
+    two = _source(db, url="https://www.youtube.com/playlist?list=PL2",
+                  title="Two", external_id="PL2")
     track_id = _track(db, "shared", "Shared")
     db.set_source_tracks(one, [(track_id, 1)])
     db.set_source_tracks(two, [(track_id, 1)])

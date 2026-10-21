@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from musicdlp.core.models import (
-    CONVERTED, DOWNLOADED, ERROR, SYNCED, Source,
+    ALL_SONGS_ID, CONVERTED, DOWNLOADED, ERROR, SYNCED, Source,
 )
 
 COUNT_ROLE = Qt.UserRole + 1
@@ -27,9 +27,12 @@ def _downloaded_count(counts: dict[str, int]) -> int:
 
 
 class SourceListModel(QAbstractListModel):
+    """Library rows: an optional "All songs" entry, folder headings, sources."""
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.rows: list[tuple[Source, dict[str, int]]] = []
+        # Each row is ("source", Source, counts) or ("header", text, counts)
+        self.rows: list[tuple] = []
         self.duplicate_titles: set[str] = set()
 
     def rowCount(self, parent=QModelIndex()) -> int:
@@ -38,7 +41,14 @@ class SourceListModel(QAbstractListModel):
     def data(self, index: QModelIndex, role=Qt.DisplayRole):
         if not index.isValid() or not (0 <= index.row() < len(self.rows)):
             return None
-        source, counts = self.rows[index.row()]
+        row = self.rows[index.row()]
+        if row[0] == "header":
+            if role == Qt.DisplayRole:
+                return row[1]
+            if role == COUNT_ROLE:
+                return row[2]
+            return None
+        source, counts = row[1], row[2]
         if role == Qt.DisplayRole:
             return source.title
         if role == COUNT_ROLE:
@@ -47,35 +57,79 @@ class SourceListModel(QAbstractListModel):
             return f"{source.title}\n{source.url}"
         return None
 
+    def flags(self, index: QModelIndex):
+        if not index.isValid():
+            return Qt.NoItemFlags
+        if self.rows[index.row()][0] == "header":
+            return Qt.NoItemFlags  # headings cannot be selected
+        return Qt.ItemIsEnabled | Qt.ItemIsSelectable
+
     def set_sources(
         self,
         sources: Iterable[Source],
         counts: dict[int, dict[str, int]],
     ) -> None:
+        sources = list(sources)
         self.beginResetModel()
-        self.rows = [(source, counts.get(source.id, {})) for source in sources]
+
+        # Group by folder, keeping "All songs" first and ungrouped links
+        # last, so a folder never hides the link you just added.
+        folders: dict[str, list[Source]] = {}
+        ungrouped: list[Source] = []
+        all_entries: list[Source] = []
+        for source in sources:
+            if source.id == ALL_SONGS_ID:
+                all_entries.append(source)
+                continue
+            folder = (source.folder or "").strip()
+            if folder:
+                folders.setdefault(folder, []).append(source)
+            else:
+                ungrouped.append(source)
+
+        rows: list[tuple] = [("source", source, counts.get(source.id, {}))
+                             for source in all_entries]
+        for name in sorted(folders, key=str.lower):
+            group = folders[name]
+            group_counts: dict[str, int] = {}
+            for source in group:
+                for status, value in counts.get(source.id, {}).items():
+                    group_counts[status] = group_counts.get(status, 0) + value
+            rows.append(("header", name, group_counts))
+            rows.extend(
+                ("source", source, counts.get(source.id, {}))
+                for source in group
+            )
+        rows.extend(
+            ("source", source, counts.get(source.id, {}))
+            for source in ungrouped
+        )
+        self.rows = rows
+
         # Two links can carry the same text (for example two tweets from the
         # same account). Remember which titles repeat so the list can tell
         # them apart.
         seen: dict[str, int] = {}
-        for source, _counts in self.rows:
-            seen[source.title] = seen.get(source.title, 0) + 1
+        for row in self.rows:
+            if row[0] != "source":
+                continue
+            seen[row[1].title] = seen.get(row[1].title, 0) + 1
         self.duplicate_titles = {title for title, n in seen.items() if n > 1}
         self.endResetModel()
 
     def source_at(self, row: int) -> Optional[Source]:
-        if 0 <= row < len(self.rows):
-            return self.rows[row][0]
+        if 0 <= row < len(self.rows) and self.rows[row][0] == "source":
+            return self.rows[row][1]
         return None
 
     def counts_at(self, row: int) -> dict[str, int]:
         if 0 <= row < len(self.rows):
-            return self.rows[row][1]
+            return self.rows[row][2]
         return {}
 
     def row_for_id(self, source_id: int) -> Optional[int]:
-        for row, (source, _counts) in enumerate(self.rows):
-            if source.id == source_id:
+        for row, entry in enumerate(self.rows):
+            if entry[0] == "source" and entry[1].id == source_id:
                 return row
         return None
 
@@ -96,14 +150,29 @@ class SourceFilterProxy(QSortFilterProxyModel):
             return True
         if not (0 <= source_row < len(model.rows)):
             return True
-        source, _counts = model.rows[source_row]
+        row = model.rows[source_row]
+        if row[0] == "header":
+            return True
+        source = row[1]
         haystack = f"{source.title} {source.uploader or ''}".lower()
         return self.search in haystack
 
 
 class SourceDelegate(QStyledItemDelegate):
     def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
+        if index.data(Qt.DisplayRole) is not None and self._is_header(index):
+            return QSize(0, 30)
         return QSize(0, 58)
+
+    @staticmethod
+    def _is_header(index: QModelIndex) -> bool:
+        model = index.model()
+        row = index.row()
+        while hasattr(model, "sourceModel") and model.sourceModel():
+            row = model.mapToSource(index).row()
+            model = model.sourceModel()
+        entries = getattr(model, "rows", None)
+        return bool(entries) and 0 <= row < len(entries) and entries[row][0] == "header"
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
         model = index.model()
@@ -116,7 +185,13 @@ class SourceDelegate(QStyledItemDelegate):
             source_model = source_model.sourceModel()
         if not hasattr(source_model, "rows") or not (0 <= source_row < len(source_model.rows)):
             return
-        source, counts = source_model.rows[source_row]
+
+        entry = source_model.rows[source_row]
+        if entry[0] == "header":
+            self._paint_header(painter, option, entry[1], entry[2])
+            return
+
+        source, counts = entry[1], entry[2]
 
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing, True)
@@ -184,6 +259,27 @@ class SourceDelegate(QStyledItemDelegate):
 
         painter.restore()
 
+    @staticmethod
+    def _paint_header(painter: QPainter, option: QStyleOptionViewItem,
+                      name: str, counts: dict[str, int]) -> None:
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        rect = option.rect.adjusted(8, 6, -8, 0)
+
+        font = QFont(option.font)
+        font.setPointSizeF(max(7.5, font.pointSizeF() - 1.5))
+        font.setBold(True)
+        font.setLetterSpacing(QFont.AbsoluteSpacing, 0.6)
+        painter.setFont(font)
+        painter.setPen(option.palette.placeholderText().color())
+
+        total = sum(counts.values())
+        label = name.upper()
+        if total:
+            label += f"   ·   {total}"
+        painter.drawText(rect, Qt.AlignLeft | Qt.AlignVCenter, label)
+        painter.restore()
+
 
 class SourceListWidget(QWidget):
     source_selected = Signal(int)
@@ -191,12 +287,15 @@ class SourceListWidget(QWidget):
     delete_requested = Signal(int)
     add_requested = Signal()
     open_url_requested = Signal(str)
+    select_all_requested = Signal()
+    move_to_folder_requested = Signal(int)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.model = SourceListModel(self)
         self.proxy = SourceFilterProxy(self)
         self.proxy.setSourceModel(self.model)
+        self._last_source_id: Optional[int] = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -220,6 +319,7 @@ class SourceListWidget(QWidget):
         self.view.setContextMenuPolicy(Qt.CustomContextMenu)
         self.view.customContextMenuRequested.connect(self._context_menu)
         self.view.selectionModel().currentChanged.connect(self._on_current_changed)
+        self.view.clicked.connect(self._on_clicked)
         layout.addWidget(self.view, 1)
 
         footer = QHBoxLayout()
@@ -278,17 +378,44 @@ class SourceListWidget(QWidget):
         source_index = self.proxy.mapToSource(current)
         source = self.model.source_at(source_index.row())
         if source:
+            self._update_buttons()
             self.source_selected.emit(source.id)
+
+    def _on_clicked(self, index: QModelIndex) -> None:
+        """A click on a folder heading should not clear the selection."""
+        if not index.isValid():
+            return
+        source_index = self.proxy.mapToSource(index)
+        if self.model.source_at(source_index.row()) is None:
+            # Restore the previously selected link.
+            if self._last_source_id is not None:
+                self.select_source(self._last_source_id)
+
+    def select_source(self, source_id: int) -> None:
+        row = self.model.row_for_id(source_id)
+        if row is None:
+            return
+        self._last_source_id = source_id
+        source_index = self.model.index(row, 0)
+        proxy_index = self.proxy.mapFromSource(source_index)
+        if proxy_index.isValid():
+            self.view.setCurrentIndex(proxy_index)
 
     def _refresh(self) -> None:
         source_id = self.selected_source_id()
-        if source_id is not None:
+        if source_id is not None and source_id != ALL_SONGS_ID:
             self.refresh_requested.emit(source_id)
 
     def _remove(self) -> None:
         source_id = self.selected_source_id()
-        if source_id is not None:
+        if source_id is not None and source_id != ALL_SONGS_ID:
             self.delete_requested.emit(source_id)
+
+    def _update_buttons(self) -> None:
+        source_id = self.selected_source_id()
+        is_all = source_id == ALL_SONGS_ID
+        self.refresh_button.setEnabled(not is_all)
+        self.remove_button.setEnabled(not is_all)
 
     def _context_menu(self, position) -> None:
         index = self.view.indexAt(position)
@@ -300,15 +427,26 @@ class SourceListWidget(QWidget):
             return
 
         menu = QMenu(self)
-        menu.addAction("Refresh", lambda: self.refresh_requested.emit(source.id))
-        menu.addAction(
-            "Open link in browser",
-            lambda: self.open_url_requested.emit(source.url),
-        )
-        menu.addAction(
-            "Copy link",
-            lambda: QApplication.clipboard().setText(source.url),
-        )
-        menu.addSeparator()
-        menu.addAction("Remove…", lambda: self.delete_requested.emit(source.id))
+        if source.id == ALL_SONGS_ID:
+            menu.addAction(
+                "Select every song",
+                lambda: self.select_all_requested.emit(),
+            )
+        else:
+            menu.addAction(
+                "Move to folder…",
+                lambda: self.move_to_folder_requested.emit(source.id),
+            )
+            menu.addSeparator()
+            menu.addAction("Refresh", lambda: self.refresh_requested.emit(source.id))
+            menu.addAction(
+                "Open link in browser",
+                lambda: self.open_url_requested.emit(source.url),
+            )
+            menu.addAction(
+                "Copy link",
+                lambda: QApplication.clipboard().setText(source.url),
+            )
+            menu.addSeparator()
+            menu.addAction("Remove…", lambda: self.delete_requested.emit(source.id))
         menu.exec(self.view.viewport().mapToGlobal(position))

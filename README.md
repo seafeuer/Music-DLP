@@ -20,6 +20,12 @@ track number per song before converting.
 - **Edit any song** — title, artist, album, track number, and cover picture,
   with a live preview of the file name. "Update the audio file now" rewrites
   the file and refreshes the Spotify copy in one step.
+- **Selection across links** — tick songs in one link, switch to another, and
+  keep going. One **Download to Spotify (n)** sends everything you ticked.
+  **All songs** at the top of the library shows the whole collection, and
+  Ctrl+Shift+A selects all of it.
+- **Library folders** — right-click a link → **Move to folder…** to group
+  links (for example *Shiurim*). Folders are headings in the library list.
 - **Guided setup** — Help → Set up Music DLP installs FFmpeg for you and walks
   through the Spotify steps in plain language, with a "Check again" button.
 - **Smart titles** — turns `DRAKE - AT THE GATES FT LIL UZI VERT (CDQ)` into
@@ -62,6 +68,14 @@ the app (or in a `ffmpeg\` subfolder). The first-run wizard can also locate it.
 2. Tick the songs you want. New songs are ticked automatically.
 3. **Easy mode:** click **Download to Spotify (n)**.
    **Pro mode:** use **Download**, **Convert**, and **Spotify** separately.
+
+Ticks are kept per song, not per link: tick songs in one link, open another,
+tick more, and the main button counts all of them. **All songs** at the top of
+the library lists everything in one view.
+
+Re-adding or refreshing a link updates the existing entry rather than creating
+a second section. Right-click a link and choose **Move to folder…** to group
+links under a heading in the library.
 
 The three steps at the top always show where you are. To change a song's
 details, highlight it and click **Edit details…** (or double-click the row).

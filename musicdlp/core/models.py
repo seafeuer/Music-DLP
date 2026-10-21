@@ -29,6 +29,10 @@ DOWNLOADED_STATES = (DOWNLOADED, CONVERTING, CONVERTED, SYNCING, SYNCED)
 CONVERTED_STATES = (CONVERTED, SYNCED)
 ACTIVE_STATES = (QUEUED, DOWNLOADING, CONVERTING, SYNCING)
 
+# Sentinel used by the library list for the "all songs" view. Real source
+# ids start at 1.
+ALL_SONGS_ID = 0
+
 
 def status_label(status: str) -> str:
     return {
@@ -97,6 +101,11 @@ class Source:
     thumbnail_url: Optional[str]
     added_at: Optional[str]
     refreshed_at: Optional[str]
+    folder: Optional[str] = None
+
+    @property
+    def is_all(self) -> bool:
+        return self.id == ALL_SONGS_ID
 
     @classmethod
     def from_row(cls, row: Mapping[str, Any]) -> "Source":
@@ -112,6 +121,7 @@ class Source:
             thumbnail_url=row["thumbnail_url"],
             added_at=row["added_at"],
             refreshed_at=row["refreshed_at"],
+            folder=row["folder"] if "folder" in row.keys() else None,
         )
 
 

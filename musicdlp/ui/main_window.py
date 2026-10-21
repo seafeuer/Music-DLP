@@ -14,8 +14,8 @@ from typing import Optional
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel,
-    QLineEdit, QMainWindow, QMessageBox, QPushButton, QScrollArea,
+    QApplication, QComboBox, QDialog, QFileDialog, QHBoxLayout, QInputDialog,
+    QLabel, QLineEdit, QMainWindow, QMessageBox, QPushButton, QScrollArea,
     QSplitter, QStyle, QSystemTrayIcon, QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -24,7 +24,9 @@ from musicdlp.core.config import Settings
 from musicdlp.core.db import Database
 from musicdlp.core.errors import AppError, Cancelled
 from musicdlp.core.logging import LogEmitter, QtLogHandler
-from musicdlp.core.models import BatchItem, TrackRow, is_converted
+from musicdlp.core.models import (
+    ALL_SONGS_ID, BatchItem, Source, TrackRow, is_converted,
+)
 from musicdlp.core.paths import art_cache_dir, is_writable
 from musicdlp.services.ffmpeg import FFmpegService
 from musicdlp.services.legacy_import import (
@@ -169,7 +171,10 @@ class MainWindow(QMainWindow):
         self._resize_to_screen()
         self._restore_geometry()
 
-        self._checked_by_source: dict[int, set[int]] = {}
+        self._checked: set[int] = set()
+        self._visible_ids: set[int] = set()
+        self._auto_checked: set[int] = set()
+        self._all_source: Optional[Source] = None
         self._current_source_id: Optional[int] = None
         self._add_running = False
         self._add_cancel = threading.Event()
@@ -346,21 +351,24 @@ class MainWindow(QMainWindow):
         file_menu.addAction(quit_action)
 
         edit_menu = self.menuBar().addMenu("&Edit")
-        select_all = QAction("Select all tracks", self)
-        select_all.setShortcut("Ctrl+A")
-        select_all.triggered.connect(self.track_table.model.check_all)
-        edit_menu.addAction(select_all)
+        select_visible = QAction("Select songs shown", self)
+        select_visible.setShortcut("Ctrl+A")
+        select_visible.triggered.connect(self.track_table.model.check_all)
+        edit_menu.addAction(select_visible)
 
-        select_new = QAction("Select not-downloaded tracks", self)
+        select_everything = QAction("Select every song in the library", self)
+        select_everything.setShortcut("Ctrl+Shift+A")
+        select_everything.triggered.connect(self._select_every_song)
+        edit_menu.addAction(select_everything)
+
+        select_new = QAction("Select not-downloaded songs", self)
         select_new.triggered.connect(
             lambda: self.track_table.model.check_status("new")
         )
         edit_menu.addAction(select_new)
 
-        select_failed = QAction("Select failed tracks", self)
-        select_failed.triggered.connect(
-            lambda: self.track_table.model.check_status("error")
-        )
+        select_failed = QAction("Select songs that need attention", self)
+        select_failed.triggered.connect(self.track_table.model.check_problems)
         edit_menu.addAction(select_failed)
 
         clear_selection = QAction("Clear selection", self)
@@ -415,6 +423,8 @@ class MainWindow(QMainWindow):
         self.sidebar.delete_requested.connect(self._remove_source)
         self.sidebar.add_requested.connect(lambda: self.link_edit.setFocus())
         self.sidebar.open_url_requested.connect(self._open_url)
+        self.sidebar.select_all_requested.connect(self._select_every_song)
+        self.sidebar.move_to_folder_requested.connect(self._move_to_folder)
 
         self.track_table.checked_changed.connect(self._on_checked_changed)
         self.track_table.edit_details_requested.connect(self._open_details)
@@ -459,46 +469,131 @@ class MainWindow(QMainWindow):
     def _refresh_sources(self, selected_id: Optional[int] = None) -> None:
         sources = self.db.get_sources()
         counts = {source.id: self.db.status_counts(source.id) for source in sources}
+
         target = selected_id
         if target is None:
-            target = self._current_source_id or self.settings.last_source_id
-        if target is not None and not any(s.id == target for s in sources):
-            target = None
-        if target is None and sources:
-            target = sources[0].id
+            target = self._current_source_id
+        if target is None:
+            target = self.settings.last_source_id
 
-        self.sidebar.set_sources(sources, counts, target)
+        valid_ids = {source.id for source in sources}
+        if target is not None and target != ALL_SONGS_ID and target not in valid_ids:
+            target = None
+
+        if sources:
+            self._all_source = Source(
+                id=ALL_SONGS_ID,
+                url="",
+                kind="all",
+                platform="all",
+                external_id=None,
+                title="All songs",
+                uploader=(
+                    f"{len(sources)} link" + ("" if len(sources) == 1 else "s")
+                ),
+                item_count=self.db.count_tracks(),
+                thumbnail_url=None,
+                added_at=None,
+                refreshed_at=None,
+            )
+            counts[ALL_SONGS_ID] = self.db.all_status_counts()
+            display = [self._all_source, *sources]
+            # Drop ticks that point at songs that no longer exist.
+            existing = {row.track.id for row in self.db.get_all_track_rows()}
+            self._checked &= existing
+        else:
+            self._all_source = None
+            display = []
+            self._checked.clear()
+
+        if target is None:
+            target = ALL_SONGS_ID if sources else None
+
+        self.sidebar.set_sources(display, counts, target)
         if target is None:
             self._current_source_id = None
+            self._visible_ids = set()
             self.track_table.set_source(None, [])
             self.inspector.set_row(None)
         else:
             self._load_source(target)
 
     def _load_source(self, source_id: int) -> None:
-        source = self.db.get_source(source_id)
-        if source is None:
-            return
+        if source_id == ALL_SONGS_ID:
+            source = self._all_source
+            if source is None:
+                return
+            rows = self.db.get_all_track_rows()
+        else:
+            source = self.db.get_source(source_id)
+            if source is None:
+                return
+            rows = self.db.get_tracks_for_source(source_id)
+
         current = self.track_table.current_row()
         keep_selected = current.track.id if current is not None else None
         if self._current_source_id != source_id:
             keep_selected = None
 
+        # Newly added songs start ticked, once per link.
+        if source_id != ALL_SONGS_ID and source_id not in self._auto_checked:
+            self._auto_checked.add(source_id)
+            self._checked |= {
+                row.track.id for row in rows if row.track.status == "new"
+            }
+
         self._current_source_id = source_id
         self.settings.last_source_id = source_id
-        rows = self.db.get_tracks_for_source(source_id)
-        checked = self._checked_by_source.get(source_id)
-        if checked is None:
-            checked = {row.track.id for row in rows if row.track.status == "new"}
-        self._checked_by_source[source_id] = set(checked)
+        self._visible_ids = {row.track.id for row in rows}
+        visible_checked = self._checked & self._visible_ids
+
         self.track_table.set_source(
-            source, rows, checked, selected_track_id=keep_selected
+            source, rows, visible_checked, selected_track_id=keep_selected
         )
         if keep_selected is None:
             self.inspector.set_row(None)
         else:
             row = self.track_table.current_row()
             self.inspector.set_row(row, self._is_row_checked(row))
+        self._update_actions()
+
+    def _checked_rows(self) -> list[TrackRow]:
+        """Every ticked song, across all links."""
+        return self.db.get_track_rows_by_ids(self._checked)
+
+    def _move_to_folder(self, source_id: int) -> None:
+        """Put a link in a library folder, creating the folder if needed."""
+        source = self.db.get_source(source_id)
+        if source is None:
+            return
+
+        folders = self.db.get_folders()
+        current = source.folder or ""
+        options = ["(no folder)", *folders]
+        start = options.index(current) if current in options else 0
+
+        choice, ok = QInputDialog.getItem(
+            self,
+            "Move to folder",
+            "Folder name.\nChoose one, or type a new name to create it:",
+            options,
+            start,
+            True,
+        )
+        if not ok:
+            return
+
+        folder = "" if choice.strip() in ("", "(no folder)") else choice.strip()
+        self.db.set_source_folder(source_id, folder)
+        self._refresh_sources(source_id)
+        if folder:
+            self.status.set_idle(f"Moved to the folder “{folder}”.")
+        else:
+            self.status.set_idle("Removed from its folder.")
+
+    def _select_every_song(self) -> None:
+        self._checked = {row.track.id for row in self.db.get_all_track_rows()}
+        self._reload_current_source()
         self._update_actions()
 
     def _reload_current_source(self) -> None:
@@ -510,16 +605,18 @@ class MainWindow(QMainWindow):
         self.inspector.set_row(row, self._is_row_checked(row))
 
     def _is_row_checked(self, row) -> bool:
-        return bool(row) and row.track.id in self.track_table.model.checked
+        return bool(row) and row.track.id in self._checked
 
     def _set_track_included(self, track_id: int, included: bool) -> None:
         self.track_table.model.toggle_check(track_id, included)
 
     def _on_checked_changed(self) -> None:
-        if self._current_source_id is not None:
-            self._checked_by_source[self._current_source_id] = (
-                self.track_table.model.checked_ids()
-            )
+        # Merge the visible view's state back into the library-wide
+        # selection, so ticking songs in one link keeps the others ticked.
+        visible = self._visible_ids
+        current = self.track_table.model.checked_ids()
+        self._checked = (self._checked - visible) | current
+
         self.inspector.set_checked(self._is_row_checked(self.track_table.current_row()))
         self._update_actions()
         self._update_steps()
@@ -603,10 +700,22 @@ class MainWindow(QMainWindow):
         self._set_controls_enabled(True)
 
         if result.sources:
-            self._refresh_sources(result.sources[0])
+            # Tick every new song from every link that was just added, so a
+            # batch of links can be reviewed and sent in one go.
+            for source_id in result.sources:
+                self._auto_checked.add(source_id)
+                for row in self.db.get_tracks_for_source(source_id):
+                    if row.track.status == "new":
+                        self._checked.add(row.track.id)
+
+            # Several links at once: show them together rather than one link.
+            target = (
+                ALL_SONGS_ID if len(result.sources) > 1 else result.sources[0]
+            )
+            self._refresh_sources(target)
             summary = (
-                f"Added {len(result.sources)} source(s), "
-                f"{result.tracks_total} track(s)"
+                f"Added {len(result.sources)} link(s), "
+                f"{result.tracks_total} song(s)"
             )
             if result.tracks_new:
                 summary += f", {result.tracks_new} new"
@@ -614,6 +723,8 @@ class MainWindow(QMainWindow):
                 summary += f", {result.tracks_owned} already downloaded"
             if result.titles_fixed:
                 summary += f", {result.titles_fixed} name(s) tidied"
+            if len(result.sources) > 1:
+                summary += " · all new songs ticked"
             if result.errors:
                 summary += f" · {len(result.errors)} link(s) failed (see Logs)"
             self.status.set_idle(summary)
@@ -639,10 +750,12 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------- refreshing
 
     def _refresh_current(self) -> None:
-        if self._current_source_id is not None:
+        if self._current_source_id is not None and self._current_source_id != ALL_SONGS_ID:
             self._refresh_source(self._current_source_id)
 
     def _refresh_source(self, source_id: int) -> None:
+        if source_id == ALL_SONGS_ID:
+            return
         if self._is_busy():
             self.status.set_idle("Wait for the current job to finish.")
             return
@@ -686,7 +799,7 @@ class MainWindow(QMainWindow):
             if widget:
                 widget.deleteLater()
 
-        count = self.track_table.checked_count()
+        count = len(self._checked)
         busy = self._is_busy()
         ffmpeg_ok = self.ctx.ffmpeg.available
 
@@ -730,7 +843,7 @@ class MainWindow(QMainWindow):
         if self._is_busy():
             return
 
-        count = self.track_table.checked_count()
+        count = len(self._checked)
         ffmpeg_ok = self.ctx.ffmpeg.available
         plural = "" if count == 1 else "s"
         if count:
@@ -798,9 +911,9 @@ class MainWindow(QMainWindow):
         return self._add_running or self.ctx.pipeline.is_running
 
     def _start_easy(self) -> None:
-        rows = self.track_table.checked_rows()
+        rows = self._checked_rows()
         if not rows:
-            self.status.set_idle("Select at least one track.")
+            self.status.set_idle("Tick at least one song first.")
             return
         if self.ctx.ffmpeg.available:
             stages = ["download", "convert", "sync"]
@@ -812,7 +925,7 @@ class MainWindow(QMainWindow):
         self._start_pipeline(rows, stages)
 
     def _start_stage(self, stage: str) -> None:
-        rows = self.track_table.checked_rows()
+        rows = self._checked_rows()
         if not rows:
             self.status.set_idle("Tick at least one song first.")
             return

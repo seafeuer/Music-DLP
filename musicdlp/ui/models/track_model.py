@@ -46,6 +46,21 @@ def _format_for(track: Track) -> str:
     return "-"
 
 
+def _is_checked_value(value) -> bool:
+    """Read a check state from whatever Qt hands us.
+
+    Qt passes the state as a plain int (2 for checked) when a user clicks,
+    but as a ``Qt.CheckState`` member when code calls ``setData``. Comparing
+    either form directly with ``Qt.Checked`` is unreliable, and made a
+    ticked box impossible to tick again.
+    """
+    raw = getattr(value, "value", value)
+    try:
+        return int(raw) == 2
+    except (TypeError, ValueError):
+        return False
+
+
 class TrackTableModel(QAbstractTableModel):
     check_changed = Signal()
     check_toggled = Signal(int)
@@ -56,6 +71,7 @@ class TrackTableModel(QAbstractTableModel):
         self.checked: set[int] = set()
         self.progress: dict[int, float] = {}
         self._index_by_id: dict[int, int] = {}
+        self.numbered_rows = False
 
     # ------------------------------------------------------------ model API
 
@@ -81,6 +97,10 @@ class TrackTableModel(QAbstractTableModel):
 
         if role == Qt.DisplayRole:
             if column == COL_POSITION:
+                # In the "all songs" view each link's own position would
+                # repeat (1, 1, 1...), so number the rows instead.
+                if self.numbered_rows:
+                    return str(index.row() + 1)
                 return str(row.position)
             if column == COL_TITLE:
                 return row.display_title
@@ -138,7 +158,7 @@ class TrackTableModel(QAbstractTableModel):
             and index.column() == COL_CHECK
         ):
             track_id = self.rows[index.row()].track.id
-            if value == Qt.Checked:
+            if _is_checked_value(value):
                 self.checked.add(track_id)
             else:
                 self.checked.discard(track_id)

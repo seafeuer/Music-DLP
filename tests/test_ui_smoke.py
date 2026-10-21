@@ -69,12 +69,19 @@ def window(qtbot, qapp, tmp_path, monkeypatch):
 
 def test_rows_and_default_selection(window):
     main, db, ids = window
+    # The app opens on "All songs", where nothing is ticked automatically.
     assert main.track_table.model.rowCount() == 2
-    assert main.track_table.checked_count() == 2
+    assert main._current_source_id == 0
+    assert main.track_table.checked_count() == 0
     assert main.settings.mode == "easy"
     assert main.action_layout.count() == 1
     # The details panel is visible in both modes so editing stays discoverable.
     assert not main.inspector_scroll.isHidden()
+
+    # Opening the link itself ticks its new songs.
+    source_id = db.get_sources()[0].id
+    main._load_source(source_id)
+    assert main.track_table.checked_count() == 2
 
 
 def test_pro_mode_and_inspector(window):
@@ -142,7 +149,9 @@ def test_checkbox_click_keeps_the_window_working(window):
 
 
 def test_inspector_include_checkbox_mirrors_the_list(window):
-    main, _db, ids = window
+    main, db, ids = window
+    source_id = db.get_sources()[0].id
+    main._load_source(source_id)
     main.track_table._select_by_track_id(ids[0])
     assert main.inspector.include_check.isChecked()
 

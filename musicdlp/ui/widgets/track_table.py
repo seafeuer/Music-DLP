@@ -177,6 +177,7 @@ class TrackTableWidget(QWidget):
         self.source = source
         self.search.clear()
         self.filter_combo.setCurrentIndex(0)
+        self.model.numbered_rows = bool(source is not None and source.is_all)
         self.model.set_rows(rows, checked)
         self.table.sortByColumn(COL_POSITION, Qt.AscendingOrder)
 
