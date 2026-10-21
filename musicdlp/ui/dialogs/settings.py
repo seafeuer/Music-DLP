@@ -471,32 +471,37 @@ class SettingsDialog(QDialog):
             api_key=self.ai_key_edit.text().strip(),
         )
 
-    def _run_ai_task(
+    def _run_task(
         self,
         work: Callable[[], object],
         on_done: Callable[[object, Optional[BaseException]], None],
+        *,
+        status_label: QLabel,
         busy_text: str,
+        disable: tuple = (),
     ) -> None:
-        """Run a network call off the UI thread and report back on it.
+        """Run slow work off the UI thread and report back on it.
 
-        Talking to a model server can take many seconds, and a frozen dialog
-        looks broken. The result is handed back through a short timer rather
-        than from the worker, so widgets are only ever touched here.
+        Talking to a model server, or to pip, can take many seconds, and a
+        frozen dialog looks broken. The result is handed back through a short
+        timer rather than from the worker, so widgets are only ever touched
+        here.
         """
-        if getattr(self, "_ai_busy", False):
+        if getattr(self, "_task_busy", False):
             return
-        self._ai_busy = True
-        self._ai_result: list = []
-        self.ai_status.setStyleSheet("")
-        self.ai_status.setText(busy_text)
-        self.ai_test_button.setEnabled(False)
-        self.ai_refresh_button.setEnabled(False)
+        self._task_busy = True
+        self._task_result: list = []
+        status_label.setStyleSheet("")
+        status_label.setText(busy_text)
+        widgets = tuple(disable)
+        for widget in widgets:
+            widget.setEnabled(False)
 
         def runner() -> None:
             try:
-                self._ai_result.append((work(), None))
+                self._task_result.append((work(), None))
             except BaseException as exc:  # noqa: BLE001 - shown to the user
-                self._ai_result.append((None, exc))
+                self._task_result.append((None, exc))
 
         threading.Thread(target=runner, daemon=True).start()
 
@@ -504,18 +509,32 @@ class SettingsDialog(QDialog):
         timer.setInterval(120)
 
         def check() -> None:
-            if not self._ai_result:
+            if not self._task_result:
                 return
             timer.stop()
             timer.deleteLater()
-            self._ai_busy = False
-            self.ai_test_button.setEnabled(True)
-            self.ai_refresh_button.setEnabled(True)
-            value, error = self._ai_result[0]
+            self._task_busy = False
+            for widget in widgets:
+                widget.setEnabled(True)
+            value, error = self._task_result[0]
             on_done(value, error)
 
         timer.timeout.connect(check)
         timer.start()
+
+    def _run_ai_task(
+        self,
+        work: Callable[[], object],
+        on_done: Callable[[object, Optional[BaseException]], None],
+        busy_text: str,
+    ) -> None:
+        self._run_task(
+            work,
+            on_done,
+            status_label=self.ai_status,
+            busy_text=busy_text,
+            disable=(self.ai_test_button, self.ai_refresh_button),
+        )
 
     def _refresh_ai_models(self) -> None:
         settings = self._ai_settings()
@@ -574,6 +593,68 @@ class SettingsDialog(QDialog):
             return f"{exc.args[0]}\n{exc.args[1]}"
         return str(exc)
 
+    def _update_ytdlp(self) -> None:
+        """Install the newest yt-dlp, which fixes most site breakages."""
+        reply = QMessageBox.question(
+            self,
+            "Update yt-dlp",
+            "Download and install the newest yt-dlp?\n\n"
+            "This uses pip, needs an internet connection, and takes a "
+            "minute. A restart of Music DLP is needed afterwards.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        def work():
+            import subprocess
+            import sys
+
+            flags = 0
+            if hasattr(subprocess, "CREATE_NO_WINDOW"):
+                flags = subprocess.CREATE_NO_WINDOW
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "--upgrade",
+                 "--quiet", "yt-dlp"],
+                capture_output=True,
+                text=True,
+                timeout=300,
+                creationflags=flags,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    (result.stderr or result.stdout or "pip failed").strip()[-400:]
+                )
+            # The running process still has the old module loaded, so ask a
+            # fresh interpreter what was installed.
+            probe = subprocess.run(
+                [sys.executable, "-c",
+                 "import yt_dlp; print(yt_dlp.version.__version__)"],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                creationflags=flags,
+            )
+            return (probe.stdout or "").strip() or "unknown"
+
+        def done(version, error) -> None:
+            if error is not None:
+                self.ytdlp_status.setText(f"Update failed: {error}")
+                return
+            self.ytdlp_status.setText(
+                f"yt-dlp {version} is installed. Restart Music DLP to use it."
+            )
+            self.ytdlp_button.setText(f"Update yt-dlp (currently {version})")
+
+        self._run_task(
+            work,
+            done,
+            status_label=self.ytdlp_status,
+            busy_text="Updating yt-dlp…",
+            disable=(self.ytdlp_button,),
+        )
+
     def _build_advanced(self) -> None:
         tab = QWidget()
         form = QFormLayout(tab)
@@ -619,6 +700,20 @@ class SettingsDialog(QDialog):
         buttons.addWidget(open_logs)
         buttons.addStretch(1)
         form.addRow("", self._wrap(buttons))
+
+        self.ytdlp_button = QPushButton(
+            f"Update yt-dlp (currently {self._ytdlp.version()})"
+        )
+        self.ytdlp_button.setToolTip(
+            "Sites change often, and a site that stopped working is usually "
+            "fixed by updating yt-dlp"
+        )
+        self.ytdlp_button.clicked.connect(self._update_ytdlp)
+        self.ytdlp_status = QLabel("")
+        self.ytdlp_status.setWordWrap(True)
+        self.ytdlp_status.setObjectName("muted")
+        form.addRow("", self.ytdlp_button)
+        form.addRow("", self.ytdlp_status)
 
         self.tabs.addTab(tab, "Advanced")
 

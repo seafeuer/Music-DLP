@@ -30,12 +30,14 @@ class TrackDetailsDialog(QDialog):
         track_default: int,
         filename_template: str,
         parent=None,
+        translate_callback=None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Edit details")
         self.setMinimumWidth(620)
         self.track = track
         self.filename_template = filename_template
+        self.translate_callback = translate_callback
 
         self.cover_path: Optional[str] = track.cover_path
         self.cover_changed = False
@@ -103,6 +105,15 @@ class TrackDetailsDialog(QDialog):
         fields.addRow("Artist", self.artist_edit)
         fields.addRow("Album", self.album_edit)
         fields.addRow("Track number", self.track_spin)
+
+        if self.translate_callback is not None:
+            self.translate_button = QPushButton("Translate title and artist…")
+            self.translate_button.setToolTip(
+                "Turn this song's name into Japanese, Hebrew, or another "
+                "language. You can review it before saving."
+            )
+            self.translate_button.clicked.connect(self._translate)
+            fields.addRow("", self.translate_button)
 
         self.preview = QLabel()
         self.preview.setObjectName("mutedSmall")
@@ -283,6 +294,19 @@ class TrackDetailsDialog(QDialog):
         if self.track.smart_artist:
             self.artist_edit.setText(self.track.smart_artist)
         self.suggestion_box.hide()
+
+    def _translate(self) -> None:
+        """Fill the fields with a translated name, for review before saving."""
+        if self.translate_callback is None:
+            return
+        result = self.translate_callback(self.track)
+        if not result:
+            return
+        title, artist = result
+        if title:
+            self.title_edit.setText(title)
+        if artist:
+            self.artist_edit.setText(artist)
 
     def _update_preview(self) -> None:
         stem = render_template(

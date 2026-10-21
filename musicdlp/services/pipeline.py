@@ -360,6 +360,27 @@ class Pipeline(QObject):
                             raise Cancelled()
                         time.sleep(min(0.2, max(0.0, deadline - time.monotonic())))
 
+    def _filename_template(self, source, settings: Settings) -> str:
+        """The naming pattern for this song.
+
+        A link can carry its own pattern, and a folder's pattern applies to
+        every link filed inside it. The global setting is the fallback.
+        """
+        if source is None:
+            return settings.filename_template
+        own = getattr(source, "filename_template", None)
+        if own:
+            return own
+        folder_name = (getattr(source, "folder", "") or "").strip()
+        if folder_name:
+            try:
+                folder = self.db.get_folder_by_name(folder_name)
+            except Exception:  # noqa: BLE001 - naming must never break a run
+                folder = None
+            if folder is not None and folder.filename_template:
+                return folder.filename_template
+        return settings.filename_template
+
     def _stage_convert(
         self,
         items: list[BatchItem],
@@ -421,7 +442,7 @@ class Pipeline(QObject):
                 out_dir.mkdir(parents=True, exist_ok=True)
 
                 stem = render_template(
-                    settings.filename_template,
+                    self._filename_template(item.source, settings),
                     title=track.display_title,
                     artist=track.display_artist,
                     album=album,

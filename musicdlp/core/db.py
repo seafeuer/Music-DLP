@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS sources (
     item_count    INTEGER NOT NULL DEFAULT 0,
     thumbnail_url TEXT,
     folder        TEXT NOT NULL DEFAULT '',
+    filename_template TEXT,
     added_at      TEXT NOT NULL DEFAULT (datetime('now')),
     refreshed_at  TEXT
 );
@@ -97,13 +98,58 @@ TRACK_UPDATABLE = {
     "raw_path", "mp3_path", "m4a_path", "cover_path",
     "downloaded_at", "converted_at", "synced_at", "sync_error",
     "needs_update", "smart_title", "smart_artist", "smart_confidence",
-    "smart_reason",
+    "smart_reason", "duration",
 }
 
 SOURCE_UPDATABLE = {
     "title", "uploader", "item_count", "thumbnail_url", "refreshed_at",
-    "url", "folder",
+    "url", "folder", "filename_template",
 }
+
+
+def _match_key(text: Optional[str]) -> str:
+    """A comparison form for a song name: letters and digits only."""
+    cleaned = []
+    for char in (text or "").lower():
+        if char.isalnum():
+            cleaned.append(char)
+        elif cleaned and cleaned[-1] != " ":
+            cleaned.append(" ")
+    return "".join(cleaned).strip()
+
+
+# Two copies of one upload rarely differ by more than a few seconds.
+_LENGTH_TOLERANCE = 5
+
+
+def _cluster_copies(rows: list[TrackRow]) -> list[list[TrackRow]]:
+    """Split same-title songs into clusters that look like copies."""
+    clusters: list[list[TrackRow]] = []
+    for row in rows:
+        placed = False
+        for cluster in clusters:
+            if any(_same_recording(row, other) for other in cluster):
+                cluster.append(row)
+                placed = True
+                break
+        if not placed:
+            clusters.append([row])
+    return clusters
+
+
+def _same_recording(left: TrackRow, right: TrackRow) -> bool:
+    left_artist = _match_key(left.track.display_artist)
+    right_artist = _match_key(right.track.display_artist)
+    if left_artist and left_artist == right_artist:
+        return True
+
+    left_length = left.track.duration or 0
+    right_length = right.track.duration or 0
+    if left_length > 0 and right_length > 0:
+        return abs(int(left_length) - int(right_length)) <= _LENGTH_TOLERANCE
+    # Without a length to compare, an artist match was the only evidence,
+    # and there was none.
+    return False
 
 
 class Database:
@@ -195,6 +241,11 @@ class Database:
                 "ALTER TABLE sources ADD COLUMN folder TEXT NOT NULL DEFAULT ''"
             )
             logger.info("Migration: added sources.folder")
+        if "filename_template" not in source_columns:
+            conn.execute(
+                "ALTER TABLE sources ADD COLUMN filename_template TEXT"
+            )
+            logger.info("Migration: added sources.filename_template")
 
     # --------------------------------------------------------------- sources
 
@@ -445,6 +496,15 @@ class Database:
             "WHERE TRIM(folder) <> '' ORDER BY folder COLLATE NOCASE"
         ).fetchall()
         return [row["folder"] for row in rows]
+
+    def get_folder_by_name(self, name: str) -> Optional[Source]:
+        """The folder source with this title, if it exists."""
+        row = self._conn().execute(
+            "SELECT * FROM sources WHERE kind = 'folder' "
+            "AND title = ? COLLATE NOCASE LIMIT 1",
+            ((name or "").strip(),),
+        ).fetchone()
+        return Source.from_row(row) if row else None
 
     def get_sources(self) -> list[Source]:
         rows = self._conn().execute(
@@ -738,6 +798,71 @@ class Database:
                 if len(part) >= 3:
                     names.add(part)
         return names
+
+    def track_links(self, track_id: int) -> list[tuple[int, int]]:
+        """The sources a track belongs to, with its position in each.
+
+        Used to put a song back where it was after a move or a removal.
+        """
+        rows = self._conn().execute(
+            "SELECT source_id, position FROM source_tracks WHERE track_id = ? "
+            "ORDER BY source_id",
+            (int(track_id),),
+        ).fetchall()
+        return [(int(row["source_id"]), int(row["position"])) for row in rows]
+
+    def restore_track_links(
+        self, track_id: int, links: Iterable[tuple[int, int]]
+    ) -> None:
+        """Put a track back into exactly the sources and positions given."""
+        track_id = int(track_id)
+        wanted = [(int(source_id), int(position)) for source_id, position in links]
+        conn = self._conn()
+        with conn:
+            conn.execute(
+                "DELETE FROM source_tracks WHERE track_id = ?", (track_id,)
+            )
+            existing = {
+                int(row["id"])
+                for row in conn.execute("SELECT id FROM sources").fetchall()
+            }
+            for source_id, position in wanted:
+                if source_id not in existing:
+                    continue
+                conn.execute(
+                    "INSERT INTO source_tracks (source_id, track_id, position) "
+                    "VALUES (?, ?, ?)",
+                    (source_id, track_id, position),
+                )
+            self._prune_and_recount(
+                conn, {source_id for source_id, _p in wanted}
+            )
+
+    def find_duplicate_groups(self) -> list[list[TrackRow]]:
+        """Songs that look like the same recording, grouped together.
+
+        Two different uploads of one song have different media ids, so this
+        compares the names people see: title first, ignoring case and
+        punctuation. Within one title, two songs are treated as copies when
+        the artist matches, or when their lengths are within a few seconds —
+        the same upload through two channels often has a different channel
+        name but the same runtime.
+        """
+        by_title: dict[str, list[TrackRow]] = {}
+        for row in self.get_all_track_rows():
+            title = _match_key(row.track.display_title)
+            if not title:
+                continue
+            by_title.setdefault(title, []).append(row)
+
+        groups: list[list[TrackRow]] = []
+        for rows in by_title.values():
+            if len(rows) < 2:
+                continue
+            for cluster in _cluster_copies(rows):
+                if len(cluster) > 1:
+                    groups.append(cluster)
+        return groups
 
     def unlink_track_everywhere(self, track_id: int) -> None:
         """Remove a track from every source and refresh those counts."""

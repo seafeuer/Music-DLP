@@ -52,7 +52,7 @@ class SmartTitlesDialog(QDialog):
         parent=None,
         *,
         ai_settings: Optional[AISettings] = None,
-        on_setup_ai: Optional[Callable[[], None]] = None,
+        on_setup_ai: Optional[Callable[[], Optional[AISettings]]] = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Suggested titles")
@@ -193,9 +193,16 @@ class SmartTitlesDialog(QDialog):
     def _on_ai_clicked(self) -> None:
         configured = self.ai_settings is not None and self.ai_settings.enabled
         if not configured:
-            if self.on_setup_ai is not None:
-                self.on_setup_ai()
-            return
+            if self.on_setup_ai is None:
+                return
+            # Settings was opened from here; carry on with whatever was
+            # saved, since the user already asked for AI naming.
+            updated = self.on_setup_ai()
+            if updated is not None:
+                self.ai_settings = updated
+            self._update_ai_button()
+            if self.ai_settings is None or not self.ai_settings.enabled:
+                return
         self._ask_ai()
 
     def _ai_targets(self) -> list[TrackRow]:

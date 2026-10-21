@@ -120,6 +120,7 @@ Two ways, both optional and both review-first.
 | Ollama on this computer | `http://localhost:11434` | none |
 | Ollama cloud | `https://ollama.com` | required |
 | Another compatible API | any `/v1` address | required |
+| Anthropic-style API | any address serving `/v1/messages` | required |
 
 Press **Refresh list** to see the models the server offers, and **Test
 connection** to check the key. Then use **AI → Name songs with AI…** or the
@@ -133,6 +134,52 @@ names land in Suggested titles for review.
 
 AI never overwrites a song you have edited, and never applies a name by
 itself.
+
+### Translating titles
+
+**AI → Translate ticked songs…** (Ctrl+T) or **Translate every song in this
+link…** turns names into another language — Japanese, Hebrew, Korean, Chinese,
+Spanish, French, and any other language you type. This is separate from
+naming: it takes the name a song already has and gives you the same song in
+the language you read.
+
+Three ways to write it, because Japanese, Hebrew, and similar languages have
+two useful forms:
+
+| Choice | Result |
+|---|---|
+| In the language's own script | 夜に駆ける |
+| In Latin letters | Yoru ni Kakeru |
+| Both | 夜に駆ける (Yoru ni Kakeru) |
+
+Artist names are translated too unless you untick the box. Songs already in
+the target language are left alone. Everything is shown for review and can be
+edited by hand; nothing is saved until Apply. The language and style are
+remembered for next time. **Edit details → Translate title and artist…** does
+the same for one song.
+
+### Album details without AI
+
+- **Edit → Look up details online…** asks MusicBrainz, a free public
+  catalogue, for the album each song belongs to and its track number. No
+  account, no model. Review the results, then Apply.
+- **Edit → Number ticked songs as an album…** gives every ticked song one
+  album name and consecutive track numbers, so Spotify shows them as one
+  album instead of loose singles.
+- **Edit → Update files for ticked songs** (Ctrl+Shift+R) rewrites every file
+  whose details changed, and sends it to Spotify again if it was there.
+
+### Finding and fixing
+
+- **Search all songs** (Ctrl+F, or the box in the top bar) searches the whole
+  library, whichever link is open. Clearing the box returns to the link you
+  came from.
+- **Edit → Find duplicate songs…** groups songs that look like the same
+  recording added twice, keeps the copy that is furthest along, and lets you
+  remove the rest.
+- **Ctrl+Z** undoes the last rename, translation, move into a folder, folder
+  creation, or removal that kept its files.
+- **F2** edits the highlighted song.
 
 ### Cover art
 
@@ -185,7 +232,13 @@ Switch modes from the toolbar at any time; the selection is preserved.
   `{artist}`, `{album}`, `{track}`, `{id}`, `{source}`.
 - **Output → Normalize** — two-pass loudness normalization to −14 LUFS.
 - **Spotify → When sending** — copy (keep the output file) or move.
-- **Advanced** — FFmpeg path, diagnostics, log folder.
+- **Advanced** — FFmpeg path, diagnostics, log folder, and **Update yt-dlp**.
+  Updating is the first thing to try when a site stops working.
+
+A folder can have its own file name pattern: right-click a folder in the
+library → **File name pattern…**. Songs filed in that folder use it instead
+of the global one, so an album can be numbered `{track:02d} - {title}` while
+the rest of the library stays `{title}`.
 
 ## Building a standalone app
 
@@ -211,7 +264,8 @@ offscreen Qt smoke test.
 musicdlp/
   core/       paths, settings, database, models, logging, errors
   services/   links, yt-dlp, FFmpeg, tagging, thumbnails, Spotify,
-              library, pipeline, legacy import
+              library, pipeline, legacy import, AI, translation,
+              artwork, catalogue lookup
   ui/         main window, table model, delegates, widgets, dialogs, theme
 ```
 
@@ -224,6 +278,9 @@ musicdlp/
 | X post fails | It may be protected or contain no video; try browser cookies |
 | Tracks not in Spotify | Spotify → Settings → Show local files → add the folder, then restart Spotify |
 | Duplicate entries in Spotify | Send only one format (Settings → Spotify → MP3) |
+| A site suddenly stops working | Settings → Advanced → **Update yt-dlp** |
+| AI says "not set up" | Settings → AI → pick a provider and model, then Test connection |
+| Translation came out wrong | Untick that row and edit it by hand; the model is only a first draft |
 
 Logs live in `%LOCALAPPDATA%\MusicDLP\logs\musicdlp.log`; the app's **Logs**
 drawer shows the same messages and can open the folder.

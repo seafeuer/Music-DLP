@@ -21,6 +21,8 @@ BITRATES = ("128", "192", "256", "320")
 COOKIE_MODES = ("none", "browser", "file")
 COPY_MODES = ("copy", "move")
 BROWSERS = ("chrome", "edge", "firefox", "brave", "opera", "vivaldi", "chromium")
+AI_PROVIDERS = ("ollama", "openai", "anthropic")
+TRANSLATE_STYLES = ("translated", "transliterated", "both")
 
 
 @dataclass
@@ -60,6 +62,11 @@ class Settings:
     ai_model: str = ""
     ai_api_key: str = ""
     ai_find_artwork: bool = True
+
+    # Translation is a separate action, with its own remembered choices.
+    translate_language: str = "Japanese"
+    translate_style: str = "both"
+    translate_artist: bool = True
 
     log_level: str = "INFO"
 
@@ -152,10 +159,14 @@ class Settings:
             self.filename_template = "{title}"
         if self.log_level not in ("DEBUG", "INFO", "WARNING", "ERROR"):
             self.log_level = "INFO"
-        if self.ai_provider not in ("ollama", "openai"):
+        if self.ai_provider not in AI_PROVIDERS:
             self.ai_provider = "ollama"
         self.ai_base_url = (self.ai_base_url or "").strip()
         self.ai_model = (self.ai_model or "").strip()
+
+        self.translate_language = (self.translate_language or "").strip() or "Japanese"
+        if self.translate_style not in TRANSLATE_STYLES:
+            self.translate_style = "both"
 
     @property
     def ai_configured(self) -> bool:

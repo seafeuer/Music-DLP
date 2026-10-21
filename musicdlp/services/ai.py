@@ -6,8 +6,9 @@ ever used when the user asks for it.
 
 Two wire formats are supported:
 
-* ``ollama``  - POST {base}/api/chat            (local Ollama or ollama.com)
-* ``openai``  - POST {base}/v1/chat/completions (any compatible endpoint)
+* ``ollama``    - POST {base}/api/chat            (local Ollama or ollama.com)
+* ``openai``    - POST {base}/v1/chat/completions (any compatible endpoint)
+* ``anthropic`` - POST {base}/v1/messages         (Anthropic-style API)
 
 Requests always carry a normal browser User-Agent. Some hosted endpoints sit
 behind a proxy that rejects Python's default agent with a 403.
@@ -32,8 +33,9 @@ USER_AGENT = (
 
 PROVIDER_OLLAMA = "ollama"
 PROVIDER_OPENAI = "openai"
+PROVIDER_ANTHROPIC = "anthropic"
 
-PROVIDERS = (PROVIDER_OLLAMA, PROVIDER_OPENAI)
+PROVIDERS = (PROVIDER_OLLAMA, PROVIDER_OPENAI, PROVIDER_ANTHROPIC)
 
 # Presets shown in Settings.
 OLLAMA_LOCAL_URL = "http://localhost:11434"
@@ -80,6 +82,7 @@ class AISettings:
     model: str = ""
     api_key: str = ""
     timeout: int = 120
+    max_tokens: int = 2048
 
     @property
     def enabled(self) -> bool:
@@ -107,6 +110,11 @@ def _headers(settings: AISettings) -> dict:
     key = settings.api_key.strip()
     if key:
         headers["Authorization"] = f"Bearer {key}"
+        if settings.provider == PROVIDER_ANTHROPIC:
+            # Anthropic's own API reads x-api-key; compatible gateways read
+            # the bearer token. Sending both covers either kind of server.
+            headers["x-api-key"] = key
+            headers["anthropic-version"] = "2023-06-01"
     return headers
 
 
@@ -211,6 +219,27 @@ def chat(settings: AISettings, system: str, user: str) -> str:
         )
         message = data.get("message") or {}
         return str(message.get("content") or "")
+
+    if settings.provider == PROVIDER_ANTHROPIC:
+        data = _post(
+            settings,
+            "/v1/messages",
+            {
+                "model": settings.model,
+                "max_tokens": max(256, int(settings.max_tokens or 2048)),
+                "temperature": 0.2,
+                "system": system,
+                "messages": [{"role": "user", "content": user}],
+            },
+        )
+        blocks = data.get("content") or []
+        if isinstance(blocks, str):
+            return blocks
+        return "".join(
+            str(block.get("text") or "")
+            for block in blocks
+            if isinstance(block, dict)
+        )
 
     data = _post(
         settings,

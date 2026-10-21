@@ -29,6 +29,7 @@ from musicdlp.core.models import (
 )
 from musicdlp.core.paths import art_cache_dir, is_writable
 from musicdlp.services.ffmpeg import FFmpegService
+from musicdlp.services.filenames import render_template
 from musicdlp.services.ai import AISettings
 from musicdlp.services.legacy_import import (
     ImportSummary, find_legacy_db, import_legacy,
@@ -42,11 +43,14 @@ from musicdlp.services.urls import split_links
 from musicdlp.services.ytdlp import YtDlpService
 from musicdlp.ui.dialogs.ai_import import AIImportDialog
 from musicdlp.ui.dialogs.bulk_add import BulkAddDialog
+from musicdlp.ui.dialogs.duplicates import DuplicateDialog
+from musicdlp.ui.dialogs.lookup import LookupDialog
 from musicdlp.ui.dialogs.settings import SettingsDialog
 from musicdlp.ui.dialogs.setup import SetupDialog
 from musicdlp.ui.dialogs.smart_titles import SmartTitlesDialog
 from musicdlp.ui.dialogs.spotify_setup import SpotifyDialog
 from musicdlp.ui.dialogs.track_details import TrackDetailsDialog
+from musicdlp.ui.dialogs.translate import TranslationDialog
 from musicdlp.ui.theme import apply_theme
 from musicdlp.ui.widgets.inspector import Inspector
 from musicdlp.ui.widgets.log_drawer import LogDrawer
@@ -186,6 +190,13 @@ class MainWindow(QMainWindow):
         self._add_timer: Optional[QTimer] = None
         self._active_signals: Optional[LibrarySignals] = None
         self._tray: Optional[QSystemTrayIcon] = None
+        # The link the library search jumped away from, so clearing the
+        # search box can go back to it.
+        self._search_from: Optional[int] = None
+        self._search_guard = False
+        # One-step-at-a-time undo for the accidents that are easy to make:
+        # a batch rename, a move into the wrong folder, a removal.
+        self._undo: list[tuple[str, object]] = []
 
         self._build_ui()
         self._build_menus()
@@ -303,6 +314,18 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.theme_button)
         self._update_theme_button()
 
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("Search all songs…")
+        self.search_edit.setClearButtonEnabled(True)
+        self.search_edit.setMinimumWidth(160)
+        self.search_edit.setMaximumWidth(260)
+        self.search_edit.setToolTip(
+            "Search every song in the library, whichever link it came from "
+            "(Ctrl+F)"
+        )
+        self.search_edit.textChanged.connect(self._on_global_search)
+        layout.addWidget(self.search_edit)
+
         self.action_area = QWidget()
         self.action_layout = QHBoxLayout(self.action_area)
         self.action_layout.setContentsMargins(0, 0, 0, 0)
@@ -378,10 +401,58 @@ class MainWindow(QMainWindow):
         clear_selection.triggered.connect(self.track_table.model.clear_checks)
         edit_menu.addAction(clear_selection)
 
+        edit_menu.addSeparator()
+        self.undo_action = QAction("Undo", self)
+        self.undo_action.setShortcut("Ctrl+Z")
+        self.undo_action.triggered.connect(self._undo_last)
+        self.undo_action.setEnabled(False)
+        edit_menu.addAction(self.undo_action)
+
+        self.details_action = QAction("Edit details for the highlighted song", self)
+        self.details_action.setShortcut("F2")
+        self.details_action.triggered.connect(self._edit_highlighted)
+        edit_menu.addAction(self.details_action)
+
+        edit_menu.addSeparator()
+        self.update_files_action = QAction("Update files for ticked songs", self)
+        self.update_files_action.setShortcut("Ctrl+Shift+R")
+        self.update_files_action.triggered.connect(self._update_files)
+        edit_menu.addAction(self.update_files_action)
+
+        self.album_action = QAction("Number ticked songs as an album…", self)
+        self.album_action.triggered.connect(self._number_as_album)
+        edit_menu.addAction(self.album_action)
+
+        self.lookup_action = QAction("Look up details online…", self)
+        self.lookup_action.triggered.connect(self._look_up_details)
+        edit_menu.addAction(self.lookup_action)
+
+        edit_menu.addSeparator()
+        self.duplicates_action = QAction("Find duplicate songs…", self)
+        self.duplicates_action.triggered.connect(self._find_duplicates)
+        edit_menu.addAction(self.duplicates_action)
+
         ai_menu = self.menuBar().addMenu("&AI")
         ask_action = QAction("Name songs with AI…", self)
         ask_action.triggered.connect(lambda: self._open_suggestions(True))
         ai_menu.addAction(ask_action)
+
+        self.translate_checked_action = QAction(
+            "Translate ticked songs…", self
+        )
+        self.translate_checked_action.setShortcut("Ctrl+T")
+        self.translate_checked_action.triggered.connect(
+            lambda: self._open_translate(only_checked=True)
+        )
+        ai_menu.addAction(self.translate_checked_action)
+
+        self.translate_all_action = QAction(
+            "Translate every song in this link…", self
+        )
+        self.translate_all_action.triggered.connect(
+            lambda: self._open_translate(only_checked=False)
+        )
+        ai_menu.addAction(self.translate_all_action)
 
         ai_menu.addSeparator()
         export_action = QAction("Export songs for a chatbot…", self)
@@ -406,6 +477,12 @@ class MainWindow(QMainWindow):
             lambda visible: self.inspector_scroll.setVisible(visible)
         )
         view_menu.addAction(self.inspector_action)
+
+        view_menu.addSeparator()
+        find_action = QAction("Search every song", self)
+        find_action.setShortcut("Ctrl+F")
+        find_action.triggered.connect(self._focus_search)
+        view_menu.addAction(find_action)
 
         help_menu = self.menuBar().addMenu("&Help")
         setup_action = QAction("Set up Music DLP…", self)
@@ -446,6 +523,7 @@ class MainWindow(QMainWindow):
         self.sidebar.source_dropped.connect(self._source_dropped)
         self.sidebar.new_folder_requested.connect(self._new_folder)
         self.sidebar.rename_folder_requested.connect(self._rename_folder)
+        self.sidebar.folder_template_requested.connect(self._folder_template)
 
         self.track_table.checked_changed.connect(self._on_checked_changed)
         self.track_table.edit_details_requested.connect(self._open_details)
@@ -596,9 +674,124 @@ class MainWindow(QMainWindow):
             self.inspector.set_row(row, self._is_row_checked(row))
         self._update_actions()
 
+        # Leaving the library search for a specific link clears the box, so
+        # the two searches do not fight each other.
+        if source_id != ALL_SONGS_ID and self.search_edit.text():
+            self._search_guard = True
+            self.search_edit.clear()
+            self._search_guard = False
+            self._search_from = None
+
+    def _focus_search(self) -> None:
+        self.search_edit.setFocus()
+        self.search_edit.selectAll()
+
+    def _on_global_search(self, text: str) -> None:
+        """Search the whole library, whichever link is open."""
+        if self._search_guard:
+            return
+        text = (text or "").strip()
+
+        if not text:
+            previous = self._search_from
+            self._search_from = None
+            if previous is not None:
+                self._load_source(previous)
+            return
+
+        if self._current_source_id != ALL_SONGS_ID:
+            self._search_from = self._current_source_id
+            self._load_source(ALL_SONGS_ID)
+
+        # The table clears its own search when a source loads, so set it
+        # after the switch.
+        self.track_table.filter_combo.setCurrentIndex(0)
+        self.track_table.search.setText(text)
+
     def _checked_rows(self) -> list[TrackRow]:
         """Every ticked song, across all links."""
         return self.db.get_track_rows_by_ids(self._checked)
+
+    # ------------------------------------------------------------------ undo
+
+    def _push_undo(self, label: str, action) -> None:
+        """Remember how to undo the change that is about to be made."""
+        self._undo.append((label, action))
+        del self._undo[:-20]  # keep the last twenty
+        if getattr(self, "undo_action", None) is not None:
+            self.undo_action.setEnabled(True)
+            self.undo_action.setText(f"Undo {label.lower()}")
+
+    def _undo_last(self) -> None:
+        if not self._undo:
+            self.status.set_idle("Nothing to undo.")
+            return
+        label, action = self._undo.pop()
+        try:
+            action()
+        except Exception as exc:  # noqa: BLE001 - never lose the window
+            self.logger.exception("Undo failed")
+            QMessageBox.warning(
+                self, "Could not undo", f"{label} could not be undone.\n\n{exc}"
+            )
+        self._reload_current_source()
+        self._refresh_sources(self._current_source_id)
+        if getattr(self, "undo_action", None) is not None:
+            if self._undo:
+                self.undo_action.setEnabled(True)
+                self.undo_action.setText(f"Undo {self._undo[-1][0].lower()}")
+            else:
+                self.undo_action.setEnabled(False)
+                self.undo_action.setText("Undo")
+        self.status.set_idle(f"Undid: {label.lower()}.")
+
+    def _snapshot_metadata(self, track_ids) -> dict:
+        """The metadata of these songs, for putting back after a change."""
+        snapshot = {}
+        for track_id in track_ids:
+            track = self.db.get_track(int(track_id))
+            if track is None:
+                continue
+            snapshot[track.id] = (
+                track.meta_title, track.meta_artist,
+                track.meta_album, track.meta_track,
+            )
+        return snapshot
+
+    def _restore_metadata(self, snapshot: dict) -> None:
+        for track_id, (title, artist, album, number) in snapshot.items():
+            track = self.db.get_track(track_id)
+            if track is None:
+                continue
+            self.db.update_track(
+                track_id,
+                meta_title=title,
+                meta_artist=artist,
+                meta_album=album,
+                meta_track=number,
+                needs_update=1 if is_converted(track.status) else 0,
+            )
+
+    def _push_metadata_undo(self, label: str, track_ids) -> None:
+        snapshot = self._snapshot_metadata(track_ids)
+        if snapshot:
+            self._push_undo(
+                label, lambda: self._restore_metadata(snapshot)
+            )
+
+    def _push_link_undo(self, label: str, track_ids) -> None:
+        links = {
+            int(track_id): self.db.track_links(int(track_id))
+            for track_id in track_ids
+        }
+        if links:
+            self._push_undo(
+                label, lambda: self._restore_links(links)
+            )
+
+    def _restore_links(self, links: dict) -> None:
+        for track_id, track_links in links.items():
+            self.db.restore_track_links(track_id, track_links)
 
     def _rename_folder(self, folder_id: int) -> None:
         folder = self.db.get_source(folder_id)
@@ -619,6 +812,50 @@ class MainWindow(QMainWindow):
         self._refresh_sources(folder_id)
         self.status.set_idle(f"Renamed the folder to “{new_name}”.")
 
+    def _folder_template(self, folder_id: int) -> None:
+        """Choose how files in this folder are named.
+
+        A folder can keep its own pattern, so an album or a series can be
+        numbered one way while the rest of the library uses another.
+        """
+        folder = self.db.get_source(folder_id)
+        if folder is None:
+            return
+
+        current = folder.filename_template or self.settings.filename_template
+        pattern, ok = QInputDialog.getText(
+            self,
+            "File name pattern",
+            "How should files in this folder be named?\n\n"
+            "Use {title}, {artist}, {album}, {track}, or {media_id}.\n"
+            "For example: {track:02d} - {title}",
+            text=current,
+        )
+        if not ok:
+            return
+
+        pattern = pattern.strip()
+        if not pattern:
+            self.status.set_idle(
+                "A pattern is needed. Leave it as it was, or try {title}."
+            )
+            return
+
+        example = render_template(
+            pattern,
+            title="Song name",
+            artist="Artist",
+            album=folder.title,
+            track=1,
+            media_id="abc123",
+            source=folder.title,
+        )
+        self.db.update_source(folder_id, filename_template=pattern)
+        self.status.set_idle(
+            f"Files in “{folder.title}” will be named like “{example}.mp3”. "
+            "Re-convert a song to rename its file."
+        )
+
     def _tracks_dropped(self, folder_id: int, track_ids: list) -> None:
         """Songs dragged onto a folder move into it."""
         folder = self.db.get_source(folder_id)
@@ -633,6 +870,7 @@ class MainWindow(QMainWindow):
                 return
             keep = choice == "keep"
 
+        self._push_link_undo("Moving songs into a folder", track_ids)
         moved = self.db.move_tracks_to_folder(
             track_ids, folder_id, keep_in_playlists=keep
         )
@@ -704,6 +942,9 @@ class MainWindow(QMainWindow):
             return
         folder_id = self.db.add_folder(name.strip())
         self._refresh_sources(folder_id)
+        self._push_undo(
+            "Creating a folder", lambda: self.db.delete_folder(folder_id)
+        )
         self.status.set_idle(
             f"Created “{name.strip()}”. Drag songs onto it to file them."
         )
@@ -984,6 +1225,20 @@ class MainWindow(QMainWindow):
         self.paste_button.setEnabled(not busy)
         self.mode_combo.setEnabled(not busy)
         self.settings_action.setEnabled(not busy)
+        self.translate_checked_action.setEnabled(count > 0 and not busy)
+        self.translate_checked_action.setText(
+            f"Translate ticked songs… ({count})" if count
+            else "Translate ticked songs…"
+        )
+        self.translate_all_action.setEnabled(
+            self._current_source_id is not None and not busy
+        )
+        self.update_files_action.setEnabled(count > 0 and not busy)
+        self.album_action.setEnabled(count > 0 and not busy)
+        self.lookup_action.setEnabled(
+            (count > 0 or self._current_source_id is not None) and not busy
+        )
+        self.duplicates_action.setEnabled(not busy)
         self.sidebar.set_busy(busy)
         self._update_steps()
 
@@ -1327,6 +1582,10 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.Accepted or not dialog.accepted_values:
             return
 
+        self._push_metadata_undo(
+            "Renaming songs",
+            [track_id for track_id, _title, _artist in dialog.accepted_values],
+        )
         for track_id, title, artist in dialog.accepted_values:
             track = self.db.get_track(track_id)
             if track is None:
@@ -1347,10 +1606,14 @@ class MainWindow(QMainWindow):
             "Press Re-convert to write them into the files."
         )
 
-    def _open_ai_settings(self) -> None:
-        """Open Settings on the AI tab, for an unconfigured setup."""
+    def _open_ai_settings(self) -> Optional[AISettings]:
+        """Open Settings on the AI tab, for an unconfigured setup.
+
+        Returns the AI settings afterwards, so a dialog that sent the user
+        here can carry on with its work.
+        """
         if self._is_busy():
-            return
+            return self._ai_settings()
         dialog = SettingsDialog(
             self.settings, self.ctx.ffmpeg, self.ctx.ytdlp,
             self.ctx.spotify, self, start_tab="AI",
@@ -1361,6 +1624,7 @@ class MainWindow(QMainWindow):
             apply_theme(QApplication.instance(), self.settings.theme)
             self._sync_mode_combo()
             self._update_theme_button()
+        return self._ai_settings()
 
     def _ai_settings(self) -> AISettings:
         return AISettings(
@@ -1369,6 +1633,250 @@ class MainWindow(QMainWindow):
             model=self.settings.ai_model,
             api_key=self.settings.ai_api_key,
         )
+
+    def _open_translate(self, only_checked: bool) -> None:
+        """Translate song names into another language, for review."""
+        if self._is_busy():
+            self.status.set_idle("Wait for the current job to finish.")
+            return
+
+        if only_checked:
+            rows = self._checked_rows()
+        else:
+            rows = self._visible_rows()
+
+        if not rows:
+            self.status.set_idle(
+                "Tick some songs first, or open a link to translate."
+                if only_checked else "Open a link first."
+            )
+            return
+
+        dialog = TranslationDialog(
+            rows,
+            self,
+            ai_settings=self._ai_settings(),
+            language=self.settings.translate_language,
+            style=self.settings.translate_style,
+            translate_artist=self.settings.translate_artist,
+            on_setup_ai=self._open_ai_settings,
+        )
+        if dialog.exec() != QDialog.Accepted or not dialog.accepted_values:
+            return
+
+        self._remember_translation_choices(dialog)
+        self._push_metadata_undo(
+            "Translating song names",
+            [track_id for track_id, _title, _artist in dialog.accepted_values],
+        )
+        for track_id, title, artist in dialog.accepted_values:
+            track = self.db.get_track(track_id)
+            if track is None:
+                continue
+            self.ctx.library.set_metadata(
+                track_id,
+                title=title,
+                artist=artist,
+                album=track.display_album,
+                track_number=track.display_track,
+            )
+
+        self._reload_current_source()
+        count = len(dialog.accepted_values)
+        self.status.set_idle(
+            f"Translated {count} song{'' if count == 1 else 's'}. "
+            "Press Re-convert to write the new names into the files."
+        )
+
+    def _translate_one(self, track) -> Optional[tuple[str, str]]:
+        """Translate a single song for the Edit details dialog.
+
+        Returns ``(title, artist)`` to fill the fields with, or None when the
+        user cancelled. Nothing is saved here; Save still does that.
+        """
+        row = self.track_table.model.row_for_id(track.id)
+        if row is None:
+            return None
+
+        dialog = TranslationDialog(
+            [row],
+            self,
+            ai_settings=self._ai_settings(),
+            language=self.settings.translate_language,
+            style=self.settings.translate_style,
+            translate_artist=self.settings.translate_artist,
+            on_setup_ai=self._open_ai_settings,
+        )
+        if dialog.exec() != QDialog.Accepted or not dialog.accepted_values:
+            return None
+
+        self._remember_translation_choices(dialog)
+        _track_id, title, artist = dialog.accepted_values[0]
+        return title, artist
+
+    def _remember_translation_choices(self, dialog) -> None:
+        """Keep the last language and style, so the next run is one click."""
+        language = dialog.language_combo.currentText().strip()
+        style = dialog.style_combo.currentData()
+        artist = dialog.artist_check.isChecked()
+        if language == self.settings.translate_language and \
+                style == self.settings.translate_style and \
+                artist == self.settings.translate_artist:
+            return
+        self.settings.translate_language = language or "Japanese"
+        if style:
+            self.settings.translate_style = style
+        self.settings.translate_artist = artist
+        try:
+            self.settings.save()
+        except OSError as exc:
+            self.logger.warning("Could not save the translation choices: %s", exc)
+
+    def _number_as_album(self) -> None:
+        """Give ticked songs one album name and consecutive track numbers."""
+        if self._is_busy():
+            self.status.set_idle("Wait for the current job to finish.")
+            return
+
+        rows = self._checked_rows()
+        if not rows:
+            self.status.set_idle(
+                "Tick the songs that belong on the album first."
+            )
+            return
+
+        # Order them as they appear in their link, so track numbers follow
+        # the order the user already sees.
+        rows.sort(
+            key=lambda row: (
+                (row.source.title or "").lower(), row.position, row.track.id
+            )
+        )
+
+        current = self.db.get_source(self._current_source_id) \
+            if self._current_source_id not in (None, ALL_SONGS_ID) else None
+        default_album = current.title if current is not None else rows[0].source.title
+
+        album, ok = QInputDialog.getText(
+            self,
+            "Album name",
+            f"Put these {len(rows)} songs on which album?\n\n"
+            "Spotify groups songs by this name, so they appear together "
+            "instead of as loose singles.",
+            text=default_album or "",
+        )
+        if not ok or not album.strip():
+            return
+
+        start, ok = QInputDialog.getInt(
+            self,
+            "Track numbers",
+            "Number the songs starting at:",
+            1, 0, 999,
+        )
+        if not ok:
+            return
+
+        self._push_metadata_undo(
+            "Numbering songs as an album", [row.track.id for row in rows]
+        )
+        for offset, row in enumerate(rows):
+            track = row.track
+            self.ctx.library.set_metadata(
+                track.id,
+                title=track.display_title,
+                artist=track.meta_artist or "",
+                album=album.strip(),
+                track_number=(start + offset) or None,
+            )
+
+        self._reload_current_source()
+        self.status.set_idle(
+            f"Numbered {len(rows)} song{'' if len(rows) == 1 else 's'} on "
+            f"“{album.strip()}”. Press Update files to write it in."
+        )
+
+    def _look_up_details(self) -> None:
+        """Fill album and track number from MusicBrainz, for review."""
+        if self._is_busy():
+            self.status.set_idle("Wait for the current job to finish.")
+            return
+
+        rows = self._checked_rows() or self._visible_rows()
+        if not rows:
+            self.status.set_idle("Open a link or tick some songs first.")
+            return
+
+        dialog = LookupDialog(rows, self)
+        if dialog.exec() != QDialog.Accepted or not dialog.accepted_values:
+            return
+
+        self._push_metadata_undo(
+            "Updating song details",
+            [track_id for track_id, _a, _b, _c in dialog.accepted_values],
+        )
+        for track_id, album, artist, number in dialog.accepted_values:
+            track = self.db.get_track(track_id)
+            if track is None:
+                continue
+            self.ctx.library.set_metadata(
+                track_id,
+                title=track.display_title,
+                artist=artist or (track.meta_artist or ""),
+                album=album or track.display_album,
+                track_number=number or track.display_track,
+            )
+
+        self._reload_current_source()
+        count = len(dialog.accepted_values)
+        self.status.set_idle(
+            f"Updated the details of {count} song{'' if count == 1 else 's'}. "
+            "Press Update files to write them in."
+        )
+
+    def _find_duplicates(self) -> None:
+        """Show songs that look like the same recording added twice."""
+        groups = self.db.find_duplicate_groups()
+        if not groups:
+            self.status.set_idle(
+                "No duplicate songs found — every name appears once."
+            )
+            return
+
+        dialog = DuplicateDialog(groups, self)
+        if dialog.exec() != QDialog.Accepted or not dialog.remove_ids:
+            return
+
+        count = len(dialog.remove_ids)
+        reply = QMessageBox.question(
+            self,
+            "Remove duplicate songs",
+            f"Remove {count} duplicate copy"
+            f"{'' if count == 1 else 'ies'} from the library?\n\n"
+            "Yes — also delete their audio files from disk.\n"
+            "No — keep the files, just remove them from the library.\n"
+            "Cancel — do nothing.",
+            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+            QMessageBox.No,
+        )
+        if reply == QMessageBox.Cancel:
+            return
+
+        delete_files = reply == QMessageBox.Yes
+        for track_id in dialog.remove_ids:
+            self.ctx.library.delete_track(track_id, delete_files=delete_files)
+
+        self._refresh_sources(self._current_source_id)
+        self.status.set_idle(
+            f"Removed {count} duplicate cop"
+            f"{'y' if count == 1 else 'ies'}."
+            + (" Their files were deleted." if delete_files else "")
+        )
+
+    def _edit_highlighted(self) -> None:
+        row = self.track_table.current_row()
+        if row is not None:
+            self._open_details(row.track.id)
 
     def _open_details(self, track_id: int) -> None:
         """Edit one song's title, artist, album, track number, and picture."""
@@ -1389,11 +1897,13 @@ class MainWindow(QMainWindow):
             track_default=row.position,
             filename_template=self.settings.filename_template,
             parent=self,
+            translate_callback=self._translate_one,
         )
         if dialog.exec() != QDialog.Accepted or not dialog.result_values:
             return
 
         values = dialog.result_values
+        self._push_metadata_undo("Editing song details", [track_id])
         self.ctx.library.set_metadata(
             track_id,
             title=values["title"],
@@ -1460,6 +1970,46 @@ class MainWindow(QMainWindow):
             "Metadata saved. Use Re-convert to write it into the files."
         )
 
+    def _update_files(self) -> None:
+        """Rewrite the audio files for every ticked song whose details changed."""
+        if self._is_busy():
+            self.status.set_idle("A job is already running.")
+            return
+        if not self.ctx.ffmpeg.available:
+            QMessageBox.warning(
+                self, "FFmpeg required",
+                "Locate FFmpeg in Settings before rewriting files.",
+            )
+            return
+
+        ticked = self._checked_rows()
+        if not ticked:
+            self.status.set_idle("Tick at least one song first.")
+            return
+
+        rows = [row for row in ticked if row.track.needs_update]
+        if not rows:
+            self.status.set_idle(
+                "Nothing to update — the ticked songs' files already match "
+                "their details."
+            )
+            return
+
+        needs_download = [
+            row for row in rows
+            if not (row.track.raw_path and Path(row.track.raw_path).exists())
+        ]
+        stages = ["convert"]
+        if needs_download:
+            stages = ["download", "convert"]
+        if any(row.track.synced_at for row in rows):
+            stages.append("sync")
+
+        self._start_pipeline(rows, stages, force=True)
+        self.status.set_busy(
+            f"Updating {len(rows)} file{'' if len(rows) == 1 else 's'}…"
+        )
+
     def _retry_track(self, track_id: int) -> None:
         row = self.track_table.model.row_for_id(track_id)
         if row is None:
@@ -1518,8 +2068,13 @@ class MainWindow(QMainWindow):
         )
         if reply == QMessageBox.Cancel:
             return
+        delete_files = reply == QMessageBox.Yes
+        if not delete_files:
+            # With the files kept, the row survives and the removal can be
+            # undone. Deleting files cannot be undone, so no promise there.
+            self._push_link_undo("Removing a song", [track_id])
         self.ctx.library.delete_track(
-            track_id, delete_files=(reply == QMessageBox.Yes)
+            track_id, delete_files=delete_files
         )
         self._refresh_sources(self._current_source_id)
 

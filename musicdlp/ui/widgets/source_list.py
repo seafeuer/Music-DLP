@@ -445,6 +445,7 @@ class SourceListWidget(QWidget):
     source_dropped = Signal(int, int)
     new_folder_requested = Signal()
     rename_folder_requested = Signal(int)
+    folder_template_requested = Signal(int)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -586,6 +587,10 @@ class SourceListWidget(QWidget):
             menu.addAction(
                 "Rename folder…",
                 lambda: self.rename_folder_requested.emit(source.id),
+            )
+            menu.addAction(
+                "File name pattern…",
+                lambda: self.folder_template_requested.emit(source.id),
             )
             menu.addSeparator()
             menu.addAction(

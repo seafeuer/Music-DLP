@@ -102,6 +102,7 @@ class Source:
     added_at: Optional[str]
     refreshed_at: Optional[str]
     folder: Optional[str] = None
+    filename_template: Optional[str] = None
 
     @property
     def is_all(self) -> bool:
@@ -126,6 +127,10 @@ class Source:
             added_at=row["added_at"],
             refreshed_at=row["refreshed_at"],
             folder=row["folder"] if "folder" in row.keys() else None,
+            filename_template=(
+                row["filename_template"]
+                if "filename_template" in row.keys() else None
+            ),
         )
 
 
