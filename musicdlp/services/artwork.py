@@ -504,16 +504,23 @@ def _release_is_the_album(release: dict) -> bool:
 # ---------------------------------------------------------------- public
 
 
+# Bumped when the lookup rules change enough that a cover cached by an
+# older version might be the wrong song. A version before 3 could embed a
+# different song's artwork for an unreleased track.
+CACHE_VERSION = 3
+
+
 def cover_cache_path(platform: str, media_id: str) -> Path:
     """Where a song's cover is cached.
 
-    The size is part of the name, so a cover stored at the old 640 px is
-    not reused after an upgrade, and the bigger one is fetched once.
+    The size and the rule version are part of the name, so a cover stored
+    by an older version is not reused: it is looked up again once, and the
+    corrected artwork replaces it.
     """
     from musicdlp.core.paths import art_cache_dir
 
     return art_cache_dir() / (
-        f"album_{platform}_{media_id}_{TARGET_COVER_SIZE}.jpg"
+        f"album_{platform}_{media_id}_{TARGET_COVER_SIZE}_v{CACHE_VERSION}.jpg"
     )
 
 

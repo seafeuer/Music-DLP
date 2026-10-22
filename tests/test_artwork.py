@@ -79,12 +79,26 @@ def test_the_thumbnail_placeholder_is_refused(tmp_path):
 
 # ----------------------------------------------------------------- caching
 
-def test_the_cover_cache_name_carries_the_size(tmp_path, monkeypatch):
+def test_the_cover_cache_name_carries_the_size_and_rules(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "musicdlp.core.paths.art_cache_dir", lambda: tmp_path
     )
     path = artwork.cover_cache_path("youtube", "abc")
     assert str(artwork.TARGET_COVER_SIZE) in path.name
+    # A cover cached before the matching rules were tightened must not be
+    # reused: it may be another song's artwork.
+    assert f"v{artwork.CACHE_VERSION}" in path.name
+
+
+def test_a_cover_cached_by_an_older_rule_set_is_not_reused(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "musicdlp.core.paths.art_cache_dir", lambda: tmp_path
+    )
+    # The name an earlier build would have written.
+    old = tmp_path / f"album_youtube_abc_{artwork.TARGET_COVER_SIZE}.jpg"
+    old.write_bytes(_png((1400, 1400)))
+    current = artwork.cover_cache_path("youtube", "abc")
+    assert current != old
 
 
 def test_an_old_thumbnail_cache_is_not_reused(tmp_path):
