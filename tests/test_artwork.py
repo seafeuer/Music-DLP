@@ -127,3 +127,79 @@ def test_a_cached_cover_is_returned_without_a_download(tmp_path, monkeypatch):
     monkeypatch.setattr(artwork.requests, "get", boom)
     found = artwork.find_cover("A", "T", destination)
     assert found == destination
+
+
+# ------------------------------------------------------- choosing a result
+
+def test_artist_credit_is_split_into_names():
+    assert artwork._artist_parts("Kasane Teto SV, Yoshida Yasei") == [
+        "Kasane Teto SV", "Yoshida Yasei"
+    ]
+    assert artwork._artist_parts("Drake feat. Lil Uzi Vert") == [
+        "Drake", "Lil Uzi Vert"
+    ]
+    assert artwork._artist_parts("") == []
+
+
+def test_a_live_arrangement_never_beats_the_actual_single(monkeypatch):
+    """Searching a long artist credit returns the live album first."""
+    results = [
+        {"trackName": "OVERRIDE (Teto Live 2025 -live arrange-)",
+         "artistName": "Yoshida Yasei, Kasane Teto & Asa",
+         "collectionName": "TetoLive2025 Live Compilation",
+         "artworkUrl100": "https://x/live/100x100bb.jpg"},
+        {"trackName": "Override",
+         "artistName": "Yoshida Yasei",
+         "collectionName": "Override - Single",
+         "artworkUrl100": "https://x/single/100x100bb.jpg"},
+    ]
+    monkeypatch.setattr(
+        artwork, "_itunes_search", lambda term, limit=8: results
+    )
+    chosen = artwork._itunes_cover("Kasane Teto SV, Yoshida Yasei", "Override")
+    assert "single" in chosen
+
+
+def test_a_karaoke_version_is_never_chosen(monkeypatch):
+    results = [
+        {"trackName": "Override KARAOKE Original by Yoshida Yasei",
+         "artistName": "Uta-Cha-Oh",
+         "collectionName": "Override KARAOKE - Single",
+         "artworkUrl100": "https://x/karaoke/100x100bb.jpg"},
+        {"trackName": "Override", "artistName": "Yoshida Yasei",
+         "collectionName": "Override - Single",
+         "artworkUrl100": "https://x/real/100x100bb.jpg"},
+    ]
+    monkeypatch.setattr(
+        artwork, "_itunes_search", lambda term, limit=8: results
+    )
+    assert "real" in artwork._itunes_cover("Yoshida Yasei", "Override")
+
+
+def test_the_single_beats_an_english_cover(monkeypatch):
+    results = [
+        {"trackName": "Override (English Cover)",
+         "artistName": "Yoshida Yasei & Will Stetson",
+         "collectionName": "Override (English Cover) - Single",
+         "artworkUrl100": "https://x/cover/100x100bb.jpg"},
+        {"trackName": "Override", "artistName": "Yoshida Yasei",
+         "collectionName": "Override - Single",
+         "artworkUrl100": "https://x/real/100x100bb.jpg"},
+    ]
+    monkeypatch.setattr(
+        artwork, "_itunes_search", lambda term, limit=8: results
+    )
+    assert "real" in artwork._itunes_cover("Yoshida Yasei", "Override")
+
+
+def test_a_credited_artist_further_down_the_credit_still_matches(monkeypatch):
+    """The single may be filed under the producer, not the vocalist."""
+    results = [
+        {"trackName": "Override", "artistName": "Yoshida Yasei",
+         "collectionName": "Override - Single",
+         "artworkUrl100": "https://x/real/100x100bb.jpg"},
+    ]
+    monkeypatch.setattr(
+        artwork, "_itunes_search", lambda term, limit=8: results
+    )
+    assert artwork._itunes_cover("Kasane Teto SV, Yoshida Yasei", "Override")

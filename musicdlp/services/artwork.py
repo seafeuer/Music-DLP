@@ -110,44 +110,114 @@ def _save_square(
 # ------------------------------------------------------------------ iTunes
 
 
-def _itunes_cover(artist: str, title: str) -> Optional[str]:
-    term = _clean(f"{artist} {title}") if artist else _clean(title)
+def _artist_parts(artist: str) -> list[str]:
+    """The separate names in an artist credit, main artist first."""
+    text = _clean(artist)
+    for separator in (" feat. ", " featuring ", " & ", ",", " / "):
+        text = text.replace(separator, "|")
+    parts = [_clean(part) for part in text.split("|")]
+    return [part for part in parts if part]
+
+
+def _itunes_search(term: str, limit: int = 8) -> list[dict]:
     if not term:
-        return None
-    params = {"term": term, "entity": "song", "limit": 8}
+        return []
+    params = {"term": term, "entity": "song", "limit": limit}
     try:
         response = requests.get(
             ITUNES_URL, params=params,
             headers={"User-Agent": USER_AGENT}, timeout=15,
         )
         if response.status_code >= 400:
-            return None
-        results = response.json().get("results") or []
+            return []
+        return list(response.json().get("results") or [])
     except (requests.exceptions.RequestException, ValueError) as exc:
         logger.debug("iTunes lookup failed: %s", exc)
+        return []
+
+
+def _itunes_cover(artist: str, title: str) -> Optional[str]:
+    """The best cover iTunes has for this song.
+
+    Searching the whole artist credit can miss the song entirely: for
+    "Kasane Teto SV, Yoshida Yasei" the single by "Yoshida Yasei" never
+    comes back, only compilations that happen to credit everyone. So each
+    artist is searched on its own as well, and everything found is ranked
+    together.
+    """
+    terms: list[str] = []
+    if artist:
+        terms.append(_clean(f"{artist} {title}"))
+        for part in _artist_parts(artist):
+            terms.append(_clean(f"{part} {title}"))
+    terms.append(_clean(title))
+
+    results: list[dict] = []
+    seen = set()
+    for term in terms:
+        for result in _itunes_search(term):
+            key = result.get("trackId") or result.get("artworkUrl100")
+            if key in seen:
+                continue
+            seen.add(key)
+            results.append(result)
+
+    if not results:
         return None
 
     wanted_title = _clean(title).lower()
-    wanted_artist = _clean(artist).lower()
+    wanted_parts = {part.lower() for part in _artist_parts(artist)}
 
+    scored: list[tuple[tuple, str]] = []
     for result in results:
+        artwork = _large_artwork(result.get("artworkUrl100"))
+        if not artwork:
+            continue
         track = _clean(result.get("trackName", "")).lower()
         performer = _clean(result.get("artistName", "")).lower()
-        # Prefer a result whose title matches; ignore obvious misses.
-        if wanted_title and wanted_title not in track and track not in wanted_title:
-            continue
-        if wanted_artist and wanted_artist not in performer and performer not in wanted_artist:
-            continue
-        artwork = _large_artwork(result.get("artworkUrl100"))
-        if artwork:
-            return artwork
+        album = _clean(result.get("collectionName", "")).lower()
 
-    # Nothing matched by title and artist; take the first cover with art.
-    for result in results:
-        artwork = _large_artwork(result.get("artworkUrl100"))
-        if artwork:
-            return artwork
-    return None
+        title_hit = bool(wanted_title) and (
+            wanted_title in track or track in wanted_title
+        )
+        # Any credited artist counts: the single may be filed under the
+        # producer while the video names the vocalist first.
+        performer_parts = {part.lower() for part in _artist_parts(performer)}
+        artist_hit = bool(wanted_parts & performer_parts)
+        # "Override" and "Override (English Cover)" both contain the title;
+        # the exact one is the song the video is.
+        exact = 0 if track == wanted_title else 1
+        scored.append(
+            (
+                (
+                    0 if title_hit else 1,
+                    0 if artist_hit else 1,
+                    _itunes_kind_rank(track, album),
+                    exact,
+                ),
+                artwork,
+            )
+        )
+
+    if not scored:
+        return None
+    scored.sort(key=lambda pair: pair[0])
+    return scored[0][1]
+
+
+def _itunes_kind_rank(track: str, album: str) -> int:
+    """Penalise the releases that are a different recording of the song."""
+    text = f"{track} {album}"
+    for marker in ("karaoke", "backing track", "instrumental", "tribute"):
+        if marker in text:
+            return 4
+    if "live" in text:
+        return 3
+    if "cover" in text:
+        return 2
+    if "remix" in text:
+        return 2
+    return 0
 
 
 def _large_artwork(url: str) -> str:
