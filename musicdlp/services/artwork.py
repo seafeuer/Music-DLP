@@ -155,11 +155,56 @@ def _core_title(text: str) -> str:
     return _norm(re.sub(r"[\(\[\{][^\)\]\}]*[\)\]\}]", " ", text or ""))
 
 
+# How far a catalogue track's length may be from the uploaded audio and
+# still be the same recording. An official music video can run a minute
+# longer than the song it contains, so this is set to catch a completely
+# different song rather than a video intro. Among several candidates the
+# closest length wins, which is what actually picks the right version.
+DURATION_TOLERANCE_SECONDS = 60
+DURATION_TOLERANCE_RATIO = 0.30
+
+
+def _duration_gap(wanted: Optional[float], found: Optional[float]) -> float:
+    """The relative difference in length, or 0 when either is unknown."""
+    try:
+        wanted = float(wanted or 0)
+        found = float(found or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if wanted <= 0 or found <= 0:
+        return 0.0
+    return abs(wanted - found) / max(wanted, found)
+
+
+def _duration_matches(wanted: Optional[float], found: Optional[float]) -> bool:
+    """Whether two track lengths could be one recording.
+
+    This is the one check that does not depend on how a title was written
+    or parsed, which is exactly what goes wrong when a name is guessed.
+    """
+    try:
+        wanted = float(wanted or 0)
+        found = float(found or 0)
+    except (TypeError, ValueError):
+        return True
+    if wanted <= 0 or found <= 0:
+        # Nothing to compare against; do not reject on a missing length.
+        return True
+    difference = abs(wanted - found)
+    allowance = max(
+        DURATION_TOLERANCE_SECONDS, max(wanted, found) * DURATION_TOLERANCE_RATIO
+    )
+    return difference <= allowance
+
+
 def _is_the_same_song(
     wanted_title: str,
     wanted_parts: list[str],
     result_title: str,
     result_artist: str,
+    *,
+    wanted_seconds: Optional[float] = None,
+    result_seconds: Optional[float] = None,
 ) -> bool:
     """Whether a catalogue result is the song that was asked for.
 
@@ -173,12 +218,19 @@ def _is_the_same_song(
     if not wanted_core or wanted_core != result_core:
         return False
 
-    # A performer further down the credit is a feature, not the artist.
-    wanted = {_norm(part) for part in wanted_parts if _norm(part)}
+    # The main artist named by the upload has to be on the release. A
+    # feature credit alone is not enough: "Yeah Yeah" by Travis Scott was
+    # matched to a different Young Thug song because he is credited on
+    # both, and the two titles and lengths were nearly identical.
+    wanted = [part for part in wanted_parts if _norm(part)]
     credited = _artist_parts(result_artist)
+    credited_norm = {_norm(part) for part in credited}
     if wanted:
+        main = _norm(wanted[0])
+        if main not in credited_norm:
+            return False
         primary = _norm(credited[0]) if credited else ""
-        if primary not in wanted:
+        if primary not in {_norm(part) for part in wanted}:
             return False
 
     # A version marker that the upload title does not carry means this is a
@@ -191,7 +243,12 @@ def _is_the_same_song(
             return False
         if any(marker in item for item in _qualifiers(result_title)):
             return False
-    return True
+
+    # Last and strongest: the audio itself. Two songs can share a title and
+    # an artist, and a guessed name can point at a real but different song.
+    # A length that is nowhere near the upload is proof it is not the same
+    # recording.
+    return _duration_matches(wanted_seconds, result_seconds)
 
 
 def _itunes_search(term: str, limit: int = 8) -> list[dict]:
@@ -211,7 +268,9 @@ def _itunes_search(term: str, limit: int = 8) -> list[dict]:
         return []
 
 
-def _itunes_cover(artist: str, title: str) -> Optional[str]:
+def _itunes_cover(
+    artist: str, title: str, seconds: Optional[float] = None
+) -> Optional[str]:
     """The best cover iTunes has for this exact song, or None.
 
     Searching the whole artist credit can miss the song entirely: for
@@ -252,7 +311,17 @@ def _itunes_cover(artist: str, title: str) -> Optional[str]:
         track = _clean(result.get("trackName", ""))
         performer = _clean(result.get("artistName", ""))
         album = _clean(result.get("collectionName", ""))
-        if not _is_the_same_song(title, wanted_parts, track, performer):
+        result_seconds = None
+        millis = result.get("trackTimeMillis")
+        if millis:
+            try:
+                result_seconds = float(millis) / 1000.0
+            except (TypeError, ValueError):
+                result_seconds = None
+        if not _is_the_same_song(
+            title, wanted_parts, track, performer,
+            wanted_seconds=seconds, result_seconds=result_seconds,
+        ):
             continue
         artwork = _large_artwork(result.get("artworkUrl100"))
         if not artwork:
@@ -262,6 +331,7 @@ def _itunes_cover(artist: str, title: str) -> Optional[str]:
                 (
                     _itunes_kind_rank(_norm(track), _norm(album)),
                     0 if _core_title(track) == wanted_core else 1,
+                    _duration_gap(seconds, result_seconds),
                 ),
                 artwork,
             )
@@ -355,7 +425,9 @@ def _large_artwork(url: str) -> str:
 # ------------------------------------------------------------------ Deezer
 
 
-def _deezer_cover(artist: str, title: str) -> list[str]:
+def _deezer_cover(
+    artist: str, title: str, seconds: Optional[float] = None
+) -> list[str]:
     """Cover URLs from Deezer, best first.
 
     Deezer is the fallback for songs iTunes does not carry: it has a much
@@ -401,7 +473,10 @@ def _deezer_cover(artist: str, title: str) -> list[str]:
         performer = _clean((item.get("artist") or {}).get("name", ""))
         album = item.get("album") or {}
         album_name = _clean(album.get("title", ""))
-        if not _is_the_same_song(title, wanted_parts, track, performer):
+        if not _is_the_same_song(
+            title, wanted_parts, track, performer,
+            wanted_seconds=seconds, result_seconds=item.get("duration"),
+        ):
             continue
         url = album.get("cover_xl") or album.get("cover_big") or ""
         if not url:
@@ -411,6 +486,7 @@ def _deezer_cover(artist: str, title: str) -> list[str]:
                 (
                     _itunes_kind_rank(_norm(track), _norm(album_name)),
                     0 if _core_title(track) == wanted_core else 1,
+                    _duration_gap(seconds, item.get("duration")),
                 ),
                 url,
             )
@@ -429,7 +505,9 @@ def _deezer_cover(artist: str, title: str) -> list[str]:
 # --------------------------------------------------------- MusicBrainz
 
 
-def _musicbrainz_cover(artist: str, title: str) -> list[str]:
+def _musicbrainz_cover(
+    artist: str, title: str, seconds: Optional[float] = None
+) -> list[str]:
     """Cover Art Archive URLs for this song, best release first.
 
     A recording is listed on many releases and only some carry artwork, so
@@ -463,9 +541,15 @@ def _musicbrainz_cover(artist: str, title: str) -> list[str]:
                 name = credit.get("name") or (credit.get("artist") or {}).get("name")
                 if name:
                     credited.append(str(name))
+        length = recording.get("length")
+        try:
+            result_seconds = float(length) / 1000.0 if length else None
+        except (TypeError, ValueError):
+            result_seconds = None
         if not _is_the_same_song(
             title, wanted_parts, str(recording.get("title") or ""),
             ", ".join(credited),
+            wanted_seconds=seconds, result_seconds=result_seconds,
         ):
             continue
         for release in recording.get("releases") or []:
@@ -531,11 +615,15 @@ def find_cover(
     *,
     album: str = "",
     refresh: bool = False,
+    seconds: Optional[float] = None,
 ) -> Optional[Path]:
     """Find and save square cover art. Returns None when nothing is found.
 
     ``refresh`` ignores an already-cached image, for when the song's details
-    have changed since the last lookup.
+    have changed since the last lookup. ``seconds`` is the length of the
+    audio being tagged; when it is known, a catalogue track whose length is
+    nowhere near it is rejected, which is the surest way to avoid another
+    song's cover.
     """
     destination = Path(destination)
     if not refresh and destination.exists() and destination.stat().st_size > 0:
@@ -559,9 +647,9 @@ def find_cover(
                 candidates.append(url)
 
     for lookup in (
-        lambda: _itunes_cover(artist, title),
-        lambda: _deezer_cover(artist, title),
-        lambda: _musicbrainz_cover(artist, title),
+        lambda: _itunes_cover(artist, title, seconds),
+        lambda: _deezer_cover(artist, title, seconds),
+        lambda: _musicbrainz_cover(artist, title, seconds),
         lambda: _itunes_album_cover(artist, album) if album else None,
     ):
         try:

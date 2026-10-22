@@ -171,7 +171,7 @@ def test_a_live_arrangement_never_beats_the_actual_single(monkeypatch):
     monkeypatch.setattr(
         artwork, "_itunes_search", lambda term, limit=8: results
     )
-    chosen = artwork._itunes_cover("Kasane Teto SV, Yoshida Yasei", "Override")
+    chosen = artwork._itunes_cover("Yoshida Yasei, Kasane Teto SV", "Override")
     assert "single" in chosen
 
 
@@ -207,8 +207,12 @@ def test_the_single_beats_an_english_cover(monkeypatch):
     assert "real" in artwork._itunes_cover("Yoshida Yasei", "Override")
 
 
-def test_a_credited_artist_further_down_the_credit_still_matches(monkeypatch):
-    """The single may be filed under the producer, not the vocalist."""
+def test_a_second_credited_artist_alone_is_not_enough(monkeypatch):
+    """When the vocalist is listed first, the cover is skipped.
+
+    This is the safe outcome: the video still is used rather than art for
+    a release whose main artist is not the one the upload names.
+    """
     results = [
         {"trackName": "Override", "artistName": "Yoshida Yasei",
          "collectionName": "Override - Single",
@@ -217,7 +221,9 @@ def test_a_credited_artist_further_down_the_credit_still_matches(monkeypatch):
     monkeypatch.setattr(
         artwork, "_itunes_search", lambda term, limit=8: results
     )
-    assert artwork._itunes_cover("Kasane Teto SV, Yoshida Yasei", "Override")
+    assert artwork._itunes_cover(
+        "Kasane Teto SV, Yoshida Yasei", "Override"
+    ) is None
 
 
 # ------------------------------------- never borrow another song's cover
@@ -246,9 +252,9 @@ def test_an_unreleased_song_gets_no_catalogue_cover(monkeypatch):
     assert artwork._itunes_cover("Young Thug", "Monday Morning") is None
 
 
-def test_the_right_song_is_still_found_through_a_split_credit():
+def test_a_split_credit_matches_when_the_main_artist_is_first():
     assert artwork._is_the_same_song(
-        "Override", ["Kasane Teto SV", "Yoshida Yasei"],
+        "Override", ["Yoshida Yasei", "Kasane Teto SV"],
         "Override", "Yoshida Yasei",
     ) is True
 
@@ -472,3 +478,91 @@ def test_a_missing_cover_file_is_not_reused(tmp_path):
         cover_path = str(tmp_path / "gone.jpg")
 
     assert _reusable_cover(Track()) is False
+
+
+# ------------------------------------------------- the audio length is proof
+
+def test_a_remix_length_is_rejected():
+    assert artwork._duration_matches(295, 145) is False
+
+
+def test_a_music_video_intro_is_accepted():
+    """An official video can run a minute longer than the song."""
+    assert artwork._duration_matches(295, 367) is True
+
+
+def test_a_nearby_length_is_accepted():
+    assert artwork._duration_matches(210, 240) is True
+
+
+def test_a_missing_length_is_not_a_reason_to_reject():
+    assert artwork._duration_matches(139, None) is True
+    assert artwork._duration_matches(None, 200) is True
+
+
+def test_a_guessed_title_pointing_at_another_song_is_rejected(monkeypatch):
+    """The parser guessed a real song; the audio length proves it is not it."""
+    results = [
+        {"trackName": "Creep", "artistName": "Radiohead",
+         "collectionName": "Pablo Honey",
+         "trackTimeMillis": 238000,
+         "artworkUrl100": "https://x/creep/100x100bb.jpg"},
+    ]
+    monkeypatch.setattr(
+        artwork, "_itunes_search", lambda term, limit=8: results
+    )
+    assert artwork._itunes_cover("Radiohead", "Creep", 400) is None
+    assert artwork._itunes_cover("Radiohead", "Creep", 238) is not None
+
+
+def test_the_closest_length_wins_between_two_versions(monkeypatch):
+    results = [
+        {"trackName": "Song", "artistName": "Artist",
+         "collectionName": "Song - Single",
+         "trackTimeMillis": 145000,
+         "artworkUrl100": "https://x/short/100x100bb.jpg"},
+        {"trackName": "Song", "artistName": "Artist",
+         "collectionName": "Song - Single",
+         "trackTimeMillis": 300000,
+         "artworkUrl100": "https://x/long/100x100bb.jpg"},
+    ]
+    monkeypatch.setattr(
+        artwork, "_itunes_search", lambda term, limit=8: results
+    )
+    assert "long" in artwork._itunes_cover("Artist", "Song", 295)
+    assert "short" in artwork._itunes_cover("Artist", "Song", 150)
+
+
+def test_a_credited_feature_is_not_enough_when_the_main_artist_differs():
+    """Yeah Yeah by Travis Scott was matched to a Young Thug mixtape track.
+
+    Both songs are real, both titles normalise to "yeah yeah", and the
+    lengths are 8 seconds apart, so only the main artist separates them.
+    """
+    assert artwork._is_the_same_song(
+        "Yeah Yeah", ["Travis Scott", "Young Thug"],
+        "Yeah, Yeah", "Young Thug",
+        wanted_seconds=276, result_seconds=268,
+    ) is False
+
+
+def test_the_main_artist_still_matches_when_the_order_differs():
+    assert artwork._is_the_same_song(
+        "Pissy Pamper", ["Playboi Carti", "Young Thug"],
+        "Pissy Pamper", "Young Thug, Playboi Carti",
+    ) is True
+
+
+def test_a_multi_artist_credit_matches_its_main_artist():
+    assert artwork._is_the_same_song(
+        "At The Gates", ["Drake", "Lil Uzi Vert"],
+        "At the Gates", "Drake, Lil Uzi Vert",
+    ) is True
+
+
+def test_a_vocalist_listed_first_is_not_taken_as_the_artist():
+    """Falling back to the video still is the safe outcome here."""
+    assert artwork._is_the_same_song(
+        "Override", ["Kasane Teto SV", "Yoshida Yasei"],
+        "Override", "Yoshida Yasei",
+    ) is False

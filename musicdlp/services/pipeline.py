@@ -521,6 +521,7 @@ class Pipeline(QObject):
                             track.display_title,
                             cover_cache_path(track.platform, track.media_id),
                             album=track.display_album,
+                            seconds=track.duration,
                         )
                         if album_art is not None:
                             cover = album_art

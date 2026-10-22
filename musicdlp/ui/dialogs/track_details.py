@@ -232,6 +232,7 @@ class TrackDetailsDialog(QDialog):
                 destination,
                 album=self.album_edit.text().strip(),
                 refresh=True,
+                seconds=self.track.duration,
             )
         except Exception:
             found = None
