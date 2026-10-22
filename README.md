@@ -162,6 +162,16 @@ Always put the Vocaloid singer in the artist field.
 Keep (Original) only for Vocaloid songs that have many covers.
 ```
 
+### Where the AI gets its title
+
+The AI is given the **uploader's own title**, not the name the built-in
+rules worked out. Those rules are a good guess but they are wrong often
+enough to matter — a Japanese uploader writes "Title - Vocalist", and the
+rules read that backwards, so `オーバーライド - 重音テトSV[吉田夜世]` became
+`重音テトsv[吉田夜世]`. The library name is still shown to the model, marked
+as a guess, so it can see what the app currently thinks without being led by
+it. When the two disagree, the upload title wins.
+
 ### How brackets are handled
 
 Text in brackets is read as a qualifier, not as part of the song name:
@@ -243,6 +253,13 @@ With **Settings → AI → Look up real album art** on, converting a song looks 
 up in the iTunes catalogue and MusicBrainz and embeds the real cover. If
 nothing is found, the video thumbnail is used as before. **Edit details → Find
 cover art** does the same lookup for one song.
+
+Covers are stored at 1400 px square, from the largest artwork the catalogue
+has (iTunes serves up to 3000 px). Art is never stretched beyond its own
+resolution, except that anything under Spotify's 640 px minimum is lifted to
+it. YouTube answers a missing large thumbnail with a 120x90 grey square; that
+is rejected and the next size down is used instead, so a missing still never
+becomes a grey cover.
 
 Converted files go to `Music\MusicDLP\MP3` (and `M4A` if enabled). Files sent to
 Spotify are copied to `Music\MusicDLP\Spotify` by default.
