@@ -61,17 +61,60 @@ def _local_ffmpeg() -> tuple[Path | None, Path | None]:
         return None, None
 
 
+MIN_REAL_FFMPEG = 5_000_000
+
+
+def _is_real(path: Path | None) -> bool:
+    """Whether this is an actual FFmpeg, not a package-manager shim.
+
+    Chocolatey puts a ~400 KB launcher on PATH that forwards to the real
+    binary elsewhere. Bundling the launcher gives a folder that does not
+    work on another computer.
+    """
+    try:
+        return path is not None and path.is_file() and \
+            path.stat().st_size >= MIN_REAL_FFMPEG
+    except OSError:
+        return False
+
+
+def _real_ffmpeg(found: Path | None) -> tuple[Path | None, Path | None]:
+    """The real ffmpeg.exe and ffprobe.exe, looking past a shim if needed."""
+    if _is_real(found):
+        probe = found.with_name(found.name.replace("ffmpeg", "ffprobe"))
+        return found, probe if probe.exists() else None
+
+    # Package managers keep the real binaries under their own tree.
+    roots = [
+        Path(r"C:\ProgramData\chocolatey\lib"),
+        Path.home() / "AppData" / "Local" / "Microsoft" / "WinGet" / "Packages",
+        Path(r"C:\ffmpeg"),
+    ]
+    for root in roots:
+        if not root.is_dir():
+            continue
+        try:
+            for candidate in root.rglob("ffmpeg.exe"):
+                if _is_real(candidate):
+                    probe = candidate.with_name("ffprobe.exe")
+                    return candidate, probe if probe.exists() else None
+        except OSError:
+            continue
+    return None, None
+
+
 def _add_ffmpeg(app_dir: Path) -> None:
     ffmpeg_dir = app_dir / "ffmpeg"
     ffmpeg_dir.mkdir(exist_ok=True)
     ffmpeg, probe = _local_ffmpeg()
-    if ffmpeg is not None and ffmpeg.stat().st_size > 5_000_000:
+    if ffmpeg is not None and _is_real(ffmpeg):
         shutil.copy2(ffmpeg, ffmpeg_dir / ffmpeg.name)
-        print(f"Bundled {ffmpeg.name}")
+        print(f"Bundled {ffmpeg.name} ({ffmpeg.stat().st_size // 1_000_000} MB)")
         if probe is not None and probe.exists():
             shutil.copy2(probe, ffmpeg_dir / probe.name)
             print(f"Bundled {probe.name}")
     else:
+        print("No real ffmpeg.exe found to bundle; leaving instructions.")
         (ffmpeg_dir / "PUT_FFMPEG_HERE.txt").write_text(
             "Copy ffmpeg.exe (and ffprobe.exe) into this folder, or install\n"
             "FFmpeg system-wide with: winget install Gyan.FFmpeg\n",
