@@ -65,10 +65,16 @@ class ThumbnailService:
         media_id: str,
         url: Optional[str],
         fallbacks: Optional[Iterable[str]] = None,
+        *,
+        refresh: bool = False,
     ) -> Optional[Path]:
-        """Download and cache square cover art. Returns None on failure."""
+        """Download and cache square cover art. Returns None on failure.
+
+        ``refresh`` ignores an existing cache file, for when a bigger or
+        corrected picture is wanted.
+        """
         cached = self.cached_path(platform, media_id)
-        if cached.exists() and cached.stat().st_size > 0:
+        if not refresh and cached.exists() and cached.stat().st_size > 0:
             return cached
 
         candidates: list[str] = []

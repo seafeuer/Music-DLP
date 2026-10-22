@@ -615,3 +615,115 @@ def test_the_plain_title_search_does_not_weaken_the_match(monkeypatch):
     assert artwork._itunes_cover(
         "Travis Scott", "90210 (but it will change your life)", 472
     ) is None
+
+
+# ------------------------------------------------- bulk cover replacement
+
+def _mp3_with_cover(tmp_path: Path, size: int) -> Path:
+    """A tiny real MP3 with an embedded cover."""
+    import subprocess
+
+    from mutagen.id3 import APIC, ID3
+
+    path = tmp_path / "song.mp3"
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+         "sine=frequency=440:duration=1", "-codec:a", "libmp3lame", str(path)],
+        check=True,
+    )
+    tags = ID3()
+    tags.add(APIC(encoding=1, mime="image/jpeg", type=3, desc="Cover",
+                  data=_png((size, size))))
+    tags.save(str(path), v2_version=3)
+    return path
+
+
+def test_replace_cover_swaps_the_picture_and_keeps_the_audio(tmp_path):
+    from musicdlp.services.tagging import (
+        embedded_cover_size, replace_cover,
+    )
+
+    song = _mp3_with_cover(tmp_path, 640)
+    before = song.stat().st_size
+    new_cover = tmp_path / "new.jpg"
+    new_cover.write_bytes(_png((1400, 1400)))
+
+    assert replace_cover(song, new_cover) is True
+    assert embedded_cover_size(song) == (1400, 1400)
+    # One picture, not two.
+    from mutagen.id3 import ID3
+
+    assert len(ID3(str(song)).getall("APIC")) == 1
+    assert before > 0
+
+
+def test_embedded_cover_size_reads_what_is_there(tmp_path):
+    from musicdlp.services.tagging import embedded_cover_size
+
+    song = _mp3_with_cover(tmp_path, 900)
+    assert embedded_cover_size(song) == (900, 900)
+
+
+def test_embedded_cover_size_is_none_without_art(tmp_path):
+    import subprocess
+
+    from musicdlp.services.tagging import embedded_cover_size
+
+    path = tmp_path / "bare.mp3"
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+         "sine=frequency=440:duration=1", "-codec:a", "libmp3lame", str(path)],
+        check=True,
+    )
+    assert embedded_cover_size(path) is None
+
+
+def test_refresh_cover_updates_a_file_that_already_exists(
+    tmp_path, monkeypatch
+):
+    """This is what makes a corrected lookup reach old files."""
+    from musicdlp.core.config import Settings
+    from musicdlp.core.db import Database
+    from musicdlp.services import artwork as artwork_module
+    from musicdlp.services.library import LibraryService
+    from musicdlp.services.tagging import embedded_cover_size
+
+    song = _mp3_with_cover(tmp_path, 640)
+    db = Database(tmp_path / "lib.db")
+    source = db.add_source(url="u", kind="item", platform="youtube",
+                           external_id="abc", title="t", uploader="u",
+                           item_count=1, thumbnail_url=None)
+    tid = db.upsert_track(platform="youtube", media_id="abc", url="u",
+                          title="A Song", uploader="Chan", duration=200)
+    db.update_track(tid, meta_title="A Song", meta_artist="Chan",
+                    mp3_path=str(song), status="converted")
+    db.set_source_tracks(source, [(tid, 1)])
+
+    def fake_find(*args, **kwargs):
+        out = tmp_path / "found.jpg"
+        out.write_bytes(_png((1400, 1400)))
+        return out
+
+    monkeypatch.setattr(
+        "musicdlp.services.library.find_cover", fake_find
+    )
+    library = LibraryService(db, Settings(), None)
+    assert library.refresh_cover(tid) == "updated"
+    assert embedded_cover_size(song) == (1400, 1400)
+    assert db.get_track(tid).cover_path.endswith("found.jpg")
+
+
+def test_refresh_cover_skips_a_song_with_no_file(tmp_path):
+    from musicdlp.core.config import Settings
+    from musicdlp.core.db import Database
+    from musicdlp.services.library import LibraryService
+
+    db = Database(tmp_path / "lib.db")
+    source = db.add_source(url="u", kind="item", platform="youtube",
+                           external_id="abc", title="t", uploader="u",
+                           item_count=1, thumbnail_url=None)
+    tid = db.upsert_track(platform="youtube", media_id="abc", url="u",
+                          title="A Song", uploader="Chan", duration=200)
+    db.set_source_tracks(source, [(tid, 1)])
+    library = LibraryService(db, Settings(), None)
+    assert library.refresh_cover(tid) == "skipped"

@@ -117,6 +117,79 @@ def _embed_m4a(
     return True
 
 
+def replace_cover(path: Path, cover_path: Path) -> bool:
+    """Swap the embedded picture without touching the audio.
+
+    Used to correct a cover on a file that already exists. The audio
+    stream is not decoded or re-encoded, so this is instant and the sound
+    is bit-for-bit what it was.
+    """
+    path = Path(path)
+    cover_path = Path(cover_path)
+    if not path.exists() or not cover_path.exists():
+        return False
+    data = cover_path.read_bytes()
+    suffix = path.suffix.lower()
+    try:
+        if suffix == ".mp3":
+            from mutagen.id3 import APIC, ID3
+
+            try:
+                tags = ID3(str(path))
+            except Exception:
+                tags = ID3()
+            tags.delall("APIC")
+            tags.add(
+                APIC(encoding=1, mime="image/jpeg", type=3, desc="Cover",
+                     data=data)
+            )
+            tags.save(str(path), v2_version=3)
+            return True
+        if suffix in (".m4a", ".mp4", ".aac"):
+            from mutagen.mp4 import MP4, MP4Cover
+
+            audio = MP4(str(path))
+            if audio.tags is None:
+                audio.add_tags()
+            audio.tags["covr"] = [
+                MP4Cover(data, imageformat=MP4Cover.FORMAT_JPEG)
+            ]
+            audio.save()
+            return True
+    except Exception as exc:
+        logger.error("Could not replace the cover on %s: %s", path.name, exc)
+        return False
+    logger.warning("No cover writer for %s", suffix)
+    return False
+
+
+def embedded_cover_size(path: Path) -> Optional[tuple[int, int]]:
+    """The pixel size of the picture inside a file, if it has one."""
+    from io import BytesIO
+
+    from PIL import Image
+
+    path = Path(path)
+    try:
+        if path.suffix.lower() == ".mp3":
+            from mutagen.id3 import ID3
+
+            frames = ID3(str(path)).getall("APIC")
+            data = frames[0].data if frames else None
+        else:
+            from mutagen.mp4 import MP4
+
+            tags = MP4(str(path)).tags or {}
+            covers = tags.get("covr") or []
+            data = bytes(covers[0]) if covers else None
+        if not data:
+            return None
+        with Image.open(BytesIO(data)) as image:
+            return image.size
+    except Exception:
+        return None
+
+
 def read_tags(path: Path) -> dict[str, object]:
     """Small helper used by tests and diagnostics."""
     path = Path(path)

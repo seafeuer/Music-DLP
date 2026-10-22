@@ -140,6 +140,49 @@ class AddLinksTask(QRunnable):
             self.signals.failed.emit(str(exc))
 
 
+class FixCoversSignals(QObject):
+    progress = Signal(int, int, str)
+    finished = Signal(dict)
+    failed = Signal(str)
+
+
+class FixCoversTask(QRunnable):
+    """Re-look-up and replace the cover on files that already exist."""
+
+    def __init__(
+        self,
+        library: LibraryService,
+        thumbnails,
+        track_ids: list[int],
+        signals: FixCoversSignals,
+    ) -> None:
+        super().__init__()
+        self.library = library
+        self.thumbnails = thumbnails
+        self.track_ids = track_ids
+        self.signals = signals
+
+    def run(self) -> None:
+        counts = {"updated": 0, "unchanged": 0, "skipped": 0, "error": 0}
+        try:
+            total = len(self.track_ids)
+            for index, track_id in enumerate(self.track_ids, start=1):
+                try:
+                    outcome = self.library.refresh_cover(
+                        track_id, thumbnails=self.thumbnails
+                    )
+                except Exception:  # noqa: BLE001 - one song must not stop it
+                    logging.getLogger("musicdlp.ui").exception(
+                        "Cover refresh failed for %s", track_id
+                    )
+                    outcome = "error"
+                counts[outcome] = counts.get(outcome, 0) + 1
+                self.signals.progress.emit(index, total, str(track_id))
+            self.signals.finished.emit(counts)
+        except Exception as exc:  # noqa: BLE001 - shown to the user
+            self.signals.failed.emit(str(exc))
+
+
 class RefreshSourceTask(QRunnable):
     def __init__(
         self,
@@ -419,6 +462,14 @@ class MainWindow(QMainWindow):
         self.update_files_action.setShortcut("Ctrl+Shift+R")
         self.update_files_action.triggered.connect(self._update_files)
         edit_menu.addAction(self.update_files_action)
+
+        self.fix_covers_action = QAction("Fix covers for ticked songs", self)
+        self.fix_covers_action.setToolTip(
+            "Look the artwork up again and put it into the files, without "
+            "downloading or re-encoding the audio"
+        )
+        self.fix_covers_action.triggered.connect(self._fix_covers)
+        edit_menu.addAction(self.fix_covers_action)
 
         self.gdrive_action = QAction("Send ticked songs to Google Drive", self)
         self.gdrive_action.setToolTip(
@@ -1298,6 +1349,7 @@ class MainWindow(QMainWindow):
             else "Translate every song in this link…"
         )
         self.update_files_action.setEnabled(count > 0 and not busy)
+        self.fix_covers_action.setEnabled(count > 0 and not busy)
         self.gdrive_action.setEnabled(count > 0 and not busy)
         self.album_action.setEnabled(count > 0 and not busy)
         self.lookup_action.setEnabled(
@@ -1377,7 +1429,11 @@ class MainWindow(QMainWindow):
         self._update_actions()
 
     def _is_busy(self) -> bool:
-        return self._add_running or self.ctx.pipeline.is_running
+        return (
+            self._add_running
+            or getattr(self, "_covers_running", False)
+            or self.ctx.pipeline.is_running
+        )
 
     def _start_easy(self) -> None:
         rows = self._checked_rows()
@@ -2106,6 +2162,80 @@ class MainWindow(QMainWindow):
         self.status.set_busy(
             f"Updating {len(rows)} file{'' if len(rows) == 1 else 's'}…"
         )
+
+    def _fix_covers(self) -> None:
+        """Replace the artwork in the ticked songs' existing files."""
+        if self._is_busy():
+            self.status.set_idle("Wait for the current job to finish.")
+            return
+
+        rows = self._checked_rows()
+        if not rows:
+            self.status.set_idle("Tick the songs whose covers you want fixed.")
+            return
+
+        track_ids = [row.track.id for row in rows]
+        reply = QMessageBox.question(
+            self,
+            "Fix covers",
+            f"Look up the artwork again for {len(track_ids)} song"
+            f"{'' if len(track_ids) == 1 else 's'} and replace it in the "
+            "files?\n\n"
+            "The audio is not re-encoded, so nothing is downloaded and the "
+            "sound is unchanged.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        self._covers_running = True
+        self._set_controls_enabled(False)
+        self.status.set_busy(f"Fixing covers for {len(track_ids)} song(s)…")
+
+        signals = FixCoversSignals()
+        signals.progress.connect(
+            lambda done, total, _id: self.status.set_busy(
+                f"Fixing covers {done}/{total}…"
+            )
+        )
+        signals.finished.connect(self._on_covers_fixed)
+        signals.failed.connect(self._on_covers_failed)
+        self._cover_signals = signals
+
+        task = FixCoversTask(
+            self.ctx.library, self.ctx.thumbnails, track_ids, signals
+        )
+        QThreadPool.globalInstance().start(task)
+
+    def _on_covers_fixed(self, counts: dict) -> None:
+        self._covers_running = False
+        self._set_controls_enabled(True)
+        self._reload_current_source()
+        updated = counts.get("updated", 0)
+        failed = counts.get("error", 0)
+        skipped = counts.get("skipped", 0)
+        parts = []
+        if updated:
+            parts.append(f"Updated {updated} cover{'' if updated == 1 else 's'}")
+        if failed:
+            parts.append(f"{failed} could not be written")
+        if skipped:
+            parts.append(f"{skipped} had no file to change")
+        message = ", ".join(parts) or "No covers needed changing"
+        self.status.set_idle(message + ".")
+        if failed:
+            QMessageBox.warning(
+                self, "Some covers were not fixed",
+                f"{failed} file(s) could not be updated. The log has the "
+                "details.",
+            )
+
+    def _on_covers_failed(self, message: str) -> None:
+        self._covers_running = False
+        self._set_controls_enabled(True)
+        self.status.set_idle("The cover fix stopped.")
+        QMessageBox.warning(self, "Could not fix covers", message)
 
     def _send_to_gdrive(self) -> None:
         """Copy the ticked songs into the Google Drive folder."""

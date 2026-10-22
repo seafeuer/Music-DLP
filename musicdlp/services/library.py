@@ -12,8 +12,10 @@ from musicdlp.core.db import Database
 from musicdlp.core.errors import AppError, Cancelled
 from musicdlp.core.models import is_converted, is_downloaded
 from musicdlp.core.paths import art_cache_dir
+from musicdlp.services.artwork import cover_cache_path, find_cover
 from musicdlp.services.filenames import safe_stem
 from musicdlp.services.smart_titles import suggest as smart_suggest
+from musicdlp.services.tagging import replace_cover
 from musicdlp.services.ytdlp import YtDlpService
 
 logger = logging.getLogger("musicdlp.library")
@@ -282,6 +284,68 @@ class LibraryService:
             smart_confidence=None,
             smart_reason=None,
         )
+
+    def refresh_cover(
+        self, track_id: int, *, thumbnails=None
+    ) -> str:
+        """Look the artwork up again and put it into the files that exist.
+
+        Returns ``updated``, ``unchanged``, ``skipped`` (no file to write)
+        or ``error``. The audio is not re-encoded: only the picture changes.
+
+        This is what makes a corrected lookup reach songs that were
+        converted before the rules were fixed, without downloading them
+        again.
+        """
+        track = self.db.get_track(track_id)
+        if track is None:
+            return "error"
+
+        files = [
+            Path(path) for path in (track.mp3_path, track.m4a_path)
+            if path and Path(path).exists()
+        ]
+        if not files:
+            return "skipped"
+
+        artist = track.display_artist
+        title = track.display_title
+        found = None
+        if title:
+            found = find_cover(
+                artist,
+                title,
+                cover_cache_path(track.platform, track.media_id),
+                album=track.display_album,
+                refresh=True,
+                seconds=track.duration,
+            )
+
+        # No catalogue entry really is this song, so the video's own
+        # picture is used, enlarged to the cover size.
+        if found is None and thumbnails is not None:
+            from musicdlp.services.thumbnails import youtube_fallbacks
+
+            fallbacks = (
+                youtube_fallbacks(track.media_id)
+                if track.platform == "youtube" else None
+            )
+            found = thumbnails.fetch(
+                track.platform, track.media_id,
+                track.thumbnail_url, fallbacks, refresh=True,
+            )
+        if found is None:
+            return "unchanged"
+
+        wrote = False
+        for path in files:
+            if replace_cover(path, found):
+                wrote = True
+        if not wrote:
+            return "error"
+
+        self.db.update_track(track_id, cover_path=str(found))
+        return "updated"
 
     def set_cover(self, track_id: int, image_path: Optional[Path]) -> Optional[Path]:
         """Use a user-chosen image as the cover art for a track.
