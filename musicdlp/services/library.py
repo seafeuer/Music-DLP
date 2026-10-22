@@ -344,6 +344,12 @@ class LibraryService:
         if not wrote:
             return "error"
 
+        # A copy already delivered to Spotify has the old picture too.
+        for path in files:
+            copy = self.settings.spotify_path / path.name
+            if copy.exists() and copy != path:
+                replace_cover(copy, found)
+
         self.db.update_track(track_id, cover_path=str(found))
         return "updated"
 

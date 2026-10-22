@@ -751,3 +751,44 @@ def test_replace_cover_works_on_m4a(tmp_path):
     second.write_bytes(_png((1400, 1400)))
     assert replace_cover(song, second) is True
     assert embedded_cover_size(song) == (1400, 1400)
+
+
+def test_refresh_cover_updates_the_spotify_copy_too(tmp_path, monkeypatch):
+    """A copy already delivered to Spotify has the old picture."""
+    import shutil
+
+    from musicdlp.core.config import Settings
+    from musicdlp.core.db import Database
+    from musicdlp.services.library import LibraryService
+    from musicdlp.services.tagging import embedded_cover_size
+
+    out = tmp_path / "out" / "MP3"
+    out.mkdir(parents=True)
+    spotify = tmp_path / "spotify"
+    spotify.mkdir()
+    song = _mp3_with_cover(out, 640)
+    shutil.copy2(song, spotify / song.name)
+
+    db = Database(tmp_path / "lib.db")
+    source = db.add_source(url="u", kind="item", platform="youtube",
+                           external_id="abc", title="t", uploader="u",
+                           item_count=1, thumbnail_url=None)
+    tid = db.upsert_track(platform="youtube", media_id="abc", url="u",
+                          title="A Song", uploader="Chan", duration=200)
+    db.update_track(tid, meta_title="A Song", meta_artist="Chan",
+                    mp3_path=str(song), status="synced",
+                    synced_at="2026-01-01")
+    db.set_source_tracks(source, [(tid, 1)])
+
+    found = tmp_path / "found.jpg"
+    found.write_bytes(_png((1400, 1400)))
+    monkeypatch.setattr("musicdlp.services.library.find_cover",
+                        lambda *a, **k: found)
+
+    settings = Settings(output_dir=str(tmp_path / "out"),
+                        spotify_dir=str(spotify))
+    library = LibraryService(db, settings, None)
+    assert library.refresh_cover(tid) == "updated"
+
+    assert embedded_cover_size(song) == (1400, 1400)
+    assert embedded_cover_size(spotify / song.name) == (1400, 1400)

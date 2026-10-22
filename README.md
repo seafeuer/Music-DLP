@@ -264,9 +264,9 @@ grey cover.
 is converted, so files made before the artwork rules were fixed keep the old
 picture. **Edit → Fix covers for ticked songs** looks the artwork up again and
 replaces it in the files themselves: the audio is not decoded or re-encoded,
-so nothing is downloaded and the sound is bit-for-bit unchanged. It is the
-quick way to correct a wrong cover, or to replace a 640 px picture with the
-1400 px one.
+so nothing is downloaded and the sound is bit-for-bit unchanged. The copy
+already delivered to Spotify is updated too. It is the quick way to correct a
+wrong cover, or to replace a 640 px picture with the 1400 px one.
 
 **The cover is only used when it is the same song.** A match has to have the
 same title, with the artist as the *main* credit — not a feature — and must
