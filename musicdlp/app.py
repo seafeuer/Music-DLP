@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import threading
 from typing import Optional
 
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
@@ -76,6 +77,18 @@ def _install_excepthook(logger: logging.Logger) -> None:
             pass
 
     sys.excepthook = hook
+
+    # A worker thread that dies would otherwise vanish without a trace,
+    # which is exactly how a crash looks in a windowed build with no
+    # console. Record it so the log explains what happened.
+    def thread_hook(args) -> None:
+        logger.critical(
+            "Unhandled exception in thread %s",
+            getattr(args.thread, "name", "?"),
+            exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+        )
+
+    threading.excepthook = thread_hook
 
 
 def main() -> int:
