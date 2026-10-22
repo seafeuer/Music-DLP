@@ -727,3 +727,27 @@ def test_refresh_cover_skips_a_song_with_no_file(tmp_path):
     db.set_source_tracks(source, [(tid, 1)])
     library = LibraryService(db, Settings(), None)
     assert library.refresh_cover(tid) == "skipped"
+
+
+def test_replace_cover_works_on_m4a(tmp_path):
+    import subprocess
+
+    from musicdlp.services.tagging import (
+        embed_tags, embedded_cover_size, replace_cover,
+    )
+
+    song = tmp_path / "song.m4a"
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+         "sine=frequency=440:duration=1", "-c:a", "aac", str(song)],
+        check=True,
+    )
+    first = tmp_path / "one.jpg"
+    first.write_bytes(_png((640, 640)))
+    embed_tags(song, title="T", artist="A", cover_path=first)
+    assert embedded_cover_size(song) == (640, 640)
+
+    second = tmp_path / "two.jpg"
+    second.write_bytes(_png((1400, 1400)))
+    assert replace_cover(song, second) is True
+    assert embedded_cover_size(song) == (1400, 1400)
