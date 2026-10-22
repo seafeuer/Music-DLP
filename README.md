@@ -255,11 +255,19 @@ nothing is found, the video thumbnail is used as before. **Edit details → Find
 cover art** does the same lookup for one song.
 
 Covers are stored at 1400 px square, from the largest artwork the catalogue
-has (iTunes serves up to 3000 px). Art is never stretched beyond its own
-resolution, except that anything under Spotify's 640 px minimum is lifted to
-it. YouTube answers a missing large thumbnail with a 120x90 grey square; that
-is rejected and the next size down is used instead, so a missing still never
-becomes a grey cover.
+has (iTunes serves up to 3000 px; Deezer covers up to 1000 px). YouTube
+answers a missing large thumbnail with a 120x90 grey square; that is rejected
+and the next size down is used instead, so a missing still never becomes a
+grey cover.
+
+**The cover is only used when it is the same song.** A match has to have the
+same title, with the artist as the *main* credit — not a feature — and must
+not be a live, karaoke, cover, or remix version the upload does not claim to
+be. Without that rule an unreleased track picks up a stranger's artwork:
+"Monday Morning" by Young Thug was given the cover of a Juicy J song he is
+only featured on. When no catalogue entry really is the song, the video's own
+picture is used and enlarged to the cover size with a sharpening pass, which
+is the honest choice for something that has no official cover.
 
 Converted files go to `Music\MusicDLP\MP3` (and `M4A` if enabled). Files sent to
 Spotify are copied to `Music\MusicDLP\Spotify` by default.

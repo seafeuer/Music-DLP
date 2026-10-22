@@ -29,6 +29,7 @@ USER_AGENT = (
 )
 ITUNES_URL = "https://itunes.apple.com/search"
 MUSICBRAINZ_URL = "https://musicbrainz.org/ws/2/recording"
+DEEZER_URL = "https://api.deezer.com/search"
 COVER_ARCHIVE_URL = "https://coverartarchive.org/release/{mbid}/front-1200"
 
 # iTunes serves artwork at any size the publisher uploaded, up to 3000 px
@@ -113,10 +114,84 @@ def _save_square(
 def _artist_parts(artist: str) -> list[str]:
     """The separate names in an artist credit, main artist first."""
     text = _clean(artist)
-    for separator in (" feat. ", " featuring ", " & ", ",", " / "):
+    for separator in (" feat. ", " featuring ", " & ", ",", " / ", " x "):
         text = text.replace(separator, "|")
     parts = [_clean(part) for part in text.split("|")]
     return [part for part in parts if part]
+
+
+def _norm(text: str) -> str:
+    """A comparison form: lower case, no accents, no punctuation."""
+    import unicodedata
+
+    text = unicodedata.normalize("NFKD", (text or "").lower())
+    text = "".join(char for char in text if not unicodedata.combining(char))
+    cleaned = "".join(
+        char if char.isalnum() else " " for char in text
+    )
+    return " ".join(cleaned.split())
+
+
+# Qualifiers that name a different recording of a song. A cover of "Monday
+# Morning" is not the upload being tagged, so its artwork must not be used.
+_DIFFERENT_RECORDING = (
+    "live", "cover", "karaoke", "instrumental", "remix", "tribute",
+    "backing track", "sped up", "nightcore", "acoustic", "reprise",
+)
+
+
+def _qualifiers(text: str) -> set[str]:
+    """The words inside brackets, which say how a version differs."""
+    import re
+
+    found = re.findall(r"[\(\[\{]([^\)\]\}]*)[\)\]\}]", text or "")
+    return {_norm(item) for item in found if item.strip()}
+
+
+def _core_title(text: str) -> str:
+    """The title with its bracketed qualifiers removed."""
+    import re
+
+    return _norm(re.sub(r"[\(\[\{][^\)\]\}]*[\)\]\}]", " ", text or ""))
+
+
+def _is_the_same_song(
+    wanted_title: str,
+    wanted_parts: list[str],
+    result_title: str,
+    result_artist: str,
+) -> bool:
+    """Whether a catalogue result is the song that was asked for.
+
+    This is deliberately strict. A song that is not in the catalogue has no
+    cover there, and using a different song's cover is worse than using the
+    video's own picture: "Monday Morning" by Young Thug was given the cover
+    of a Juicy J song he is only featured on.
+    """
+    wanted_core = _core_title(wanted_title)
+    result_core = _core_title(result_title)
+    if not wanted_core or wanted_core != result_core:
+        return False
+
+    # A performer further down the credit is a feature, not the artist.
+    wanted = {_norm(part) for part in wanted_parts if _norm(part)}
+    credited = _artist_parts(result_artist)
+    if wanted:
+        primary = _norm(credited[0]) if credited else ""
+        if primary not in wanted:
+            return False
+
+    # A version marker that the upload title does not carry means this is a
+    # different recording, however well the names line up.
+    wanted_text = _norm(wanted_title)
+    for marker in _DIFFERENT_RECORDING:
+        if marker in wanted_text:
+            continue
+        if marker in _core_title(result_title):
+            return False
+        if any(marker in item for item in _qualifiers(result_title)):
+            return False
+    return True
 
 
 def _itunes_search(term: str, limit: int = 8) -> list[dict]:
@@ -137,13 +212,17 @@ def _itunes_search(term: str, limit: int = 8) -> list[dict]:
 
 
 def _itunes_cover(artist: str, title: str) -> Optional[str]:
-    """The best cover iTunes has for this song.
+    """The best cover iTunes has for this exact song, or None.
 
     Searching the whole artist credit can miss the song entirely: for
     "Kasane Teto SV, Yoshida Yasei" the single by "Yoshida Yasei" never
     comes back, only compilations that happen to credit everyone. So each
     artist is searched on its own as well, and everything found is ranked
     together.
+
+    Nothing is returned when no result is actually this song. An unreleased
+    track has no cover in the catalogue, and borrowing another song's is
+    worse than falling back to the video's own picture.
     """
     terms: list[str] = []
     if artist:
@@ -165,41 +244,31 @@ def _itunes_cover(artist: str, title: str) -> Optional[str]:
     if not results:
         return None
 
-    wanted_title = _clean(title).lower()
-    wanted_parts = {part.lower() for part in _artist_parts(artist)}
+    wanted_parts = _artist_parts(artist)
+    wanted_core = _core_title(title)
 
     scored: list[tuple[tuple, str]] = []
     for result in results:
+        track = _clean(result.get("trackName", ""))
+        performer = _clean(result.get("artistName", ""))
+        album = _clean(result.get("collectionName", ""))
+        if not _is_the_same_song(title, wanted_parts, track, performer):
+            continue
         artwork = _large_artwork(result.get("artworkUrl100"))
         if not artwork:
             continue
-        track = _clean(result.get("trackName", "")).lower()
-        performer = _clean(result.get("artistName", "")).lower()
-        album = _clean(result.get("collectionName", "")).lower()
-
-        title_hit = bool(wanted_title) and (
-            wanted_title in track or track in wanted_title
-        )
-        # Any credited artist counts: the single may be filed under the
-        # producer while the video names the vocalist first.
-        performer_parts = {part.lower() for part in _artist_parts(performer)}
-        artist_hit = bool(wanted_parts & performer_parts)
-        # "Override" and "Override (English Cover)" both contain the title;
-        # the exact one is the song the video is.
-        exact = 0 if track == wanted_title else 1
         scored.append(
             (
                 (
-                    0 if title_hit else 1,
-                    0 if artist_hit else 1,
-                    _itunes_kind_rank(track, album),
-                    exact,
+                    _itunes_kind_rank(_norm(track), _norm(album)),
+                    0 if _core_title(track) == wanted_core else 1,
                 ),
                 artwork,
             )
         )
 
     if not scored:
+        logger.info("No catalogue cover is this song: %s — %s", artist, title)
         return None
     scored.sort(key=lambda pair: pair[0])
     return scored[0][1]
@@ -220,6 +289,54 @@ def _itunes_kind_rank(track: str, album: str) -> int:
     return 0
 
 
+def _itunes_album_cover(artist: str, album: str) -> Optional[str]:
+    """The cover of a named album by a named artist.
+
+    Used when the song's own title found nothing — an unreleased track that
+    is filed on a known album, or a title the catalogue spells differently.
+    The album name and the artist both have to match, so a different album
+    is never borrowed.
+    """
+    album = _clean(album)
+    if not album:
+        return None
+    wanted_album = _norm(album)
+    wanted_parts = {_norm(part) for part in _artist_parts(artist) if part}
+
+    terms = [_clean(f"{artist} {album}") if artist else album, album]
+    seen = set()
+    scored: list[tuple[int, str]] = []
+    for term in terms:
+        params = {"term": term, "entity": "album", "limit": 10}
+        try:
+            response = requests.get(
+                ITUNES_URL, params=params,
+                headers={"User-Agent": USER_AGENT}, timeout=15,
+            )
+            if response.status_code >= 400:
+                continue
+            results = response.json().get("results") or []
+        except (requests.exceptions.RequestException, ValueError):
+            continue
+        for result in results:
+            found = _norm(result.get("collectionName", ""))
+            if found != wanted_album:
+                continue
+            performer = _norm(result.get("artistName", ""))
+            if wanted_parts and performer not in wanted_parts:
+                continue
+            artwork = _large_artwork(result.get("artworkUrl100"))
+            if not artwork or artwork in seen:
+                continue
+            seen.add(artwork)
+            scored.append((0, artwork))
+        if scored:
+            break
+    if not scored:
+        return None
+    return scored[0][1]
+
+
 def _large_artwork(url: str) -> str:
     """Ask iTunes for the biggest version of a cover it has."""
     url = (url or "").strip()
@@ -235,12 +352,91 @@ def _large_artwork(url: str) -> str:
     return url
 
 
+# ------------------------------------------------------------------ Deezer
+
+
+def _deezer_cover(artist: str, title: str) -> list[str]:
+    """Cover URLs from Deezer, best first.
+
+    Deezer is the fallback for songs iTunes does not carry: it has a much
+    wider catalogue of non-Western and independent releases, and it is
+    free and needs no key. Its largest cover is 1000 px.
+    """
+    if not title:
+        return []
+    terms: list[str] = []
+    if artist:
+        terms.append(_clean(f"{artist} {title}"))
+        for part in _artist_parts(artist):
+            terms.append(_clean(f"{part} {title}"))
+    terms.append(_clean(title))
+
+    results: list[dict] = []
+    seen = set()
+    for term in terms:
+        try:
+            response = requests.get(
+                DEEZER_URL, params={"q": term, "limit": 10},
+                headers={"User-Agent": USER_AGENT}, timeout=15,
+            )
+            if response.status_code >= 400:
+                continue
+            data = response.json()
+        except (requests.exceptions.RequestException, ValueError) as exc:
+            logger.debug("Deezer lookup failed: %s", exc)
+            continue
+        for item in data.get("data") or []:
+            key = item.get("id")
+            if key in seen:
+                continue
+            seen.add(key)
+            results.append(item)
+
+    wanted_parts = _artist_parts(artist)
+    wanted_core = _core_title(title)
+
+    scored: list[tuple[tuple, str]] = []
+    for item in results:
+        track = _clean(item.get("title", ""))
+        performer = _clean((item.get("artist") or {}).get("name", ""))
+        album = item.get("album") or {}
+        album_name = _clean(album.get("title", ""))
+        if not _is_the_same_song(title, wanted_parts, track, performer):
+            continue
+        url = album.get("cover_xl") or album.get("cover_big") or ""
+        if not url:
+            continue
+        scored.append(
+            (
+                (
+                    _itunes_kind_rank(_norm(track), _norm(album_name)),
+                    0 if _core_title(track) == wanted_core else 1,
+                ),
+                url,
+            )
+        )
+
+    if not scored:
+        return []
+    scored.sort(key=lambda pair: pair[0])
+    ordered: list[str] = []
+    for _rank, url in scored:
+        if url not in ordered:
+            ordered.append(url)
+    return ordered
+
+
 # --------------------------------------------------------- MusicBrainz
 
 
-def _musicbrainz_cover(artist: str, title: str) -> Optional[str]:
+def _musicbrainz_cover(artist: str, title: str) -> list[str]:
+    """Cover Art Archive URLs for this song, best release first.
+
+    A recording is listed on many releases and only some carry artwork, so
+    every matching release is offered and the caller tries them in order.
+    """
     if not title:
-        return None
+        return []
     query_parts = [f'recording:"{title}"']
     if artist:
         query_parts.append(f'artist:"{artist}"')
@@ -251,18 +447,58 @@ def _musicbrainz_cover(artist: str, title: str) -> Optional[str]:
             headers={"User-Agent": USER_AGENT}, timeout=15,
         )
         if response.status_code >= 400:
-            return None
+            return []
         data = response.json()
     except (requests.exceptions.RequestException, ValueError):
-        return None
+        return []
 
+    wanted_parts = _artist_parts(artist)
+    urls: list[str] = []
     for recording in data.get("recordings") or []:
-        releases = recording.get("releases") or []
-        for release in releases:
+        # The same strict test as iTunes: a recording credited to someone
+        # else is a different song, even if it matched the search.
+        credited = []
+        for credit in recording.get("artist-credit") or []:
+            if isinstance(credit, dict):
+                name = credit.get("name") or (credit.get("artist") or {}).get("name")
+                if name:
+                    credited.append(str(name))
+        if not _is_the_same_song(
+            title, wanted_parts, str(recording.get("title") or ""),
+            ", ".join(credited),
+        ):
+            continue
+        for release in recording.get("releases") or []:
             release_id = release.get("id")
-            if release_id:
-                return COVER_ARCHIVE_URL.format(mbid=release_id)
-    return None
+            if not release_id:
+                continue
+            if not _release_is_the_album(release):
+                continue
+            url = COVER_ARCHIVE_URL.format(mbid=release_id)
+            if url not in urls:
+                urls.append(url)
+    return urls
+
+
+def _release_is_the_album(release: dict) -> bool:
+    """Whether this release is the album the song belongs to.
+
+    A live album or a various-artists compilation does contain the song,
+    but its cover is not the song's cover, so it is skipped. Without this
+    a studio track can be given a "Live at Lowlands" sleeve.
+    """
+    group = release.get("release-group") or {}
+    primary = str(group.get("primary-type") or "").strip().lower()
+    secondary = {
+        str(kind).strip().lower() for kind in (group.get("secondary-types") or [])
+    }
+    if "live" in secondary or primary == "live":
+        return False
+    if "compilation" in secondary:
+        return False
+    if "dj-mix" in secondary or "mixtape/street" in secondary:
+        return False
+    return primary in ("album", "single", "ep", "")
 
 
 # ---------------------------------------------------------------- public
@@ -305,20 +541,32 @@ def find_cover(
         return None
 
     candidates: list[str] = []
+
+    def offer(urls) -> None:
+        if not urls:
+            return
+        if isinstance(urls, str):
+            urls = [urls]
+        for url in urls:
+            if url and url not in candidates:
+                candidates.append(url)
+
     for lookup in (
         lambda: _itunes_cover(artist, title),
+        lambda: _deezer_cover(artist, title),
         lambda: _musicbrainz_cover(artist, title),
-        lambda: _itunes_cover(artist, album) if album else None,
+        lambda: _itunes_album_cover(artist, album) if album else None,
     ):
         try:
-            url = lookup()
+            offer(lookup())
         except Exception as exc:
             logger.debug("Cover lookup failed: %s", exc)
             continue
-        if url and url not in candidates:
-            candidates.append(url)
 
-    for url in candidates:
+    # Art is tried in order and the first one that downloads wins. A
+    # release in the catalogue often has no picture attached, so a 404 is
+    # expected rather than an error.
+    for url in candidates[:8]:
         data = _download(url)
         if not data:
             continue

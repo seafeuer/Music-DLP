@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 import requests
-from PIL import Image, ImageOps
+from PIL import Image, ImageFilter, ImageOps
 
 from musicdlp.services.filenames import safe_stem
 
@@ -43,10 +43,17 @@ def youtube_fallbacks(media_id: str) -> list[str]:
 
 
 class ThumbnailService:
-    def __init__(self, cache_dir: Path, size: int = 1400) -> None:
+    def __init__(
+        self, cache_dir: Path, size: int = 1400, *, upscale: bool = True
+    ) -> None:
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.size = size
+        # A video still is the only picture an unreleased song has, and it
+        # is smaller than a cover should be. Enlarging it with a good
+        # filter looks better on a phone and a laptop than letting the
+        # player do a plain stretch.
+        self.upscale = upscale
 
     def cached_path(self, platform: str, media_id: str) -> Path:
         stem = safe_stem(f"{platform}_{media_id}", max_length=80)
@@ -102,15 +109,23 @@ class ThumbnailService:
             logger.debug("Ignoring a %s px thumbnail", image.size)
             return None
 
-        # Enlarge only up to Spotify's minimum, never beyond it: a 720 px
-        # still is stored at 720, and a 360 px one is lifted to 640.
         target = min(self.size, max(MIN_STORED_SIZE, edge))
+        if self.upscale and edge < self.size:
+            # Go all the way to the cover size, not just to the minimum.
+            target = self.size
+        enlarged = target > edge
         image = ImageOps.fit(
             image,
             (target, target),
             method=Image.Resampling.LANCZOS,
             centering=(0.5, 0.5),
         )
+        if enlarged:
+            # Lanczos alone comes out soft. A light unsharp pass restores
+            # some edge definition without the halos a heavy one adds.
+            image = image.filter(
+                ImageFilter.UnsharpMask(radius=1.4, percent=70, threshold=3)
+            )
 
         tmp = destination.with_suffix(".tmp.jpg")
         image.save(tmp, "JPEG", quality=92, optimize=True)

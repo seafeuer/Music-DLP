@@ -114,7 +114,8 @@ def test_a_placeholder_falls_through_to_the_next_size(tmp_path, monkeypatch):
         ["https://x/sddefault.jpg"],
     )
     assert saved is not None
-    assert _size_of(saved) == (640, 640)
+    # The 640 px still is enlarged to the cover size, not stored at 640.
+    assert _size_of(saved) == (1400, 1400)
 
 
 def test_a_cached_cover_is_returned_without_a_download(tmp_path, monkeypatch):
@@ -203,3 +204,177 @@ def test_a_credited_artist_further_down_the_credit_still_matches(monkeypatch):
         artwork, "_itunes_search", lambda term, limit=8: results
     )
     assert artwork._itunes_cover("Kasane Teto SV, Yoshida Yasei", "Override")
+
+
+# ------------------------------------- never borrow another song's cover
+
+def test_a_feature_credit_is_not_the_artist():
+    """Monday Morning by Young Thug must not get a Juicy J song's cover."""
+    assert artwork._is_the_same_song(
+        "Monday Morning", ["Young Thug"],
+        "Low (feat. Nicki Minaj, Lil Bibby & Young Thug)", "Juicy J",
+    ) is False
+
+
+def test_an_unreleased_song_gets_no_catalogue_cover(monkeypatch):
+    results = [
+        {"trackName": "Low (feat. Nicki Minaj, Lil Bibby & Young Thug)",
+         "artistName": "Juicy J",
+         "collectionName": "Low (feat. ...) - Single",
+         "artworkUrl100": "https://x/low/100x100bb.jpg"},
+        {"trackName": "Best Part (feat. H.E.R.)",
+         "artistName": "Daniel Caesar", "collectionName": "Freudian",
+         "artworkUrl100": "https://x/bp/100x100bb.jpg"},
+    ]
+    monkeypatch.setattr(
+        artwork, "_itunes_search", lambda term, limit=8: results
+    )
+    assert artwork._itunes_cover("Young Thug", "Monday Morning") is None
+
+
+def test_the_right_song_is_still_found_through_a_split_credit():
+    assert artwork._is_the_same_song(
+        "Override", ["Kasane Teto SV", "Yoshida Yasei"],
+        "Override", "Yoshida Yasei",
+    ) is True
+
+
+def test_a_cover_version_is_rejected_when_the_upload_is_the_original():
+    assert artwork._is_the_same_song(
+        "Override", ["Yoshida Yasei"], "Override (English Cover)",
+        "Yoshida Yasei",
+    ) is False
+
+
+def test_a_live_version_is_rejected_when_the_upload_is_studio():
+    assert artwork._is_the_same_song(
+        "Override", ["Yoshida Yasei"], "Override (Live)", "Yoshida Yasei"
+    ) is False
+
+
+def test_a_live_version_is_accepted_when_the_upload_is_that_live():
+    assert artwork._is_the_same_song(
+        "Override (Live)", ["Yoshida Yasei"], "Override (Live)",
+        "Yoshida Yasei",
+    ) is True
+
+
+def test_a_karaoke_track_is_rejected():
+    assert artwork._is_the_same_song(
+        "Override", ["Yoshida Yasei"], "Override KARAOKE", "Uta-Cha-Oh"
+    ) is False
+
+
+def test_a_different_title_is_rejected():
+    assert artwork._is_the_same_song(
+        "Monday Morning", ["Young Thug"], "Lifestyle", "Young Thug"
+    ) is False
+
+
+def test_the_same_title_by_another_artist_is_rejected():
+    assert artwork._is_the_same_song(
+        "Hello", ["Adele"], "Hello", "Lionel Richie"
+    ) is False
+
+
+# --------------------------------------------------------- upscaling
+
+def test_a_small_still_is_upscaled_to_the_cover_size(tmp_path):
+    service = thumbnails.ThumbnailService(tmp_path / "t")
+    saved = service._save_image(_png((480, 360)), tmp_path / "u.jpg")
+    assert saved is not None
+    assert _size_of(saved) == (1400, 1400)
+
+
+def test_upscaling_can_be_turned_off(tmp_path):
+    service = thumbnails.ThumbnailService(tmp_path / "t", upscale=False)
+    saved = service._save_image(_png((480, 360)), tmp_path / "u.jpg")
+    assert saved is not None
+    assert _size_of(saved) == (640, 640)
+
+
+def test_a_large_still_is_not_enlarged_further(tmp_path):
+    service = thumbnails.ThumbnailService(tmp_path / "t")
+    saved = service._save_image(_png((1280, 720)), tmp_path / "u.jpg")
+    assert saved is not None
+    assert _size_of(saved) == (1400, 1400)  # cropped to 720, then upscaled
+
+
+def test_an_already_large_image_is_left_alone(tmp_path):
+    service = thumbnails.ThumbnailService(tmp_path / "t")
+    saved = service._save_image(_png((2000, 2000)), tmp_path / "u.jpg")
+    assert saved is not None
+    assert _size_of(saved) == (1400, 1400)
+
+
+# ------------------------------------------------------------ Deezer source
+
+def test_deezer_is_used_for_songs_itunes_does_not_carry(monkeypatch):
+    results = [
+        {"id": 1, "title": "Creep",
+         "artist": {"name": "Radiohead"},
+         "album": {"title": "Pablo Honey",
+                   "cover_xl": "https://dz/pablo.jpg"}},
+        {"id": 2, "title": "Creep (Acoustic)",
+         "artist": {"name": "Radiohead"},
+         "album": {"title": "Creep EP", "cover_xl": "https://dz/ep.jpg"}},
+    ]
+
+    class Response:
+        status_code = 200
+
+        def json(self):
+            return {"data": results}
+
+    monkeypatch.setattr(
+        artwork.requests, "get", lambda *a, **k: Response()
+    )
+    urls = artwork._deezer_cover("Radiohead", "Creep")
+    assert urls[0] == "https://dz/pablo.jpg"
+
+
+def test_deezer_rejects_a_different_song(monkeypatch):
+    results = [
+        {"id": 1, "title": "Low (feat. Young Thug)",
+         "artist": {"name": "Juicy J"},
+         "album": {"title": "Low", "cover_xl": "https://dz/low.jpg"}},
+    ]
+
+    class Response:
+        status_code = 200
+
+        def json(self):
+            return {"data": results}
+
+    monkeypatch.setattr(
+        artwork.requests, "get", lambda *a, **k: Response()
+    )
+    assert artwork._deezer_cover("Young Thug", "Monday Morning") == []
+
+
+# ------------------------------------------------- a live album is not the album
+
+def test_a_live_release_is_not_used_for_its_cover():
+    release = {
+        "title": "Live at Lowlands",
+        "release-group": {"primary-type": "Album",
+                          "secondary-types": ["Live"]},
+    }
+    assert artwork._release_is_the_album(release) is False
+
+
+def test_a_compilation_is_not_used_for_its_cover():
+    release = {
+        "title": "Now That's Music",
+        "release-group": {"primary-type": "Album",
+                          "secondary-types": ["Compilation"]},
+    }
+    assert artwork._release_is_the_album(release) is False
+
+
+def test_a_real_album_is_used():
+    release = {
+        "title": "Pablo Honey",
+        "release-group": {"primary-type": "Album"},
+    }
+    assert artwork._release_is_the_album(release) is True
