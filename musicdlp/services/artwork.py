@@ -268,6 +268,27 @@ def _itunes_search(term: str, limit: int = 8) -> list[dict]:
         return []
 
 
+def _search_titles(title: str) -> list[str]:
+    """Titles to search for: the full one, and it without its brackets.
+
+    An upload title often carries a long parenthetical — "90210 (but it
+    will change your life)" — and the catalogue answers that with
+    unrelated tracks. The plain title finds the song. Matching still uses
+    the full title, so this only widens what is searched, never what is
+    accepted.
+    """
+    import re
+
+    full = _clean(title)
+    stripped = _clean(
+        re.sub(r"[\(\[\{][^\)\]\}]*[\)\]\}]", " ", title or "")
+    )
+    titles = [full]
+    if stripped and _norm(stripped) != _norm(full):
+        titles.append(stripped)
+    return titles
+
+
 def _itunes_cover(
     artist: str, title: str, seconds: Optional[float] = None
 ) -> Optional[str]:
@@ -284,11 +305,12 @@ def _itunes_cover(
     worse than falling back to the video's own picture.
     """
     terms: list[str] = []
-    if artist:
-        terms.append(_clean(f"{artist} {title}"))
-        for part in _artist_parts(artist):
-            terms.append(_clean(f"{part} {title}"))
-    terms.append(_clean(title))
+    for search_title in _search_titles(title):
+        if artist:
+            terms.append(_clean(f"{artist} {search_title}"))
+            for part in _artist_parts(artist):
+                terms.append(_clean(f"{part} {search_title}"))
+        terms.append(search_title)
 
     results: list[dict] = []
     seen = set()
@@ -437,11 +459,12 @@ def _deezer_cover(
     if not title:
         return []
     terms: list[str] = []
-    if artist:
-        terms.append(_clean(f"{artist} {title}"))
-        for part in _artist_parts(artist):
-            terms.append(_clean(f"{part} {title}"))
-    terms.append(_clean(title))
+    for search_title in _search_titles(title):
+        if artist:
+            terms.append(_clean(f"{artist} {search_title}"))
+            for part in _artist_parts(artist):
+                terms.append(_clean(f"{part} {search_title}"))
+        terms.append(search_title)
 
     results: list[dict] = []
     seen = set()

@@ -566,3 +566,52 @@ def test_a_vocalist_listed_first_is_not_taken_as_the_artist():
         "Override", ["Kasane Teto SV", "Yoshida Yasei"],
         "Override", "Yoshida Yasei",
     ) is False
+
+
+# ------------------------------------- long parentheticals still find the song
+
+def test_search_titles_adds_the_plain_title():
+    assert artwork._search_titles(
+        "90210 (but it will change your life)"
+    ) == ["90210 (but it will change your life)", "90210"]
+
+
+def test_search_titles_leaves_a_plain_title_alone():
+    assert artwork._search_titles("Override") == ["Override"]
+
+
+def test_a_long_parenthetical_still_finds_the_cover(monkeypatch):
+    """The catalogue answers the bracketed form with unrelated tracks."""
+    results = [
+        {"trackName": "90210 (feat. Kacy Hill)", "artistName": "Travis Scott",
+         "collectionName": "Rodeo", "trackTimeMillis": 339000,
+         "artworkUrl100": "https://x/rodeo/100x100bb.jpg"},
+    ]
+    seen = []
+
+    def fake_search(term, limit=8):
+        seen.append(term)
+        # Only the plain title returns the song, as with the real API.
+        return results if term.lower().endswith("90210") else []
+
+    monkeypatch.setattr(artwork, "_itunes_search", fake_search)
+    chosen = artwork._itunes_cover(
+        "Travis Scott", "90210 (but it will change your life)", 472
+    )
+    assert "rodeo" in chosen
+    assert any(term.lower().endswith("90210") for term in seen)
+
+
+def test_the_plain_title_search_does_not_weaken_the_match(monkeypatch):
+    """Searching wider must not accept a different song."""
+    results = [
+        {"trackName": "Butterfly Effect", "artistName": "Travis Scott",
+         "collectionName": "Astroworld", "trackTimeMillis": 191000,
+         "artworkUrl100": "https://x/bf/100x100bb.jpg"},
+    ]
+    monkeypatch.setattr(
+        artwork, "_itunes_search", lambda term, limit=8: results
+    )
+    assert artwork._itunes_cover(
+        "Travis Scott", "90210 (but it will change your life)", 472
+    ) is None
