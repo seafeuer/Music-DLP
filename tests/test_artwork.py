@@ -392,3 +392,83 @@ def test_a_real_album_is_used():
         "release-group": {"primary-type": "Album"},
     }
     assert artwork._release_is_the_album(release) is True
+
+
+# ------------------------------------------- what a reconvert does to a cover
+
+def test_a_video_still_is_kept_on_reconvert(tmp_path, monkeypatch):
+    from musicdlp.services.pipeline import _reusable_cover
+
+    still = tmp_path / "twitter_123_v2.jpg"
+    still.write_bytes(_png((1400, 1400)))
+
+    class Track:
+        platform = "twitter"
+        media_id = "123"
+        cover_path = str(still)
+
+    assert _reusable_cover(Track()) is True
+
+
+def test_a_picture_the_user_chose_is_kept(tmp_path):
+    from musicdlp.services.pipeline import _reusable_cover
+
+    chosen = tmp_path / "custom_youtube_abc.jpg"
+    chosen.write_bytes(_png((900, 900)))
+
+    class Track:
+        platform = "youtube"
+        media_id = "abc"
+        cover_path = str(chosen)
+
+    assert _reusable_cover(Track()) is True
+
+
+def test_a_catalogue_cover_under_an_old_name_is_refetched(
+    tmp_path, monkeypatch
+):
+    """An older build could cache the wrong song's cover."""
+    from musicdlp.services.pipeline import _reusable_cover
+
+    monkeypatch.setattr(
+        "musicdlp.core.paths.art_cache_dir", lambda: tmp_path
+    )
+    stale = tmp_path / "album_youtube_abc_1400.jpg"
+    stale.write_bytes(_png((1400, 1400)))
+
+    class Track:
+        platform = "youtube"
+        media_id = "abc"
+        cover_path = str(stale)
+
+    assert _reusable_cover(Track()) is False
+
+
+def test_a_catalogue_cover_under_the_current_name_is_kept(
+    tmp_path, monkeypatch
+):
+    from musicdlp.services.pipeline import _reusable_cover
+
+    monkeypatch.setattr(
+        "musicdlp.core.paths.art_cache_dir", lambda: tmp_path
+    )
+    current = artwork.cover_cache_path("youtube", "abc")
+    current.write_bytes(_png((1400, 1400)))
+
+    class Track:
+        platform = "youtube"
+        media_id = "abc"
+        cover_path = str(current)
+
+    assert _reusable_cover(Track()) is True
+
+
+def test_a_missing_cover_file_is_not_reused(tmp_path):
+    from musicdlp.services.pipeline import _reusable_cover
+
+    class Track:
+        platform = "youtube"
+        media_id = "abc"
+        cover_path = str(tmp_path / "gone.jpg")
+
+    assert _reusable_cover(Track()) is False

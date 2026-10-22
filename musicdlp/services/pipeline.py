@@ -50,6 +50,26 @@ def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
+def _reusable_cover(track) -> bool:
+    """Whether the cover already stored for this track can be used again.
+
+    A catalogue cover is only reused when its cache name is the current
+    one. Anything else found by an older version is looked up again: a
+    release that used to win may no longer be the right song, and a cover
+    stored at the old size should be replaced by the larger one.
+    """
+    path = getattr(track, "cover_path", None)
+    if not path:
+        return False
+    stored = Path(path)
+    if not stored.exists():
+        return False
+    if not stored.name.startswith("album_"):
+        # A picture the user picked, or a video still: theirs to keep.
+        return True
+    return stored == cover_cache_path(track.platform, track.media_id)
+
+
 def _record_failure(summary: dict, track_id: int, message: str) -> None:
     """Count each track once even if it fails in several stages."""
     failed_ids = summary.setdefault("_failed_ids", set())
@@ -483,9 +503,13 @@ class Pipeline(QObject):
                         cancel_event=self._cancel,
                     )
 
+                    # A catalogue cover saved by an older version may be
+                    # the wrong song, or stored at the old size, so it is
+                    # looked up again rather than reused. A picture the user
+                    # chose, or a video still, is kept as it is.
                     cover = (
                         Path(track.cover_path)
-                        if track.cover_path and Path(track.cover_path).exists()
+                        if _reusable_cover(track)
                         else None
                     )
 
