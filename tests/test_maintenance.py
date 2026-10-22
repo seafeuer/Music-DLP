@@ -91,7 +91,9 @@ def test_moves_output_out_of_temp(tmp_path, monkeypatch):
     db.close()
 
 
-def test_missing_output_marks_track_for_redownload(tmp_path, not_temp):
+def test_a_missing_output_does_not_claim_the_song_was_never_downloaded(
+    tmp_path, not_temp
+):
     output = tmp_path / "out"
     output.mkdir()
     settings, db, track_id = _setup(tmp_path, output, tmp_path / "spotify")
@@ -104,9 +106,11 @@ def test_missing_output_marks_track_for_redownload(tmp_path, not_temp):
 
     repair_library(db, settings)
     track = db.get_track(track_id)
-    assert track.status == "new"
-    assert track.mp3_path is None
-    assert track.synced_at is None
+    # The song was downloaded once. Marking it "new" said it never was,
+    # which is wrong and loses that history; keeping the status makes the
+    # list show "File missing", and Retry fetches it again.
+    assert track.status == "synced"
+    assert track.mp3_path is not None
     db.close()
 
 

@@ -1,8 +1,9 @@
-﻿"""Settings dialog."""
+"""Settings dialog."""
 
 from __future__ import annotations
 
 import copy
+import logging
 import shutil
 import threading
 from pathlib import Path
@@ -16,7 +17,34 @@ from PySide6.QtWidgets import (
     QTabWidget, QToolButton, QVBoxLayout, QWidget,
 )
 
+logger = logging.getLogger("musicdlp.settings")
+
+# Characters a paste can add that are invisible and break an API key:
+# byte-order mark, zero-width space/non-joiner/joiner, word joiner,
+# non-breaking space, and the Unicode line and paragraph separators.
+_INVISIBLE = tuple(
+    chr(code) for code in (
+        0xFEFF, 0x200B, 0x200C, 0x200D, 0x2060, 0x00A0, 0x2028, 0x2029,
+    )
+)
+
+
+def _clean_key(text: str) -> str:
+    """An API key with the invisible characters a paste can add removed.
+
+    A key copied from a web page often arrives with a byte-order mark or a
+    zero-width space. Those are invisible, make the key wrong, and can
+    carry an unpaired surrogate that cannot be written to the config file
+    at all.
+    """
+    cleaned = "".join(
+        char for char in (text or "") if char not in _INVISIBLE
+    )
+    return cleaned.strip()
+
+
 from musicdlp.core.config import Settings
+
 from musicdlp.core.paths import config_path, db_path, log_dir, start_directory
 from musicdlp.services.ai import (
     AIError, AISettings, friendly_error, list_models, test_connection,
@@ -977,6 +1005,24 @@ class SettingsDialog(QDialog):
     # ------------------------------------------------------------------ save
 
     def _save(self) -> None:
+        """Save, and never let a bad value take the window down.
+
+        This runs from a button press, so an exception here would escape
+        into Qt with no console to print to — which looks exactly like the
+        app crashing and losing the settings.
+        """
+        try:
+            self._save_now()
+        except Exception as exc:  # noqa: BLE001 - reported, never fatal
+            logger.exception("Saving settings failed")
+            QMessageBox.critical(
+                self,
+                "Settings could not be saved",
+                f"{type(exc).__name__}: {exc}\n\n"
+                "Nothing was changed. The log file has the details.",
+            )
+
+    def _save_now(self) -> None:
         formats = []
         if self.mp3_check.isChecked():
             formats.append("mp3")
@@ -1034,7 +1080,7 @@ class SettingsDialog(QDialog):
             ai_provider=self.ai_provider_combo.currentData()[0],
             ai_base_url=self.ai_url_edit.text().strip(),
             ai_model=self.ai_model_combo.currentText().strip(),
-            ai_api_key=self.ai_key_edit.text().strip(),
+            ai_api_key=_clean_key(self.ai_key_edit.text()),
             ai_find_artwork=self.ai_artwork_check.isChecked(),
             ai_custom_prompt=self.ai_prompt_edit.toPlainText().strip(),
             gdrive_dir=self.gdrive_edit.text().strip(),

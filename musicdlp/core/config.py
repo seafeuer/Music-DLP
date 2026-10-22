@@ -26,6 +26,23 @@ AI_PROVIDERS = ("auto", "ollama", "openai", "anthropic")
 TRANSLATE_STYLES = ("translated", "transliterated", "both")
 
 
+def _writable_text(value):
+    """A string that can always be saved as UTF-8.
+
+    A value pasted from another program can contain an unpaired surrogate,
+    which JSON will happily hold but UTF-8 cannot encode. Writing it raised
+    UnicodeEncodeError, and because only OSError was caught, a settings
+    save died with the window and nothing was written.
+    """
+    if isinstance(value, str):
+        return value.encode("utf-8", "replace").decode("utf-8")
+    if isinstance(value, dict):
+        return {key: _writable_text(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_writable_text(item) for item in value]
+    return value
+
+
 @dataclass
 class Settings:
     """All persisted user preferences."""
@@ -131,12 +148,26 @@ class Settings:
     # ------------------------------------------------------------------ save
 
     def save(self, path: Path | None = None) -> None:
+        """Write the settings, always as valid UTF-8.
+
+        Any failure is reported as OSError, which every caller already
+        handles, so a bad value cannot take the window down with it.
+        """
         path = Path(path) if path else config_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        payload = json.dumps(asdict(self), indent=2, ensure_ascii=False)
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(payload, encoding="utf-8")
-        os.replace(tmp, path)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            payload = json.dumps(
+                _writable_text(asdict(self)), indent=2, ensure_ascii=False
+            )
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            tmp.write_text(payload, encoding="utf-8")
+            os.replace(tmp, path)
+        except OSError:
+            raise
+        except (TypeError, ValueError) as exc:
+            raise OSError(
+                f"The settings could not be written: {exc}"
+            ) from exc
 
     # -------------------------------------------------------------- validate
 

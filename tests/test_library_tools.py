@@ -967,3 +967,53 @@ def test_find_it_leaves_auto_detection_on(qapp, window, tmp_path, monkeypatch):
     dialog._find_gdrive()
     assert dialog.gdrive_edit.text() == ""
     assert str(root) in dialog.gdrive_status.text()
+
+
+# ------------------------------------------------- a settings save can fail safely
+
+def test_saving_settings_survives_an_unsaveable_value(
+    qapp, window, monkeypatch
+):
+    """A pasted key can hold a character UTF-8 cannot write.
+
+    Only OSError used to be caught, so that exception escaped into Qt and
+    the window closed with the settings unsaved.
+    """
+    from musicdlp.ui.dialogs import settings as settings_module
+
+    shown = []
+    monkeypatch.setattr(
+        QMessageBox, "critical",
+        lambda *args, **kwargs: shown.append(args[1:3]),
+    )
+    # Patch only the work the button does, not Settings.save itself, which
+    # the window also calls on exit.
+    monkeypatch.setattr(
+        settings_module.SettingsDialog, "_save_now",
+        lambda self: (_ for _ in ()).throw(ValueError("bad value")),
+    )
+
+    main, _db, _data = window
+    dialog = settings_module.SettingsDialog(
+        main.settings, main.ctx.ffmpeg, main.ctx.ytdlp, main.ctx.spotify, main
+    )
+    dialog._save()          # must not raise
+    assert shown, "the user was not told"
+    assert dialog.result_settings is None
+    dialog.close()
+
+
+def test_an_invisible_character_is_removed_from_the_key():
+    from musicdlp.ui.dialogs.settings import _clean_key
+
+    assert _clean_key("﻿sk-abc​") == "sk-abc"
+    assert _clean_key("  sk-abc\n") == "sk-abc"
+
+
+def test_a_key_with_an_unpaired_surrogate_is_saved_cleanly(tmp_path):
+    """It used to raise UnicodeEncodeError and lose every setting."""
+    path = tmp_path / "config.json"
+    settings = Settings(ai_api_key="sk-test-\ud800abc")
+    settings.save(path)                     # must not raise
+    loaded = Settings.load(path)
+    assert loaded.ai_api_key.startswith("sk-test-")

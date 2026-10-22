@@ -16,10 +16,11 @@ import logging
 import shutil
 import tempfile
 from pathlib import Path
+from typing import Optional
 
 from musicdlp.core.config import Settings
 from musicdlp.core.db import Database
-from musicdlp.core.models import CONVERTED, DOWNLOADED, NEW, SYNCED
+from musicdlp.core.models import DOWNLOADED
 from musicdlp.core.paths import default_output_dir, default_spotify_dir
 
 logger = logging.getLogger("musicdlp.maintenance")
@@ -126,7 +127,10 @@ def _repair_track_files(db: Database, settings: Settings) -> list[str]:
             if path.exists():
                 continue
 
-            replacement = _find_by_name(settings.output_path, path.name)
+            replacement = _find_by_name(
+                settings.output_path, path.name,
+                _search_roots(settings, path),
+            )
             if replacement is not None:
                 updates[field] = str(replacement)
             else:
@@ -138,32 +142,81 @@ def _repair_track_files(db: Database, settings: Settings) -> list[str]:
 
         if lost:
             missing += 1
-            updates["synced_at"] = None
-            updates["sync_error"] = None
             raw = track.raw_path and Path(track.raw_path).exists()
             if raw:
+                # The audio is still here, so the file can be rebuilt
+                # without downloading anything.
                 updates["status"] = DOWNLOADED
                 updates["needs_update"] = 1
-            elif track.status in (CONVERTED, SYNCED):
-                updates["status"] = NEW
-                updates["needs_update"] = 0
+                updates["synced_at"] = None
+                updates["sync_error"] = None
+            else:
+                # The file is gone and there is nothing to rebuild it from.
+                # The song was downloaded once, so saying it never was is
+                # wrong and loses that history. Keep any path that was
+                # found elsewhere, drop the dead ones, and leave the status
+                # alone so the list shows "File missing" and Retry can
+                # fetch it again.
+                updates = {
+                    field: value for field, value in updates.items()
+                    if value is not None
+                }
+                if not updates:
+                    continue
 
         db.update_track(track.id, **updates)
 
     if missing:
         notes.append(
-            f"{missing} song(s) were missing their audio file and will be "
-            "downloaded again."
+            f"{missing} song(s) are missing their audio file. They are "
+            "marked so you can fetch them again with Retry."
         )
     return notes
 
 
-def _find_by_name(root: Path, name: str) -> Path | None:
-    if not root.exists():
-        return None
-    for candidate in root.rglob(name):
-        if candidate.is_file():
-            return candidate
+def _search_roots(settings: Settings, path: Path) -> list[Path]:
+    """Every folder a moved song might now live in.
+
+    A library that was made on another computer, or whose output folder was
+    changed, keeps absolute paths that no longer resolve. Looking only
+    under the current output folder then declares every song lost, which
+    is what made an entire older library show as "not downloaded".
+    """
+    roots: list[Path] = []
+    for candidate in (
+        path.parent,                      # cheapest: where it used to be
+        settings.output_path,
+        settings.spotify_path,
+        default_output_dir(),
+        default_spotify_dir(),
+    ):
+        try:
+            if candidate and candidate.exists() and candidate not in roots:
+                roots.append(candidate)
+        except OSError:
+            continue
+    return roots
+
+
+def _find_by_name(
+    root: Path, name: str, extra_roots: Optional[list[Path]] = None
+) -> Path | None:
+    roots = [root, *(extra_roots or [])]
+    for candidate_root in roots:
+        if not candidate_root.exists():
+            continue
+        direct = candidate_root / name
+        if direct.is_file():
+            return direct
+    for candidate_root in roots:
+        if not candidate_root.exists():
+            continue
+        try:
+            for candidate in candidate_root.rglob(name):
+                if candidate.is_file():
+                    return candidate
+        except OSError:
+            continue
     return None
 
 
