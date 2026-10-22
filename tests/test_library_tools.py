@@ -508,7 +508,9 @@ def test_anthropic_is_selectable_in_settings(qapp, window):
         for i in range(dialog.ai_provider_combo.count())
     ]
     assert ("anthropic", "") in items
-    assert dialog._ai_provider_index() == 3
+    assert ("auto", "") in items
+    assert dialog._ai_provider_index() == 4
+    assert items[0] == ("auto", "")
 
 
 # ------------------------------------------------------------------- search

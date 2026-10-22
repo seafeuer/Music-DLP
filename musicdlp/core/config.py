@@ -21,7 +21,8 @@ BITRATES = ("128", "192", "256", "320")
 COOKIE_MODES = ("none", "browser", "file")
 COPY_MODES = ("copy", "move")
 BROWSERS = ("chrome", "edge", "firefox", "brave", "opera", "vivaldi", "chromium")
-AI_PROVIDERS = ("ollama", "openai", "anthropic")
+# "auto" lets the address and key decide; the others are hints.
+AI_PROVIDERS = ("auto", "ollama", "openai", "anthropic")
 TRANSLATE_STYLES = ("translated", "transliterated", "both")
 
 
@@ -57,7 +58,7 @@ class Settings:
     smart_titles: bool = True
 
     # AI is optional and only runs when the user asks for it.
-    ai_provider: str = "ollama"
+    ai_provider: str = "auto"
     ai_base_url: str = "http://localhost:11434"
     ai_model: str = ""
     ai_api_key: str = ""
@@ -160,7 +161,7 @@ class Settings:
         if self.log_level not in ("DEBUG", "INFO", "WARNING", "ERROR"):
             self.log_level = "INFO"
         if self.ai_provider not in AI_PROVIDERS:
-            self.ai_provider = "ollama"
+            self.ai_provider = "auto"
         self.ai_base_url = (self.ai_base_url or "").strip()
         self.ai_model = (self.ai_model or "").strip()
 

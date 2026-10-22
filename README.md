@@ -113,24 +113,36 @@ Rules:
 
 Two ways, both optional and both review-first.
 
-**With a model (Settings → AI).** Three providers:
+**With a model (Settings → AI).** Give it an address and a key, and it works
+out the rest. **Detect automatically** is the default: the first time a
+server is used, Music DLP tries the three common APIs and remembers which one
+answers. Any of these work:
 
-| Provider | Address | Key |
+| Server | Address | Key |
 |---|---|---|
 | Ollama on this computer | `http://localhost:11434` | none |
 | Ollama cloud | `https://ollama.com` | required |
-| Another compatible API | any `/v1` address | required |
-| Anthropic-style API | any address serving `/v1/messages` | required |
+| Any [OI]-compatible API | the address from its docs | required |
+| Any Anthropic-style API | the address from its docs | required |
 
-Press **Refresh list** to see the models the server offers, and **Test
-connection** to check the key. Then use **AI → Name songs with AI…** or the
-**Ask AI** button in Suggested titles. The model fills in the suggestion
-columns; you still press Apply.
+The provider list is only a hint for the first guess. Picking the wrong one
+is not a problem — a proxy that serves only `/v1/messages` still works when
+[OI]-compatible was chosen, and the other way round.
 
 Addresses are forgiving: `https://api.example.com`, `…/v1`, or the whole
-`…/v1/chat/completions` all work. For Ollama on this computer, install
-Ollama and pull a model first (`ollama pull llama3.2`); **Refresh list**
-then shows what is available.
+`…/v1/chat/completions` all work. Keys are sent as a bearer token, as
+`x-api-key`, and as `api-key`, so most servers accept them without further
+setup. For Ollama on this computer, install Ollama and pull a model first
+(`ollama pull llama3.2`).
+
+Press **Refresh list** to see the models the server offers, and **Test
+connection** to check the key — it names the API it found. Then use
+**AI → Name songs with AI…** or the **Ask AI** button in Suggested titles.
+The model fills in the suggestion columns; you still press Apply.
+
+Small local models name songs badly. A 0.5B model will usually return the
+upload title unchanged; use something in the 7B class or larger, or a hosted
+model, for useful suggestions.
 
 **Without a model.** **AI → Export songs for a chatbot…** writes a text file
 containing the songs that need names. Paste the whole file into any chatbot,

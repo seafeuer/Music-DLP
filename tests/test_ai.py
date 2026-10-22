@@ -11,6 +11,14 @@ from musicdlp.services.ai_export import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _forget_detected_formats():
+    """The detected wire format is cached per address; tests must not share it."""
+    ai._dialect_cache.clear()
+    yield
+    ai._dialect_cache.clear()
+
+
 # --------------------------------------------------------------- parsing
 
 
@@ -235,7 +243,7 @@ def test_a_reply_cut_off_by_the_token_limit_is_explained(monkeypatch):
 def test_the_anthropic_request_asks_for_a_reasoning_sized_budget(monkeypatch):
     seen = {}
 
-    def fake_post(settings, path, payload):
+    def fake_post(settings, path, payload, **_kwargs):
         seen.update(payload)
         return {"content": [{"type": "text", "text": "ok"}]}
 
@@ -276,7 +284,7 @@ def test_a_model_with_a_smaller_output_cap_is_retried(monkeypatch):
     """Older models reject max_tokens=8192; the request is retried at 4096."""
     seen = []
 
-    def fake_post(settings, path, payload):
+    def fake_post(settings, path, payload, **_kwargs):
         seen.append(payload["max_tokens"])
         if payload["max_tokens"] > 4096:
             raise AIError(
@@ -287,19 +295,20 @@ def test_a_model_with_a_smaller_output_cap_is_retried(monkeypatch):
 
     monkeypatch.setattr(ai, "_post", fake_post)
     assert ai.chat(_settings(), "s", "u") == "ok"
-    assert seen == [8192, 4096]
+    # The first, tiny request is the probe that finds the wire format.
+    assert seen[-2:] == [8192, 4096]
 
 
 def test_an_unrelated_400_is_not_retried(monkeypatch):
     seen = []
 
-    def fake_post(settings, path, payload):
+    def fake_post(settings, path, payload, **_kwargs):
         seen.append(payload["max_tokens"])
         raise AIError("The AI server returned an error (400).", "bad request")
 
     monkeypatch.setattr(ai, "_post", fake_post)
     with pytest.raises(AIError):
-        ai.chat(_settings(), "s", "u")
+        ai._chat_as(_settings(), "anthropic", "s", "u")
     assert seen == [8192]
 
 
@@ -354,3 +363,195 @@ def test_an_empty_address_is_still_an_error():
     with pytest.raises(AIError):
         ai._endpoint(AISettings(provider="openai", base_url="", model="m"),
                      "/v1/chat/completions")
+
+
+# -------------------------------------------------- finding the right API
+
+def fake_server(monkeypatch, speaks, calls=None):
+    """A server that answers only on the paths of the formats in ``speaks``."""
+    def post(settings, path, payload, **_kwargs):
+        if calls is not None:
+            calls.append(path)
+        if path == "/v1/messages" and "anthropic" in speaks:
+            return {"content": [{"type": "text", "text": "ok"}],
+                    "stop_reason": "end_turn"}
+        if path == "/v1/chat/completions" and "openai" in speaks:
+            return {"choices": [{"message": {"content": "ok"},
+                                 "finish_reason": "stop"}]}
+        if path == "/api/chat" and "ollama" in speaks:
+            return {"message": {"content": "ok"}, "done_reason": "stop"}
+        raise AIError(
+            "The AI server does not have that model or address.",
+            "Check the model name and the server address in Settings, AI.",
+            status=404,
+        )
+
+    monkeypatch.setattr(ai, "_post", post)
+
+
+def test_a_server_that_only_speaks_anthropic_works_when_openai_was_picked(
+    monkeypatch,
+):
+    """A proxy that serves only /v1/messages must work anyway."""
+    fake_server(monkeypatch, {"anthropic"})
+    settings = AISettings(
+        provider="openai", base_url="https://proxy.test", model="m"
+    )
+    assert ai.chat(settings, "s", "u") == "ok"
+    assert ai.detected_dialect(settings) == "anthropic"
+
+
+def test_a_server_that_only_speaks_openai_works_when_anthropic_was_picked(
+    monkeypatch,
+):
+    fake_server(monkeypatch, {"openai"})
+    settings = AISettings(
+        provider="anthropic", base_url="https://api.example.com/v1", model="m"
+    )
+    assert ai.chat(settings, "s", "u") == "ok"
+    assert ai.detected_dialect(settings) == "openai"
+
+
+def test_auto_tries_ollama_first_for_a_local_address(monkeypatch):
+    calls = []
+    fake_server(monkeypatch, {"ollama"}, calls)
+    settings = AISettings(
+        provider="auto", base_url="http://localhost:11434", model="m"
+    )
+    assert ai.chat(settings, "s", "u") == "ok"
+    assert calls[0] == "/api/chat"
+    assert ai.detected_dialect(settings) == "ollama"
+
+
+def test_auto_works_with_no_provider_at_all(monkeypatch):
+    fake_server(monkeypatch, {"openai"})
+    settings = AISettings(
+        provider="auto", base_url="https://api.example.com", model="m"
+    )
+    assert ai.chat(settings, "s", "u") == "ok"
+
+
+def test_the_format_is_found_once_and_then_remembered(monkeypatch):
+    calls = []
+    fake_server(monkeypatch, {"anthropic"}, calls)
+    settings = AISettings(
+        provider="openai", base_url="https://proxy.test", model="m"
+    )
+    ai.chat(settings, "s", "u")
+    after_first = len(calls)
+    ai.chat(settings, "s", "u")
+    # The second call goes straight to the format that worked: no probing.
+    assert len(calls) - after_first == 1
+
+
+def test_a_changed_address_is_probed_again(monkeypatch):
+    fake_server(monkeypatch, {"anthropic"})
+    first = AISettings(
+        provider="openai", base_url="https://one.test", model="m"
+    )
+    ai.chat(first, "s", "u")
+    assert ai.detected_dialect(first) == "anthropic"
+
+    other = AISettings(provider="openai", base_url="https://two.test", model="m")
+    assert ai.detected_dialect(other) is None
+
+
+def test_list_models_falls_back_to_another_format(monkeypatch):
+    def get(settings, dialect, path):
+        if dialect == "anthropic":
+            return {"data": [{"id": "claude-x"}, {"id": "claude-y"}]}
+        raise AIError("That server does not list its models.", "",
+                      status=404)
+
+    monkeypatch.setattr(ai, "_get", get)
+    settings = AISettings(
+        provider="openai", base_url="https://proxy.test", model="m"
+    )
+    assert ai.list_models(settings) == ["claude-x", "claude-y"]
+
+
+def test_list_models_returns_nothing_when_the_server_has_none(monkeypatch):
+    monkeypatch.setattr(
+        ai, "_get", lambda settings, dialect, path: {"models": []}
+    )
+    settings = AISettings(
+        provider="ollama", base_url="http://localhost:11434", model="m"
+    )
+    assert ai.list_models(settings) == []
+
+
+def test_when_every_format_fails_the_error_says_what_was_tried(monkeypatch):
+    fake_server(monkeypatch, set())
+    settings = AISettings(
+        provider="openai", base_url="https://proxy.test", model="m"
+    )
+    with pytest.raises(AIError) as caught:
+        ai.chat(settings, "s", "u")
+    hint = caught.value.args[1]
+    assert "Tried:" in hint
+    assert "Anthropic-style" in hint
+    assert "Ollama" in hint
+
+
+def test_an_unreachable_server_is_reported_without_trying_every_format(
+    monkeypatch,
+):
+    calls = []
+
+    def post(settings, path, payload, **_kwargs):
+        calls.append(path)
+        raise AIError("Could not reach the AI server.", "Check the address.")
+
+    monkeypatch.setattr(ai, "_post", post)
+    settings = AISettings(
+        provider="openai", base_url="https://proxy.test", model="m"
+    )
+    with pytest.raises(AIError) as caught:
+        ai.chat(settings, "s", "u")
+    assert caught.value.status is None
+    assert calls == ["/v1/chat/completions"]
+
+
+def test_a_wrong_key_is_not_reported_as_a_missing_address(monkeypatch):
+    """Every path rejects the key, so the key is what gets reported."""
+    def post(settings, path, payload, **_kwargs):
+        if path == "/api/chat":
+            raise AIError("The AI server does not have that model or address.",
+                          "", status=404)
+        raise AIError("The AI server rejected the API key.",
+                      "Check the key in Settings, AI.", status=401)
+
+    monkeypatch.setattr(ai, "_post", post)
+    settings = AISettings(
+        provider="openai", base_url="https://proxy.test", model="m"
+    )
+    with pytest.raises(AIError) as caught:
+        ai.chat(settings, "s", "u")
+    assert "API key" in caught.value.args[0]
+    assert caught.value.status == 401
+
+
+def test_a_path_that_rejects_the_key_does_not_stop_the_search(monkeypatch):
+    """A proxy can 401 one path and serve another; the working one wins."""
+    def post(settings, path, payload, **_kwargs):
+        if path == "/v1/messages":
+            return {"content": [{"type": "text", "text": "ok"}],
+                    "stop_reason": "end_turn"}
+        raise AIError("The AI server rejected the API key.",
+                      "Check the key in Settings, AI.", status=401)
+
+    monkeypatch.setattr(ai, "_post", post)
+    settings = AISettings(
+        provider="auto", base_url="http://127.0.0.1:8141", model="m"
+    )
+    assert ai.chat(settings, "s", "u") == "ok"
+    assert ai.detected_dialect(settings) == "anthropic"
+
+
+def test_auto_is_an_allowed_provider():
+    from musicdlp.core.config import AI_PROVIDERS, Settings
+
+    assert "auto" in AI_PROVIDERS
+    assert Settings().ai_provider == "auto"
+    assert Settings(ai_provider="nonsense").validate() is None
+    assert Settings(ai_provider="nonsense").ai_provider == "auto"

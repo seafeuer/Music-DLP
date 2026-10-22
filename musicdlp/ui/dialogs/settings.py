@@ -339,13 +339,18 @@ class SettingsDialog(QDialog):
 
         intro = QLabel(
             "AI is optional. It is used only when you press “Ask AI” to name "
-            "songs the app could not work out by itself."
+            "songs the app could not work out by itself. Any address and key "
+            "will do: the first time a server is used, Music DLP works out "
+            "which of the common APIs it speaks."
         )
         intro.setWordWrap(True)
         intro.setObjectName("muted")
         form.addRow(intro)
 
         self.ai_provider_combo = QComboBox()
+        self.ai_provider_combo.addItem(
+            "Detect automatically (any address)", ("auto", "")
+        )
         self.ai_provider_combo.addItem(
             "Ollama on this computer", ("ollama", "http://localhost:11434")
         )
@@ -439,16 +444,31 @@ class SettingsDialog(QDialog):
     def _ai_provider_index(self) -> int:
         provider = self.settings.ai_provider
         url = self.settings.ai_base_url.rstrip("/")
+        if provider == "auto":
+            return 0
         if provider == "openai":
-            return 2
-        if provider == "anthropic":
             return 3
+        if provider == "anthropic":
+            return 4
         if url == "https://ollama.com":
-            return 1
-        return 0
+            return 2
+        return 1
 
     def _on_ai_provider_changed(self, index: int) -> None:
         provider, url = self.ai_provider_combo.itemData(index)
+        if provider == "auto":
+            # Automatic mode works with whatever is already typed, so the
+            # address is left alone rather than being replaced.
+            self.ai_url_edit.setPlaceholderText(
+                "http://localhost:11434, https://api.example.com/v1, "
+                "or any server address"
+            )
+            self.ai_key_edit.setPlaceholderText(
+                "Leave empty for a server on this computer"
+            )
+            self.ai_status.setText("")
+            return
+
         # Always set the address for the chosen provider: leaving the old one
         # in place made "another compatible API" silently point at Ollama.
         self.ai_url_edit.setText(url or "")

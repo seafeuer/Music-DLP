@@ -4,11 +4,16 @@ The parser in ``smart_titles`` is deterministic and free. This module is the
 optional second opinion for titles the parser cannot resolve, and it is only
 ever used when the user asks for it.
 
-Two wire formats are supported:
+Three wire formats are supported:
 
 * ``ollama``    - POST {base}/api/chat            (local Ollama or ollama.com)
 * ``openai``    - POST {base}/v1/chat/completions (any compatible endpoint)
 * ``anthropic`` - POST {base}/v1/messages         (Anthropic-style API)
+
+The provider is only a hint. An address and a key are enough: the first time
+a server is used, each format is tried and the one that answers is
+remembered, so a proxy that only speaks one of them still works even when
+the wrong provider was picked in Settings.
 
 Requests always carry a normal browser User-Agent. Some hosted endpoints sit
 behind a proxy that rejects Python's default agent with a 403.
@@ -19,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 from dataclasses import dataclass
 from typing import Optional
 
@@ -31,15 +37,30 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 )
 
+PROVIDER_AUTO = "auto"
 PROVIDER_OLLAMA = "ollama"
 PROVIDER_OPENAI = "openai"
 PROVIDER_ANTHROPIC = "anthropic"
 
-PROVIDERS = (PROVIDER_OLLAMA, PROVIDER_OPENAI, PROVIDER_ANTHROPIC)
+PROVIDERS = (PROVIDER_AUTO, PROVIDER_OLLAMA, PROVIDER_OPENAI, PROVIDER_ANTHROPIC)
+
+# The wire formats, as opposed to the provider names shown in Settings.
+DIALECTS = (PROVIDER_ANTHROPIC, PROVIDER_OPENAI, PROVIDER_OLLAMA)
+
+DIALECT_LABELS = {
+    PROVIDER_ANTHROPIC: "Anthropic-style API",
+    PROVIDER_OPENAI: "[OI]-compatible API",
+    PROVIDER_OLLAMA: "Ollama",
+}
 
 # Presets shown in Settings.
 OLLAMA_LOCAL_URL = "http://localhost:11434"
 OLLAMA_CLOUD_URL = "https://ollama.com"
+
+# The format each server was found to speak, so the search happens once.
+# Keyed by address and model: the same server may be asked for two models.
+_dialect_cache: dict[tuple[str, str], str] = {}
+_cache_lock = threading.Lock()
 
 SYSTEM_PROMPT = """You clean up messy music video titles for a music library.
 
@@ -60,7 +81,21 @@ Rules:
 
 
 class AIError(Exception):
-    """A problem the user can act on."""
+    """A problem the user can act on.
+
+    ``status`` is the HTTP status when there was one. ``None`` means the
+    server could not be reached at all, which is the one failure worth
+    reporting straight away instead of trying another wire format.
+    """
+
+    def __init__(
+        self, message: str, hint: str = "", *, status: Optional[int] = None
+    ) -> None:
+        if hint:
+            super().__init__(message, hint)
+        else:
+            super().__init__(message)
+        self.status = status
 
 
 @dataclass
@@ -77,7 +112,7 @@ class AIResult:
 
 @dataclass
 class AISettings:
-    provider: str = PROVIDER_OLLAMA
+    provider: str = PROVIDER_AUTO
     base_url: str = OLLAMA_LOCAL_URL
     model: str = ""
     api_key: str = ""
@@ -133,7 +168,7 @@ def _endpoint(settings: AISettings, path: str) -> str:
     return f"{_strip_endpoint_suffix(base, path)}{path}"
 
 
-def _headers(settings: AISettings) -> dict:
+def _headers(settings: AISettings, dialect: str = "") -> dict:
     headers = {
         "Content-Type": "application/json",
         "Accept": "application/json",
@@ -142,11 +177,15 @@ def _headers(settings: AISettings) -> dict:
     key = settings.api_key.strip()
     if key:
         headers["Authorization"] = f"Bearer {key}"
-        if settings.provider == PROVIDER_ANTHROPIC:
+        if dialect == PROVIDER_ANTHROPIC:
             # Anthropic's own API reads x-api-key; compatible gateways read
             # the bearer token. Sending both covers either kind of server.
             headers["x-api-key"] = key
             headers["anthropic-version"] = "2023-06-01"
+        elif dialect == PROVIDER_OPENAI:
+            # Azure-style servers read this header instead of a bearer token.
+            # Anything else ignores it.
+            headers["api-key"] = key
     return headers
 
 
@@ -157,12 +196,18 @@ def friendly_error(exc: AIError) -> tuple[str, str]:
     return str(message), str(hint)
 
 
-def _post(settings: AISettings, path: str, payload: dict) -> dict:
+def _post(
+    settings: AISettings,
+    path: str,
+    payload: dict,
+    *,
+    dialect: str = "",
+) -> dict:
     url = _endpoint(settings, path)
     try:
         response = requests.post(
             url,
-            headers=_headers(settings),
+            headers=_headers(settings, dialect),
             data=json.dumps(payload),
             timeout=settings.timeout,
         )
@@ -181,22 +226,26 @@ def _post(settings: AISettings, path: str, payload: dict) -> dict:
         raise AIError(
             "The AI server rejected the API key.",
             "Check the key in Settings, AI.",
+            status=401,
         )
     if response.status_code == 403:
         detail = _error_text(response)
         raise AIError(
             "The AI server refused the request.",
             detail or "The key may be out of quota, or not allowed this model.",
+            status=403,
         )
     if response.status_code == 404:
         raise AIError(
             "The AI server does not have that model or address.",
             "Check the model name and the server address in Settings, AI.",
+            status=404,
         )
     if response.status_code >= 400:
         raise AIError(
             f"The AI server returned an error ({response.status_code}).",
             _error_text(response),
+            status=response.status_code,
         )
 
     try:
@@ -238,56 +287,65 @@ def _raise_if_truncated(reason: object) -> None:
         )
 
 
-# ------------------------------------------------------------------ requests
+# ------------------------------------------------------------- wire formats
 
 
-def chat(settings: AISettings, system: str, user: str) -> str:
-    """Send one prompt and return the reply text."""
-    if not settings.enabled:
-        raise AIError(
-            "AI is not set up yet.",
-            "Open Settings, AI, and choose a provider and model.",
-        )
+def _path_for(dialect: str, kind: str) -> str:
+    """The request path for one format: a chat call or the model list."""
+    if dialect == PROVIDER_OLLAMA:
+        return "/api/chat" if kind == "chat" else "/api/tags"
+    if dialect == PROVIDER_ANTHROPIC:
+        return "/v1/messages" if kind == "chat" else "/v1/models"
+    return "/v1/chat/completions" if kind == "chat" else "/v1/models"
 
-    if settings.provider == PROVIDER_OLLAMA:
-        data = _post(
-            settings,
-            "/api/chat",
-            {
-                "model": settings.model,
-                "stream": False,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                "options": {"temperature": 0.2},
-            },
-        )
+
+def _payload(
+    settings: AISettings,
+    dialect: str,
+    system: str,
+    user: str,
+    *,
+    budget: Optional[int] = None,
+) -> dict:
+    """The body for one format. ``budget`` caps the reply, for probes."""
+    limit = max(16, int(budget or settings.max_tokens or 8192))
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+    if dialect == PROVIDER_OLLAMA:
+        return {
+            "model": settings.model,
+            "stream": False,
+            "messages": messages,
+            "options": {"temperature": 0.2, "num_predict": limit},
+        }
+    if dialect == PROVIDER_ANTHROPIC:
+        return {
+            "model": settings.model,
+            "max_tokens": limit,
+            "temperature": 0.2,
+            "system": system,
+            "messages": [{"role": "user", "content": user}],
+        }
+    return {
+        "model": settings.model,
+        "temperature": 0.2,
+        "max_tokens": limit,
+        "messages": messages,
+    }
+
+
+def _read_reply(dialect: str, data: dict) -> str:
+    """Pull the text out of a reply, whichever format it came in."""
+    if dialect == PROVIDER_OLLAMA:
         message = data.get("message") or {}
         text = str(message.get("content") or "")
         if not text.strip():
             _raise_if_truncated(data.get("done_reason"))
         return text
 
-    if settings.provider == PROVIDER_ANTHROPIC:
-        payload = {
-            "model": settings.model,
-            "max_tokens": max(256, int(settings.max_tokens or 8192)),
-            "temperature": 0.2,
-            "system": system,
-            "messages": [{"role": "user", "content": user}],
-        }
-        try:
-            data = _post(settings, "/v1/messages", payload)
-        except AIError as exc:
-            # Older models cap their output at 4096 and reject a larger
-            # request outright. Asking again with a smaller budget is
-            # better than telling the user their model is broken.
-            detail = str(exc.args[1]) if len(exc.args) > 1 else ""
-            if "max_tokens" not in detail or payload["max_tokens"] <= 4096:
-                raise
-            payload["max_tokens"] = 4096
-            data = _post(settings, "/v1/messages", payload)
+    if dialect == PROVIDER_ANTHROPIC:
         blocks = data.get("content") or []
         if isinstance(blocks, str):
             return blocks
@@ -300,18 +358,6 @@ def chat(settings: AISettings, system: str, user: str) -> str:
             _raise_if_truncated(data.get("stop_reason"))
         return text
 
-    data = _post(
-        settings,
-        "/v1/chat/completions",
-        {
-            "model": settings.model,
-            "temperature": 0.2,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-        },
-    )
     choices = data.get("choices") or []
     if not choices:
         raise AIError("The AI server returned no answer.")
@@ -332,12 +378,177 @@ def chat(settings: AISettings, system: str, user: str) -> str:
     return text
 
 
-def list_models(settings: AISettings) -> list[str]:
-    """Ask the server which models it offers."""
-    path = "/api/tags" if settings.provider == PROVIDER_OLLAMA else "/v1/models"
+def _cache_key(settings: AISettings) -> tuple[str, str]:
+    return (
+        settings.base_url.strip().rstrip("/").lower(),
+        settings.model.strip().lower(),
+    )
+
+
+def detected_dialect(settings: AISettings) -> Optional[str]:
+    """The format this server was found to speak, if it is already known."""
+    with _cache_lock:
+        return _dialect_cache.get(_cache_key(settings))
+
+
+def _remember_dialect(settings: AISettings, dialect: str) -> None:
+    with _cache_lock:
+        _dialect_cache[_cache_key(settings)] = dialect
+
+
+def forget_dialect(settings: AISettings) -> None:
+    """Forget what was detected, so the next call looks again.
+
+    Used when the address, model, or key changes.
+    """
+    with _cache_lock:
+        _dialect_cache.pop(_cache_key(settings), None)
+
+
+def _dialect_order(settings: AISettings) -> list[str]:
+    """The formats to try, best guess first.
+
+    The provider picked in Settings is a hint, not a requirement. The
+    address itself is the stronger clue: a localhost port or an ollama
+    hostname almost certainly speaks Ollama's own API.
+    """
+    order: list[str] = []
+    if settings.provider in DIALECTS:
+        order.append(settings.provider)
+
+    base = settings.base_url.strip().lower()
+    if "11434" in base or "ollama" in base:
+        order += [PROVIDER_OLLAMA, PROVIDER_OPENAI, PROVIDER_ANTHROPIC]
+    elif "anthropic" in base:
+        order += [PROVIDER_ANTHROPIC, PROVIDER_OPENAI, PROVIDER_OLLAMA]
+    else:
+        order += [PROVIDER_OPENAI, PROVIDER_ANTHROPIC, PROVIDER_OLLAMA]
+
+    unique: list[str] = []
+    for dialect in order:
+        if dialect not in unique:
+            unique.append(dialect)
+    return unique
+
+
+def _probe(settings: AISettings, dialect: str) -> None:
+    """Ask one tiny question in one format. Raises when it is not accepted.
+
+    Only the HTTP result matters, not the text: a reasoning model may use
+    the whole allowance thinking, and that still proves the path is right.
+    """
+    _post(
+        settings,
+        _path_for(dialect, "chat"),
+        _payload(settings, dialect, "Reply with one word.", "Ready?", budget=24),
+        dialect=dialect,
+    )
+
+
+def _best_failure(failures: list[tuple[str, AIError]]) -> tuple[str, AIError]:
+    """The failure worth showing the user.
+
+    A rejected key or an exhausted quota explains the problem; a 404 only
+    means that path does not exist on this server, which is expected while
+    the formats are being tried.
+    """
+    def rank(item: tuple[str, AIError]) -> int:
+        status = item[1].status or 0
+        if status in (401, 403):
+            return 0
+        if status and status != 404:
+            return 1
+        return 2
+
+    return min(failures, key=rank)
+
+
+def _detect(settings: AISettings) -> str:
+    """Find the format this server speaks, and remember it."""
+    failures: list[tuple[str, AIError]] = []
+    for dialect in _dialect_order(settings):
+        try:
+            _probe(settings, dialect)
+        except AIError as exc:
+            if exc.status is None:
+                # The server is not answering at all; another path will not
+                # help, and this message is the useful one.
+                raise
+            failures.append((dialect, exc))
+            logger.debug(
+                "%s did not answer as %s: %s",
+                settings.base_url, DIALECT_LABELS[dialect], exc.args[0],
+            )
+            continue
+        _remember_dialect(settings, dialect)
+        logger.info(
+            "%s speaks the %s format",
+            settings.base_url, DIALECT_LABELS[dialect],
+        )
+        return dialect
+
+    _dialect, exc = _best_failure(failures)
+    message = exc.args[0] if exc.args else "The AI server did not answer."
+    detail = exc.args[1] if len(exc.args) > 1 else ""
+    tried = ", ".join(DIALECT_LABELS[item] for item, _exc in failures)
+    hint = f"{detail} Tried: {tried}.".strip()
+    raise AIError(message, hint, status=exc.status)
+
+
+# ------------------------------------------------------------------ requests
+
+
+def chat(settings: AISettings, system: str, user: str) -> str:
+    """Send one prompt and return the reply text."""
+    if not settings.enabled:
+        raise AIError(
+            "AI is not set up yet.",
+            "Open Settings, AI, and choose a provider and model.",
+        )
+
+    dialect = detected_dialect(settings) or _detect(settings)
+    try:
+        return _chat_as(settings, dialect, system, user)
+    except AIError as exc:
+        # The remembered format stopped working, for example because the
+        # server was replaced. Look again once rather than failing.
+        if exc.status not in (400, 404, 405):
+            raise
+        forget_dialect(settings)
+        retry = _detect(settings)
+        if retry == dialect:
+            raise
+        return _chat_as(settings, retry, system, user)
+
+
+def _chat_as(settings: AISettings, dialect: str, system: str, user: str) -> str:
+    """One chat call in one known format."""
+    payload = _payload(settings, dialect, system, user)
+    path = _path_for(dialect, "chat")
+    try:
+        data = _post(settings, path, payload, dialect=dialect)
+    except AIError as exc:
+        # Older Anthropic models cap their output at 4096 and reject a
+        # larger request outright. Asking again with a smaller budget is
+        # better than telling the user their model is broken.
+        detail = str(exc.args[1]) if len(exc.args) > 1 else ""
+        if (
+            dialect != PROVIDER_ANTHROPIC
+            or "max_tokens" not in detail
+            or payload["max_tokens"] <= 4096
+        ):
+            raise
+        payload["max_tokens"] = 4096
+        data = _post(settings, path, payload, dialect=dialect)
+    return _read_reply(dialect, data)
+
+
+def _get(settings: AISettings, dialect: str, path: str) -> dict:
     url = _endpoint(settings, path)
     try:
-        response = requests.get(url, headers=_headers(settings), timeout=20)
+        response = requests.get(
+            url, headers=_headers(settings, dialect), timeout=20
+        )
     except requests.exceptions.ConnectionError as exc:
         raise AIError(
             "Could not reach the AI server.",
@@ -349,26 +560,61 @@ def list_models(settings: AISettings) -> list[str]:
             "Check the server address.",
         ) from exc
     if response.status_code >= 400:
-        if response.status_code == 404:
-            raise AIError(
-                "That server does not list its models.",
-                "Type the model name in the box instead.",
-            )
         raise AIError(
-            "The server would not list its models.",
-            _error_text(response),
+            "That server does not list its models.",
+            _error_text(response) or "Type the model name in the box instead.",
+            status=response.status_code,
         )
     try:
-        data = response.json()
-    except ValueError:
-        raise AIError("The server did not send JSON.")
+        return response.json()
+    except ValueError as exc:
+        raise AIError("The server did not send JSON.") from exc
 
-    if settings.provider == PROVIDER_OLLAMA:
-        names = [entry.get("name") or entry.get("model") for entry in
-                 (data.get("models") or [])]
+
+def _model_names(dialect: str, data: dict) -> list[str]:
+    if dialect == PROVIDER_OLLAMA:
+        entries = data.get("models") or []
+        names = [
+            entry.get("name") or entry.get("model")
+            for entry in entries if isinstance(entry, dict)
+        ]
     else:
-        names = [entry.get("id") for entry in (data.get("data") or [])]
-    return sorted(name for name in names if name)
+        entries = data.get("data") or []
+        names = [
+            entry.get("id") for entry in entries if isinstance(entry, dict)
+        ]
+    return sorted({str(name) for name in names if name})
+
+
+def list_models(settings: AISettings) -> list[str]:
+    """Ask the server which models it offers, whichever format it speaks."""
+    order = _dialect_order(settings)
+    known = detected_dialect(settings)
+    if known is not None:
+        order = [known] + [item for item in order if item != known]
+
+    failures: list[tuple[str, AIError]] = []
+    for dialect in order:
+        try:
+            data = _get(settings, dialect, _path_for(dialect, "models"))
+        except AIError as exc:
+            if exc.status is None:
+                raise
+            failures.append((dialect, exc))
+            continue
+        # A model list is served on the same path by more than one format,
+        # so it says nothing about which one to use for chat. Leave that
+        # decision to the first real request.
+        return _model_names(dialect, data)
+
+    _dialect, exc = _best_failure(failures)
+    message = exc.args[0] if exc.args else "The server did not list its models."
+    tried = ", ".join(DIALECT_LABELS[item] for item, _exc in failures)
+    raise AIError(
+        message,
+        f"Type the model name in the box instead. Tried: {tried}.",
+        status=exc.status,
+    )
 
 
 def test_connection(settings: AISettings) -> tuple[bool, str]:
@@ -389,7 +635,9 @@ def test_connection(settings: AISettings) -> tuple[bool, str]:
     text = (reply or "").strip()
     if not text:
         return False, "The server answered, but with an empty reply."
-    return True, f"Connected. The server replied: “{text[:60]}”"
+    label = DIALECT_LABELS.get(detected_dialect(settings) or "", "")
+    style = f" ({label})" if label else ""
+    return True, f"Connected{style}. The server replied: “{text[:60]}”"
 
 
 # -------------------------------------------------------------------- naming
