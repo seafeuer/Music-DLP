@@ -36,7 +36,6 @@ def test_a_configured_folder_is_used_as_given(tmp_path):
 def test_no_drive_means_no_destination(tmp_path, monkeypatch):
     monkeypatch.setattr(gdrive, "candidates", lambda: [tmp_path / "nope"])
     assert gdrive.destination("") is None
-    assert gdrive.is_ready("") is False
 
 
 def test_files_are_copied(drive, tmp_path):

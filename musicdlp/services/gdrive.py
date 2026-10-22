@@ -146,18 +146,6 @@ def _has_parent(path: Path) -> bool:
         return False
 
 
-def is_ready(configured: str = "") -> bool:
-    """Whether there is somewhere to copy to, and it can be written."""
-    path = destination(configured)
-    if path is None:
-        return False
-    try:
-        path.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        return False
-    return path.is_dir() and os.access(path, os.W_OK)
-
-
 def _manifest_path() -> Path:
     from musicdlp.core.paths import data_dir
 
