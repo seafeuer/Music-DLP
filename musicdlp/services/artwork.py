@@ -24,7 +24,7 @@ from PIL import Image, ImageOps
 logger = logging.getLogger("musicdlp.artwork")
 
 USER_AGENT = (
-    "MusicDLP/2.5 (personal music library tool) "
+    "MusicDLP/2.8 (personal music library tool) "
     "https://github.com/seafeuer/Music-DLP"
 )
 ITUNES_URL = "https://itunes.apple.com/search"

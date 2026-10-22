@@ -22,7 +22,7 @@ import requests
 logger = logging.getLogger("musicdlp.lookup")
 
 USER_AGENT = (
-    "MusicDLP/2.7 (personal music library tool) "
+    "MusicDLP/2.8 (personal music library tool) "
     "https://github.com/seafeuer/Music-DLP"
 )
 SEARCH_URL = "https://musicbrainz.org/ws/2/recording"
