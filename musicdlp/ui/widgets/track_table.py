@@ -167,7 +167,10 @@ class TrackTableWidget(QWidget):
             "Edit details…", self._edit_current
         )
         self._suggestions_action = actions_menu.addAction(
-            "Suggested titles…", self.suggestions_requested
+            # A bound signal is not callable, so the menu entry must call
+            # emit itself; passing the signal raised "not callable" and the
+            # dialog never opened.
+            "Suggested titles…", self.suggestions_requested.emit
         )
         actions_menu.addSeparator()
         actions_menu.addAction("Select all", self.model.check_all)

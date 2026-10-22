@@ -12,9 +12,22 @@ REQUIREMENTS
 ------------
 
 1. Windows 10 or 11
-2. Python 3.10 or newer (only if running from source)
-3. FFmpeg (required for conversion)
-4. Optional: Spotify Desktop, for Local Files delivery
+2. FFmpeg (required for conversion)
+3. Optional: Spotify Desktop, for Local Files delivery
+4. Python 3.10 or newer (only if running from source; the .exe includes it)
+
+
+STEP 0: The easy way (the .exe)
+-------------------------------
+
+Download MusicDLP.exe from the release page and run it. Python and every
+library are inside the single file.
+
+Put ffmpeg.exe next to it (or in a "ffmpeg" folder beside it). If you
+downloaded the ZIP instead, FFmpeg is already in its ffmpeg folder - just
+unzip and run MusicDLP.exe.
+
+The rest of this file is for running from source.
 
 
 STEP 1: Install FFmpeg

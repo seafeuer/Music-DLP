@@ -43,7 +43,12 @@ class Settings:
     mp3_bitrate: str = "320"
     m4a_bitrate: str = "320"
     normalize: bool = True
-    keep_raw: bool = False
+    # Keeping the download is the safe default: converting from a
+    # kept file never needs the network again. Deleting them is
+    # something the user opts into.
+    keep_raw: bool = True
+    # Bumped when a stored value needs translating; see load().
+    settings_version: int = 2
     filename_template: str = "{title}"
 
     cookies_mode: str = "none"
@@ -63,6 +68,11 @@ class Settings:
     ai_model: str = ""
     ai_api_key: str = ""
     ai_find_artwork: bool = True
+    # Extra instructions added to the built-in AI prompt.
+    ai_custom_prompt: str = ""
+    # Where finished songs are copied for phone access. Empty means
+    # "find the synced Google Drive folder automatically".
+    gdrive_dir: str = ""
 
     # Translation is a separate action, with its own remembered choices.
     translate_language: str = "Japanese"
@@ -104,6 +114,15 @@ class Settings:
 
         known = {f.name for f in fields(cls)}
         values = {k: v for k, v in raw.items() if k in known}
+
+        # Before 2.7.1 the default was to delete the download after
+        # converting, and that default was written into every config file.
+        # Keeping the download is the default now, and an old False was
+        # never a deliberate choice — there was nothing else to leave it as.
+        if int(raw.get("settings_version") or 1) < 2:
+            values["keep_raw"] = True
+            values["settings_version"] = 2
+
         try:
             return cls(**values)
         except (TypeError, ValueError):

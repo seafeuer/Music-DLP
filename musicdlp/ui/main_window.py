@@ -37,6 +37,7 @@ from musicdlp.services.legacy_import import (
 from musicdlp.services.library import AddResult, LibraryService
 from musicdlp.services.ai_export import songs_needing_help, write_prompt
 from musicdlp.services.pipeline import Pipeline
+from musicdlp.services import gdrive
 from musicdlp.services.spotify import SpotifyService
 from musicdlp.services.thumbnails import ThumbnailService
 from musicdlp.services.urls import split_links
@@ -418,6 +419,14 @@ class MainWindow(QMainWindow):
         self.update_files_action.setShortcut("Ctrl+Shift+R")
         self.update_files_action.triggered.connect(self._update_files)
         edit_menu.addAction(self.update_files_action)
+
+        self.gdrive_action = QAction("Send ticked songs to Google Drive", self)
+        self.gdrive_action.setToolTip(
+            "Copy the converted files into your Google Drive folder, so the "
+            "Drive app on your phone can play them"
+        )
+        self.gdrive_action.triggered.connect(self._send_to_gdrive)
+        edit_menu.addAction(self.gdrive_action)
 
         self.album_action = QAction("Number ticked songs as an album…", self)
         self.album_action.triggered.connect(self._number_as_album)
@@ -1289,6 +1298,7 @@ class MainWindow(QMainWindow):
             else "Translate every song in this link…"
         )
         self.update_files_action.setEnabled(count > 0 and not busy)
+        self.gdrive_action.setEnabled(count > 0 and not busy)
         self.album_action.setEnabled(count > 0 and not busy)
         self.lookup_action.setEnabled(
             (count > 0 or self._current_source_id is not None) and not busy
@@ -1692,6 +1702,7 @@ class MainWindow(QMainWindow):
             base_url=self.settings.ai_base_url,
             model=self.settings.ai_model,
             api_key=self.settings.ai_api_key,
+            custom_prompt=self.settings.ai_custom_prompt,
         )
 
     def _open_translate(self, only_checked: bool) -> None:
@@ -2095,6 +2106,49 @@ class MainWindow(QMainWindow):
         self.status.set_busy(
             f"Updating {len(rows)} file{'' if len(rows) == 1 else 's'}…"
         )
+
+    def _send_to_gdrive(self) -> None:
+        """Copy the ticked songs into the Google Drive folder."""
+        rows = self._checked_rows()
+        if not rows:
+            self.status.set_idle("Tick the songs you want on your phone.")
+            return
+
+        files = []
+        for row in rows:
+            for path in (row.track.mp3_path, row.track.m4a_path):
+                if path and Path(path).exists():
+                    files.append(Path(path))
+                    break
+        if not files:
+            self.status.set_idle(
+                "Those songs have no converted file yet. Convert them first."
+            )
+            return
+
+        sent, errors = gdrive.send(files, self.settings.gdrive_dir)
+        target = gdrive.destination(self.settings.gdrive_dir)
+        if target is None:
+            QMessageBox.information(
+                self, "No Google Drive folder",
+                "No Google Drive folder was found on this computer.\n\n"
+                "Install Google Drive for desktop and sign in, then choose "
+                "the folder in Settings, Spotify.",
+            )
+            return
+
+        if sent:
+            self.status.set_idle(
+                f"Sent {sent} file{'' if sent == 1 else 's'} to "
+                f"{target.name}. The Drive app will upload them."
+            )
+        elif not errors:
+            self.status.set_idle("Those songs are already in Google Drive.")
+        if errors:
+            QMessageBox.warning(
+                self, "Some files were not sent",
+                "\n".join(errors[:8]),
+            )
 
     def _retry_track(self, track_id: int) -> None:
         row = self.track_table.model.row_for_id(track_id)

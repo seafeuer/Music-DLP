@@ -12,8 +12,8 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
-    QLineEdit, QMessageBox, QPushButton, QSpinBox, QTabWidget, QToolButton,
-    QVBoxLayout, QWidget,
+    QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox,
+    QTabWidget, QToolButton, QVBoxLayout, QWidget,
 )
 
 from musicdlp.core.config import Settings
@@ -23,6 +23,7 @@ from musicdlp.services.ai import (
 )
 from musicdlp.services.filenames import render_template
 from musicdlp.services.ffmpeg import FFmpegService
+from musicdlp.services import gdrive
 from musicdlp.services.spotify import SpotifyService
 from musicdlp.services.ytdlp import YtDlpService
 
@@ -231,9 +232,14 @@ class SettingsDialog(QDialog):
         )
 
         self.keep_raw_check = QCheckBox(
-            "Keep the original download after converting"
+            "Delete the original download after converting"
         )
-        self.keep_raw_check.setChecked(self.settings.keep_raw)
+        self.keep_raw_check.setToolTip(
+            "Off by default. Keeping the download means a song can be "
+            "converted again later without downloading it a second time."
+        )
+        # The stored setting is "keep", the box asks the opposite question.
+        self.keep_raw_check.setChecked(not self.settings.keep_raw)
         form.addRow("", self.keep_raw_check)
 
         self.smart_titles_check = QCheckBox(
@@ -311,6 +317,43 @@ class SettingsDialog(QDialog):
         self.restart_check.setChecked(self.settings.spotify_auto_restart)
         form.addRow("", self.restart_check)
         layout.addLayout(form)
+
+        # ---- Google Drive, for listening on a phone ----------------------
+        drive_box = QVBoxLayout()
+        drive_title = QLabel("Google Drive (for your phone)")
+        drive_title.setObjectName("sectionTitle")
+        drive_box.addWidget(drive_title)
+
+        drive_row = QHBoxLayout()
+        self.gdrive_edit = QLineEdit(self.settings.gdrive_dir)
+        self.gdrive_edit.setPlaceholderText(
+            "Leave empty to use the Google Drive folder on this computer"
+        )
+        self.gdrive_edit.setClearButtonEnabled(True)
+        drive_row.addWidget(self.gdrive_edit, 1)
+        drive_browse = QPushButton("Browse…")
+        drive_browse.clicked.connect(self._browse_gdrive)
+        drive_row.addWidget(drive_browse)
+        drive_find = QPushButton("Find it")
+        drive_find.clicked.connect(self._find_gdrive)
+        drive_row.addWidget(drive_find)
+        drive_box.addLayout(drive_row)
+
+        self.gdrive_status = QLabel("")
+        self.gdrive_status.setWordWrap(True)
+        self.gdrive_status.setObjectName("mutedSmall")
+        drive_box.addWidget(self.gdrive_status)
+        self.gdrive_edit.textChanged.connect(self._update_gdrive_status)
+
+        drive_hint = QLabel(
+            "Songs sent here are uploaded by the Google Drive app and appear "
+            "in the Drive app on your phone. Nothing is shared or made public."
+        )
+        drive_hint.setObjectName("mutedSmall")
+        drive_hint.setWordWrap(True)
+        drive_box.addWidget(drive_hint)
+        layout.addLayout(drive_box)
+        self._update_gdrive_status()
 
         buttons = QHBoxLayout()
         open_folder = QPushButton("Open folder")
@@ -415,6 +458,24 @@ class SettingsDialog(QDialog):
         self.ai_status = QLabel("")
         self.ai_status.setWordWrap(True)
         form.addRow("", self.ai_status)
+
+        self.ai_prompt_edit = QPlainTextEdit(self.settings.ai_custom_prompt)
+        self.ai_prompt_edit.setPlaceholderText(
+            "Optional. Extra instructions for the AI, in your own words.\n\n"
+            "For example: \"Always put the Vocaloid singer in the artist "
+            "field. Keep (Original) only for Vocaloid songs.\""
+        )
+        self.ai_prompt_edit.setMinimumHeight(90)
+        self.ai_prompt_edit.setToolTip(
+            "Added to the built-in instructions, so the answer keeps the "
+            "shape Music DLP needs"
+        )
+        form.addRow("Extra AI instructions", self.ai_prompt_edit)
+        self._hint(
+            form,
+            "These are added to the built-in prompt for naming and "
+            "translating. Leave it empty to use the built-in prompt alone.",
+        )
 
         self.ai_artwork_check = QCheckBox(
             "Look up real album art instead of the video still"
@@ -824,6 +885,49 @@ class SettingsDialog(QDialog):
         if folder:
             self.output_edit.setText(folder)
 
+    def _browse_gdrive(self) -> None:
+        start = self.gdrive_edit.text().strip() or str(
+            gdrive.find_drive() or Path.home()
+        )
+        chosen = QFileDialog.getExistingDirectory(
+            self, "Choose a Google Drive folder", start
+        )
+        if chosen:
+            self.gdrive_edit.setText(chosen)
+            self._update_gdrive_status()
+
+    def _find_gdrive(self) -> None:
+        found = gdrive.find_drive()
+        if found is None:
+            self.gdrive_status.setText(
+                "No Google Drive folder found. Install Google Drive for "
+                "desktop and sign in, then press Find it again."
+            )
+            return
+        # Show where songs would go, but leave the box empty: an empty box
+        # means "find it automatically", which keeps working if Drive moves
+        # to another drive letter. Typing a path would pin it forever.
+        target = found / gdrive.SUBFOLDER
+        self.gdrive_edit.clear()
+        self.gdrive_status.setText(
+            f"Found it: songs will be copied to {target}"
+        )
+
+    def _update_gdrive_status(self) -> None:
+        configured = self.gdrive_edit.text().strip()
+        path = gdrive.destination(configured)
+        if path is None:
+            self.gdrive_status.setText(
+                "No Google Drive folder found on this computer."
+            )
+            return
+        if configured:
+            self.gdrive_status.setText(f"Songs will be copied to {path}")
+        else:
+            self.gdrive_status.setText(
+                f"Found automatically: songs will be copied to {path}"
+            )
+
     def _browse_spotify(self) -> None:
         folder = self._choose_folder(
             "Choose Spotify local-files folder", self.spotify_edit.text()
@@ -917,7 +1021,7 @@ class SettingsDialog(QDialog):
             mp3_bitrate=self.mp3_bitrate.currentData(),
             m4a_bitrate=self.m4a_bitrate.currentData(),
             normalize=self.normalize_check.isChecked(),
-            keep_raw=self.keep_raw_check.isChecked(),
+            keep_raw=not self.keep_raw_check.isChecked(),
             smart_titles=self.smart_titles_check.isChecked(),
             filename_template=self.template_edit.text().strip() or "{title}",
             cookies_mode=self.cookies_combo.currentData(),
@@ -932,6 +1036,8 @@ class SettingsDialog(QDialog):
             ai_model=self.ai_model_combo.currentText().strip(),
             ai_api_key=self.ai_key_edit.text().strip(),
             ai_find_artwork=self.ai_artwork_check.isChecked(),
+            ai_custom_prompt=self.ai_prompt_edit.toPlainText().strip(),
+            gdrive_dir=self.gdrive_edit.text().strip(),
             # The Translate dialog remembers these; this dialog does not
             # show them, so carry them over rather than resetting them.
             translate_language=self.settings.translate_language,

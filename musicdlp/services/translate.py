@@ -17,7 +17,7 @@ import re
 from dataclasses import dataclass
 from typing import Callable, Iterable, Optional
 
-from musicdlp.services.ai import AIError, AISettings, chat
+from musicdlp.services.ai import AIError, AISettings, _system_prompt, chat
 
 logger = logging.getLogger("musicdlp.translate")
 
@@ -88,6 +88,28 @@ Rules:
 - "confidence" is 0.0-1.0. Use below 0.5 when you are unsure which form the
   song is known by.
 - Never add channel names, quality tags, or explanations.
+
+Brackets and parentheses are a qualifier, not part of the song name. Work
+out what each one means, and put it where it belongs rather than translating
+it as part of the title:
+- A performer named in brackets is an artist credit. Move it to "artist",
+  translated the same way the rest of the artist is. This includes a
+  Vocaloid or UTAU singer (Hatsune Miku, 初音ミク, Kagamine Rin, GUMI, IA,
+  Teto), a featured artist, and a credited cover singer. A vocaloid singer
+  is the voice of the recording, so it belongs in the artist even when a
+  producer is also credited.
+- "(Original)" or "(オリジナル)" stays beside the title only for Vocaloid,
+  UTAU, or similar songs that have many covers, where "original" is what
+  tells this recording apart from them. Translate it into the target
+  language and keep it in brackets after the title. For every other song,
+  drop it: an original needs no label.
+- A cover marker ("cover", "covered by", "歌ってみた", "翻唱") is kept in
+  the title, translated, because it marks a different recording.
+- A marker that names a different recording — instrumental, off-vocal,
+  remix, live, acoustic, sped up, nightcore — is kept, translated, for the
+  same reason.
+- Anything that is only upload noise ("official video", "HD", a year, a
+  channel name) is dropped.
 """
 
 
@@ -234,7 +256,7 @@ def translate_batch(
 
     reply = chat(
         settings,
-        SYSTEM_PROMPT,
+        _system_prompt(settings, SYSTEM_PROMPT),
         _build_prompt(batch, language, translate_artist),
     )
 

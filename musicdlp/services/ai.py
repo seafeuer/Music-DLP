@@ -77,7 +77,39 @@ Rules:
 - "confidence" is 0.0-1.0. Be honest: use below 0.6 when guessing.
 - If you cannot identify the song, return the cleaned title with an empty
   artist and a confidence below 0.4. Never invent an artist.
+
+Brackets and parentheses are a qualifier, not part of the song name. Read
+each one and put it where it belongs:
+- A performer named in brackets is an artist credit, not part of the title.
+  This includes a Vocaloid or UTAU singer (Hatsune Miku, 初音ミク, Kagamine
+  Rin, GUMI, IA, Teto), a featured artist, and a credited cover singer.
+- "(Original)" or "(オリジナル)" is kept in the title only for Vocaloid,
+  UTAU, or similar songs that have many covers, where "original" is what
+  tells this recording apart from them. For every other song, drop it.
+- A cover marker ("cover", "covered by", "歌ってみた", "翻唱") is kept,
+  because it marks a different recording from the original.
+- A marker that names a different recording — instrumental, off-vocal,
+  remix, live, acoustic, sped up, nightcore — is kept for the same reason.
+- Anything else that is only upload noise ("official video", "HD", a year,
+  a channel name) is dropped.
 """
+
+
+def _system_prompt(settings: AISettings, base: str) -> str:
+    """The built-in prompt, plus whatever the user added in Settings.
+
+    The extra text is added rather than swapped in, so the JSON shape the
+    app parses is never lost.
+    """
+    extra = (settings.custom_prompt or "").strip()
+    if not extra:
+        return base
+    return (
+        f"{base}\n\n"
+        "The user has added these instructions. Follow them as long as they "
+        "do not change the JSON shape asked for above:\n"
+        f"{extra}\n"
+    )
 
 
 class AIError(Exception):
@@ -121,6 +153,8 @@ class AISettings:
     # that reasoning. 2048 was small enough that a batch of songs could be
     # cut off before any answer text was written.
     max_tokens: int = 8192
+    # Extra instructions added to the built-in prompt, from Settings.
+    custom_prompt: str = ""
 
     @property
     def enabled(self) -> bool:
@@ -661,7 +695,8 @@ def suggest_names(
     prompt.append("")
     prompt.append("Return the JSON object now.")
 
-    reply = chat(settings, SYSTEM_PROMPT, "\n".join(prompt))
+    reply = chat(settings, _system_prompt(settings, SYSTEM_PROMPT),
+                 "\n".join(prompt))
     return _parse_result(reply)
 
 

@@ -555,3 +555,63 @@ def test_auto_is_an_allowed_provider():
     assert Settings().ai_provider == "auto"
     assert Settings(ai_provider="nonsense").validate() is None
     assert Settings(ai_provider="nonsense").ai_provider == "auto"
+
+
+# ------------------------------------------------------ the custom prompt
+
+def test_extra_instructions_are_added_to_the_naming_prompt(monkeypatch):
+    seen = {}
+
+    def fake_post(settings, path, payload, **_kwargs):
+        seen["system"] = payload.get("system") or payload["messages"][0]["content"]
+        return {"content": [{"type": "text",
+                             "text": '{"title": "Song", "artist": "", '
+                                     '"album": "", "confidence": 0.9}'}],
+                "stop_reason": "end_turn"}
+
+    monkeypatch.setattr(ai, "_post", fake_post)
+    settings = AISettings(
+        provider="anthropic", base_url="https://x.test", model="m",
+        custom_prompt="Always keep the vocaloid singer in the artist field.",
+    )
+    ai.suggest_names(settings, title="Some Song")
+    assert "Always keep the vocaloid singer" in seen["system"]
+    # The JSON contract has to survive, or nothing can be parsed.
+    assert '{"title"' in seen["system"]
+
+
+def test_no_extra_instructions_leaves_the_prompt_alone():
+    base = ai.SYSTEM_PROMPT
+    assert ai._system_prompt(AISettings(), base) == base
+
+
+def test_the_naming_prompt_explains_brackets():
+    prompt = ai.SYSTEM_PROMPT
+    assert "Brackets" in prompt
+    assert "Vocaloid" in prompt
+    assert "Original" in prompt
+
+
+def test_the_translation_prompt_explains_brackets():
+    from musicdlp.services.translate import SYSTEM_PROMPT as prompt
+
+    assert "Brackets" in prompt
+    assert "Vocaloid" in prompt
+    assert "artist credit" in prompt
+
+
+def test_extra_instructions_reach_the_translation_prompt(monkeypatch):
+    from musicdlp.services import translate as translate_module
+
+    seen = {}
+
+    def fake_chat(settings, system, user):
+        seen["system"] = system
+        return '{"items": [{"id": "1", "title": "X", "confidence": 0.9}]}'
+
+    monkeypatch.setattr(translate_module, "chat", fake_chat)
+    translate_module.translate_batch(
+        AISettings(custom_prompt="Prefer the official English title."),
+        [(1, "T", "A")], language="Japanese",
+    )
+    assert "Prefer the official English title" in seen["system"]

@@ -13,7 +13,7 @@ from musicdlp.services import metadata_lookup
 from musicdlp.services.metadata_lookup import Lookup, lookup
 from musicdlp.ui.dialogs.duplicates import DuplicateDialog
 from musicdlp.ui.dialogs.settings import SettingsDialog
-from musicdlp.ui.main_window import MainWindow, build_context
+from musicdlp.ui.main_window import ALL_SONGS_ID, MainWindow, build_context
 
 
 # ------------------------------------------------------------------ fixtures
@@ -759,3 +759,211 @@ def test_the_ytdlp_updater_explains_itself_in_a_packaged_build(
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     dialog._update_ytdlp()
     assert "packaged app" in dialog.ytdlp_status.text()
+
+
+# ------------------------------------------------- the new 2.7.1 fixes
+
+def test_the_menu_entry_for_suggested_titles_opens_the_dialog(window, monkeypatch):
+    """It used to raise 'native Qt signal instance is not callable'."""
+    import musicdlp.ui.main_window as main_window
+
+    main, db, data = window
+    db.update_track(data["tracks"][0], smart_title="Some Song",
+                    smart_confidence=0.4)
+    main._reload_current_source()
+
+    opened = []
+    monkeypatch.setattr(
+        main_window, "SmartTitlesDialog",
+        lambda rows, *a, **k: opened.append(rows) or _StubDialog(),
+    )
+    main.track_table._suggestions_action.trigger()
+    assert opened, "the menu entry did not open Suggested titles"
+
+
+class _StubDialog:
+    accepted_values: list = []
+
+    def exec(self):
+        return 0
+
+
+def test_songs_sort_by_number_not_by_letter(qapp, window):
+    """A playlist must read 1, 2, 10 rather than 1, 10, 2."""
+    main, db, data = window
+    for index in range(3, 12):
+        tid = db.upsert_track(
+            platform="youtube", media_id=f"n{index}",
+            url=f"https://www.youtube.com/watch?v=n{index}",
+            title=f"Song {index}", uploader="Channel", duration=100,
+        )
+        db.set_source_tracks(data["playlist"], [(tid, index)])
+    main._reload_current_source()
+
+    table = main.track_table.table
+    table.sortByColumn(1, Qt.AscendingOrder)
+    positions = [
+        table.model().index(row, 1).data()
+        for row in range(table.model().rowCount())
+    ]
+    assert positions[:3] == ["1", "2", "3"]
+    assert positions[-1] == "11"
+
+
+def test_length_sorts_by_seconds_not_by_letter(qapp, window):
+    main, db, data = window
+    db.update_track(data["tracks"][0], duration=100)
+    db.update_track(data["tracks"][1], duration=1000)
+    main._reload_current_source()
+    table = main.track_table.table
+    table.sortByColumn(4, Qt.AscendingOrder)
+    lengths = [
+        table.model().index(row, 4).data()
+        for row in range(table.model().rowCount())
+    ]
+    assert lengths == ["1:40", "16:40"]
+
+
+def test_raw_downloads_are_kept_by_default():
+    assert Settings().keep_raw is True
+
+
+def test_the_delete_raw_box_asks_the_opposite_question(qapp, window):
+    """The stored setting is 'keep', the checkbox says 'delete'."""
+    main, _db, _data = window
+    main.settings.keep_raw = True
+    dialog = SettingsDialog(
+        main.settings, main.ctx.ffmpeg, main.ctx.ytdlp, main.ctx.spotify, main
+    )
+    assert dialog.keep_raw_check.isChecked() is False
+    assert dialog.keep_raw_check.text().startswith("Delete")
+
+
+def test_sending_to_google_drive_copies_the_ticked_songs(
+    qapp, window, tmp_path, monkeypatch
+):
+    from musicdlp.services import gdrive
+
+    main, db, data = window
+    drive = tmp_path / "My Drive"
+    drive.mkdir()
+    monkeypatch.setattr(gdrive, "candidates", lambda: [drive])
+
+    song = tmp_path / "Song.mp3"
+    song.write_bytes(b"audio")
+    db.update_track(data["tracks"][0], mp3_path=str(song), status="converted")
+    main.settings.gdrive_dir = ""
+    main._reload_current_source()
+    main._set_track_included(data["tracks"][0], True)
+
+    main._send_to_gdrive()
+
+    sent = drive / gdrive.SUBFOLDER / "Song.mp3"
+    assert sent.exists()
+    assert "Sent 1 file" in main.status.status_label.text()
+
+
+def test_sending_without_a_drive_explains_itself(qapp, window, tmp_path, monkeypatch):
+    from musicdlp.services import gdrive
+
+    main, db, data = window
+    monkeypatch.setattr(gdrive, "candidates", lambda: [tmp_path / "nope"])
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+
+    song = tmp_path / "Song.mp3"
+    song.write_bytes(b"audio")
+    db.update_track(data["tracks"][0], mp3_path=str(song), status="converted")
+    main._reload_current_source()
+    main._set_track_included(data["tracks"][0], True)
+
+    main._send_to_gdrive()  # must not raise
+
+
+def test_saving_settings_keeps_the_custom_prompt_and_drive_folder(
+    qapp, window, monkeypatch
+):
+    """Both are new fields; a save must not silently reset them."""
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
+    main, _db, _data = window
+    main.settings.ai_custom_prompt = "Always keep the vocaloid singer."
+    main.settings.gdrive_dir = r"D:\Drive\MusicDLP"
+
+    dialog = SettingsDialog(
+        main.settings, main.ctx.ffmpeg, main.ctx.ytdlp, main.ctx.spotify, main
+    )
+    dialog._save()
+
+    saved = dialog.result_settings
+    assert saved is not None
+    assert saved.ai_custom_prompt == "Always keep the vocaloid singer."
+    assert saved.gdrive_dir == r"D:\Drive\MusicDLP"
+
+
+def test_the_settings_dialog_shows_the_saved_custom_prompt(qapp, window):
+    main, _db, _data = window
+    main.settings.ai_custom_prompt = "Prefer official English titles."
+    dialog = SettingsDialog(
+        main.settings, main.ctx.ffmpeg, main.ctx.ytdlp, main.ctx.spotify, main
+    )
+    assert dialog.ai_prompt_edit.toPlainText() == "Prefer official English titles."
+
+
+def test_the_all_songs_view_numbers_stay_in_order(qapp, window):
+    """Sorting the All Songs view must not shuffle its own row numbers."""
+    main, db, data = window
+    other = db.add_source(
+        url="https://www.youtube.com/playlist?list=PLtwo",
+        kind="playlist", platform="youtube", external_id="PLtwo",
+        title="Second list", uploader="Channel", item_count=2,
+        thumbnail_url=None,
+    )
+    ids = []
+    for index in (1, 2):
+        tid = db.upsert_track(
+            platform="youtube", media_id=f"z{index}",
+            url=f"https://www.youtube.com/watch?v=z{index}",
+            title=f"Other {index}", uploader="Channel", duration=100,
+        )
+        ids.append(tid)
+    db.set_source_tracks(other, [(tid, i + 1) for i, tid in enumerate(ids)])
+
+    main._load_source(ALL_SONGS_ID)
+    table = main.track_table.table
+    numbers = [
+        table.model().index(row, 1).data()
+        for row in range(table.model().rowCount())
+    ]
+    assert numbers == [str(index) for index in range(1, len(numbers) + 1)]
+
+
+def test_an_old_config_keeps_raw_files_after_upgrading(tmp_path):
+    """2.7.0 wrote keep_raw false by default; upgrading must not keep deleting."""
+    path = tmp_path / "config.json"
+    path.write_text('{"theme": "dark", "keep_raw": false}', encoding="utf-8")
+    assert Settings.load(path).keep_raw is True
+
+
+def test_a_deliberate_keep_setting_is_left_alone(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(
+        '{"theme": "dark", "keep_raw": true, "settings_version": 2}',
+        encoding="utf-8",
+    )
+    assert Settings.load(path).keep_raw is True
+
+
+def test_find_it_leaves_auto_detection_on(qapp, window, tmp_path, monkeypatch):
+    """Pressing Find it must not pin a path that breaks if Drive moves."""
+    from musicdlp.services import gdrive
+
+    main, _db, _data = window
+    root = tmp_path / "My Drive"
+    root.mkdir()
+    monkeypatch.setattr(gdrive, "candidates", lambda: [root])
+
+    dialog = SettingsDialog(
+        main.settings, main.ctx.ffmpeg, main.ctx.ytdlp, main.ctx.spotify, main
+    )
+    dialog._find_gdrive()
+    assert dialog.gdrive_edit.text() == ""
+    assert str(root) in dialog.gdrive_status.text()

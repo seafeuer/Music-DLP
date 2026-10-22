@@ -57,6 +57,14 @@ track number per song before converting.
 
 ## Install and run
 
+**Easiest:** download the `.exe` from the
+[latest release](https://github.com/seafeuer/Music-DLP/releases/latest) and run
+it. Python and the app's libraries are inside it. Put `ffmpeg.exe` in the
+`ffmpeg\` folder next to it, or install FFmpeg with
+`winget install Gyan.FFmpeg`.
+
+**From source:**
+
 ```bash
 git clone https://github.com/seafeuer/Music-DLP.git
 cd Music-DLP
@@ -144,6 +152,37 @@ Small local models name songs badly. A 0.5B model will usually return the
 upload title unchanged; use something in the 7B class or larger, or a hosted
 model, for useful suggestions.
 
+**Your own instructions.** Settings → AI → **Extra AI instructions** adds
+anything you type to the built-in prompt, for both naming and translating.
+It is added rather than swapped in, so the answer keeps the shape Music DLP
+needs to read it. For example:
+
+```
+Always put the Vocaloid singer in the artist field.
+Keep (Original) only for Vocaloid songs that have many covers.
+```
+
+### How brackets are handled
+
+Text in brackets is read as a qualifier, not as part of the song name:
+
+| Upload title | Becomes |
+|---|---|
+| `Senbonzakura (Original)` by Hatsune Miku | *Senbonzakura (Original)* — Hatsune Miku |
+| `Plastic Love (Original)` by Mariya Takeuchi | *Plastic Love* — the label is dropped |
+| `Stay (Cover by Jasmine Thompson)` | *Stay (Cover)* — Jasmine Thompson |
+| `Lemon [Instrumental]` | *Lemon (Instrumental)* |
+| `夜に駆ける (feat. 初音ミク)` | *夜に駆ける* — YOASOBI, 初音ミク |
+
+- A performer named in brackets is an artist credit, including a Vocaloid or
+  UTAU singer.
+- `(Original)` is kept only for Vocaloid, UTAU, and similar songs with many
+  covers, where it is what tells this recording apart. Everywhere else it is
+  dropped.
+- Cover, instrumental, remix, live, and acoustic markers are kept, because
+  they name a different recording.
+- Upload noise — "official video", a year, a channel name — is dropped.
+
 **Without a model.** **AI → Export songs for a chatbot…** writes a text file
 containing the songs that need names. Paste the whole file into any chatbot,
 then use **AI → Import a chatbot's reply…** and paste the answer back. The
@@ -208,6 +247,24 @@ cover art** does the same lookup for one song.
 Converted files go to `Music\MusicDLP\MP3` (and `M4A` if enabled). Files sent to
 Spotify are copied to `Music\MusicDLP\Spotify` by default.
 
+### Listening on a phone (Google Drive)
+
+Google Drive's desktop app syncs a folder, and the Drive app on iOS and
+Android shows what is in it. **Edit → Send ticked songs to Google Drive**
+copies the converted files into that folder, and the Drive app uploads them.
+
+- Music DLP finds the synced Drive automatically (`G:\My Drive`, or
+  `Google Drive` in your user folder). **Settings → Spotify → Find it** shows
+  which folder it chose.
+- By default songs go into a `MusicDLP` subfolder, so the rest of the Drive is
+  untouched.
+- Sending twice is harmless: a file already there is skipped.
+- Nothing is shared or made public. This is a file copy, not a Google account
+  login, and needs no API key.
+
+The first upload is done by the Drive app, so it needs a moment and a working
+internet connection; the songs appear on the phone after it finishes.
+
 ### Spotify
 
 Spotify has **no public API** for uploading local files or adding them to a
@@ -249,7 +306,12 @@ Switch modes from the toolbar at any time; the selection is preserved.
   `{artist}`, `{album}`, `{track}`, `{id}`, `{media_id}`, `{source}`, and a
   number format such as `{track:02d}`.
 - **Output → Normalize** — two-pass loudness normalization to −14 LUFS.
+- **Output → Delete the original download after converting** — off by
+  default. Keeping the download means a song can be converted again without
+  downloading it a second time.
 - **Spotify → When sending** — copy (keep the output file) or move.
+- **Spotify → Google Drive** — where songs go for phone listening. Leave it
+  empty to use the Drive folder found on this computer.
 - **Advanced** — FFmpeg path, diagnostics, log folder, and **Update yt-dlp**.
   Updating is the first thing to try when a site stops working.
 

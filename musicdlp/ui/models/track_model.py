@@ -34,6 +34,14 @@ COL_STATUS = 6
 COL_PROGRESS = 7
 
 
+def _number(value) -> float:
+    """A value for numeric sorting; anything unreadable sorts last."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float("inf")
+
+
 def _format_for(track: Track) -> str:
     has_mp3 = bool(track.mp3_path)
     has_m4a = bool(track.m4a_path)
@@ -323,6 +331,38 @@ class TrackFilterProxy(QSortFilterProxyModel):
         self.beginFilterChange()
         self.search = (text or "").strip().lower()
         self.endFilterChange()
+
+    def lessThan(self, left: QModelIndex, right: QModelIndex) -> bool:
+        """Sort numbers as numbers.
+
+        Without this the position and length columns sort as text, so a
+        playlist reads 1, 10, 11, 2 — which is what a user sees when they
+        click the "#" heading.
+        """
+        model = self.sourceModel()
+        if model is None or left.column() != right.column():
+            return super().lessThan(left, right)
+
+        column = left.column()
+        if column == COL_POSITION:
+            if model.numbered_rows:
+                # The All Songs view shows its own row numbers, not each
+                # link's position, so sorting by position would shuffle
+                # them (1, 4, 2, 5...). Its order is the row order.
+                return left.row() < right.row()
+            return _number(model.rows[left.row()].position) < \
+                _number(model.rows[right.row()].position)
+        if column == COL_DURATION:
+            return _number(model.rows[left.row()].duration) < \
+                _number(model.rows[right.row()].duration)
+        if column == COL_PROGRESS:
+            progress = model.progress
+            return _number(
+                progress.get(model.rows[left.row()].track.id)
+            ) < _number(
+                progress.get(model.rows[right.row()].track.id)
+            )
+        return super().lessThan(left, right)
 
     def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
         model = self.sourceModel()
