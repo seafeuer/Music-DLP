@@ -106,3 +106,62 @@ def test_an_intact_library_is_left_alone(tmp_path, library):
     track = db.get_track(tid)
     assert track.status == "synced"
     assert track.mp3_path == str(song)
+
+
+# ------------------------------------------------ relinking from a folder
+
+def test_songs_are_relinked_to_files_in_another_folder(tmp_path, library):
+    from musicdlp.services.library import LibraryService
+
+    db, source = library
+    elsewhere = tmp_path / "somewhere"
+    elsewhere.mkdir()
+    (elsewhere / "Song.mp3").write_bytes(b"x" * 100)
+
+    tid = _track(db, source, "e",
+                 mp3_path=str(tmp_path / "gone" / "Song.mp3"),
+                 status="synced")
+
+    library_service = LibraryService(db, Settings(), None)
+    counts = library_service.relink_from_folder(elsewhere)
+
+    track = db.get_track(tid)
+    assert counts["relinked"] == 1
+    assert Path(track.mp3_path) == elsewhere / "Song.mp3"
+    assert track.status == "synced"
+
+
+def test_relinking_ignores_a_different_file_name(tmp_path, library):
+    from musicdlp.services.library import LibraryService
+
+    db, source = library
+    elsewhere = tmp_path / "somewhere"
+    elsewhere.mkdir()
+    (elsewhere / "Another Song.mp3").write_bytes(b"x" * 100)
+
+    tid = _track(db, source, "f",
+                 mp3_path=str(tmp_path / "gone" / "Song.mp3"),
+                 status="synced")
+
+    counts = LibraryService(db, Settings(), None).relink_from_folder(elsewhere)
+
+    assert counts["relinked"] == 0
+    assert db.get_track(tid).mp3_path.endswith("Song.mp3")
+
+
+def test_relinking_leaves_a_present_file_alone(tmp_path, library):
+    from musicdlp.services.library import LibraryService
+
+    db, source = library
+    out = tmp_path / "out"
+    out.mkdir()
+    song = out / "Song.mp3"
+    song.write_bytes(b"x" * 100)
+    tid = _track(db, source, "g", mp3_path=str(song), status="synced")
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "Song.mp3").write_bytes(b"y" * 50)
+
+    LibraryService(db, Settings(), None).relink_from_folder(elsewhere)
+    assert db.get_track(tid).mp3_path == str(song)

@@ -353,6 +353,54 @@ class LibraryService:
         self.db.update_track(track_id, cover_path=str(found))
         return "updated"
 
+    def relink_from_folder(self, folder: Path) -> dict:
+        """Point tracks whose file is missing at a copy found in a folder.
+
+        A library made on another computer, or one whose output folder was
+        changed, keeps paths that no longer resolve. Choosing the folder
+        the songs are in now repairs them, instead of downloading
+        everything again.
+
+        Files are matched by name, so this only ever links a file whose
+        name is exactly the one the track expected.
+        """
+        folder = Path(folder)
+        counts = {"relinked": 0, "missing": 0}
+        if not folder.is_dir():
+            return counts
+
+        by_name: dict[str, Path] = {}
+        try:
+            for candidate in folder.rglob("*"):
+                if candidate.is_file() and candidate.suffix.lower() in (
+                    ".mp3", ".m4a"
+                ):
+                    by_name.setdefault(candidate.name.lower(), candidate)
+        except OSError as exc:
+            logger.warning("Could not read %s: %s", folder, exc)
+            return counts
+
+        for track in self.db.get_all_tracks():
+            current = [p for p in (track.mp3_path, track.m4a_path) if p]
+            if any(Path(p).exists() for p in current):
+                continue
+            wanted = [Path(p).name.lower() for p in current]
+            found = next(
+                (by_name[name] for name in wanted if name in by_name), None
+            )
+            if found is None:
+                counts["missing"] += 1
+                continue
+
+            updates = {"mp3_path": str(found)} if found.suffix.lower() == ".mp3"                 else {"m4a_path": str(found)}
+            # The file is back, so a song that was only marked missing
+            # returns to the state it had.
+            if is_converted(track.status):
+                updates["needs_update"] = 0
+            self.db.update_track(track.id, **updates)
+            counts["relinked"] += 1
+        return counts
+
     def set_cover(self, track_id: int, image_path: Optional[Path]) -> Optional[Path]:
         """Use a user-chosen image as the cover art for a track.
 

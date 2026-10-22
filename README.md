@@ -246,6 +246,10 @@ the same for one song.
 - **Ctrl+Z** undoes the last rename, translation, move into a folder, folder
   creation, or removal that kept its files.
 - **F2** edits the highlighted song.
+- **Edit → Find missing files…** reconnects songs whose audio is in another
+  folder — after moving the library, or after copying it from another
+  computer. A song whose file is gone says **File missing** rather than
+  pretending it was never downloaded, and Retry fetches it again.
 
 ### Cover art
 

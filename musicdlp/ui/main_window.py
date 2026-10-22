@@ -463,6 +463,14 @@ class MainWindow(QMainWindow):
         self.update_files_action.triggered.connect(self._update_files)
         edit_menu.addAction(self.update_files_action)
 
+        self.relink_action = QAction("Find missing files…", self)
+        self.relink_action.setToolTip(
+            "Point songs whose audio file is missing at a copy in another "
+            "folder, instead of downloading them again"
+        )
+        self.relink_action.triggered.connect(self._relink_files)
+        edit_menu.addAction(self.relink_action)
+
         self.fix_covers_action = QAction("Fix covers for ticked songs", self)
         self.fix_covers_action.setToolTip(
             "Look the artwork up again and put it into the files, without "
@@ -1349,6 +1357,7 @@ class MainWindow(QMainWindow):
             else "Translate every song in this link…"
         )
         self.update_files_action.setEnabled(count > 0 and not busy)
+        self.relink_action.setEnabled(not busy)
         self.fix_covers_action.setEnabled(count > 0 and not busy)
         self.gdrive_action.setEnabled(count > 0 and not busy)
         self.album_action.setEnabled(count > 0 and not busy)
@@ -2162,6 +2171,37 @@ class MainWindow(QMainWindow):
         self.status.set_busy(
             f"Updating {len(rows)} file{'' if len(rows) == 1 else 's'}…"
         )
+
+    def _relink_files(self) -> None:
+        """Recover songs whose audio lives in another folder."""
+        if self._is_busy():
+            self.status.set_idle("Wait for the current job to finish.")
+            return
+
+        folder = QFileDialog.getExistingDirectory(
+            self, "Choose the folder your songs are in",
+            str(self.settings.output_path),
+        )
+        if not folder:
+            return
+
+        counts = self.ctx.library.relink_from_folder(Path(folder))
+        self._reload_current_source()
+        self._refresh_sources(self._current_source_id)
+        relinked = counts.get("relinked", 0)
+        missing = counts.get("missing", 0)
+        if relinked:
+            message = (
+                f"Reconnected {relinked} song"
+                f"{'' if relinked == 1 else 's'} to the files in that folder."
+            )
+            if missing:
+                message += f" {missing} still have no file."
+            self.status.set_idle(message)
+        else:
+            self.status.set_idle(
+                "No matching files were found in that folder."
+            )
 
     def _fix_covers(self) -> None:
         """Replace the artwork in the ticked songs' existing files."""
