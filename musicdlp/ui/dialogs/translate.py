@@ -295,10 +295,18 @@ class TranslationDialog(QDialog):
     def _start(self) -> None:
         if self.ai_settings is None:
             return
+        # The uploader's own title is the reliable source. The library may
+        # be showing a name guessed by the built-in rules, which is wrong
+        # often enough (a Japanese uploader writes "Title - Vocalist", and
+        # the rules read that backwards) that it must not be the input.
         items = [
-            (row.track.id, row.track.display_title, row.track.display_artist)
+            (row.track.id, row.track.title or row.track.display_title,
+             row.track.display_artist)
             for row in self.rows
         ]
+        current_titles = {
+            row.track.id: row.track.display_title for row in self.rows
+        }
         if not items:
             return
 
@@ -324,6 +332,7 @@ class TranslationDialog(QDialog):
                     items,
                     language=language,
                     translate_artist=translate_artist,
+                    current_titles=current_titles,
                     on_result=on_result,
                     should_stop=stop.is_set,
                 )

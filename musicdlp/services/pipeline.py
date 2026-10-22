@@ -35,7 +35,7 @@ from musicdlp.core.models import (
     Track,
 )
 from musicdlp.core.paths import art_cache_dir
-from musicdlp.services.artwork import find_cover
+from musicdlp.services.artwork import cover_cache_path, find_cover
 from musicdlp.services.filenames import render_template, unique_path
 from musicdlp.services.ffmpeg import FFmpegService
 from musicdlp.services.spotify import SpotifyService
@@ -495,8 +495,7 @@ class Pipeline(QObject):
                         album_art = find_cover(
                             track.display_artist,
                             track.display_title,
-                            art_cache_dir()
-                            / f"album_{track.platform}_{track.media_id}.jpg",
+                            cover_cache_path(track.platform, track.media_id),
                             album=track.display_album,
                         )
                         if album_art is not None:

@@ -29,7 +29,24 @@ USER_AGENT = (
 )
 ITUNES_URL = "https://itunes.apple.com/search"
 MUSICBRAINZ_URL = "https://musicbrainz.org/ws/2/recording"
-COVER_ARCHIVE_URL = "https://coverartarchive.org/release/{mbid}/front-500"
+COVER_ARCHIVE_URL = "https://coverartarchive.org/release/{mbid}/front-1200"
+
+# iTunes serves artwork at any size the publisher uploaded, up to 3000 px
+# square. The search result only advertises a 100 px thumbnail, so the URL
+# has to be rewritten to ask for the large one.
+ITUNES_SIZES = ("3000x3000bb", "1400x1400bb", "600x600bb")
+
+# What a cover is stored at. Spotify asks for at least 640 px and prefers
+# 3000; 1400 looks sharp on a phone and a laptop without making every file
+# a megabyte of artwork. Art smaller than this is never stretched up.
+TARGET_COVER_SIZE = 1400
+
+# Anything below this is YouTube's "no thumbnail" placeholder, not a picture.
+MIN_USABLE_PIXELS = 300
+
+# Spotify will not use art below this size. A smaller picture is enlarged
+# to it so the player never has to show something tinier than it should.
+MIN_STORED_SIZE = 640
 
 
 def _clean(text: str) -> str:
@@ -49,13 +66,35 @@ def _download(url: str, timeout: int = 15) -> Optional[bytes]:
     return response.content
 
 
-def _save_square(data: bytes, destination: Path, size: int = 640) -> Optional[Path]:
+def _pixel_size(data: bytes) -> tuple[int, int]:
+    """The image's own size, or (0, 0) when it is not a readable picture."""
+    try:
+        with Image.open(BytesIO(data)) as image:
+            return image.size
+    except Exception:  # noqa: BLE001 - a broken download is just a miss
+        return (0, 0)
+
+
+def _save_square(
+    data: bytes, destination: Path, size: int = TARGET_COVER_SIZE
+) -> Optional[Path]:
+    """Crop to a square and save it, never enlarging a small picture.
+
+    Upscaling a 200 px image to 1400 px only makes a blurry file bigger, so
+    the stored size is the source's own square edge when that is smaller
+    than the target.
+    """
     try:
         image = Image.open(BytesIO(data))
         if image.mode != "RGB":
             image = image.convert("RGB")
+        edge = min(image.size)
+        if edge < MIN_USABLE_PIXELS:
+            logger.debug("Ignoring a %s px image as a cover", image.size)
+            return None
+        target = min(size, max(MIN_STORED_SIZE, edge))
         image = ImageOps.fit(
-            image, (size, size), method=Image.Resampling.LANCZOS,
+            image, (target, target), method=Image.Resampling.LANCZOS,
             centering=(0.5, 0.5),
         )
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -99,18 +138,31 @@ def _itunes_cover(artist: str, title: str) -> Optional[str]:
             continue
         if wanted_artist and wanted_artist not in performer and performer not in wanted_artist:
             continue
-        artwork = result.get("artworkUrl100") or ""
+        artwork = _large_artwork(result.get("artworkUrl100"))
         if artwork:
-            return artwork.replace("100x100bb", "600x600bb").replace(
-                "100x100", "600x600"
-            )
+            return artwork
 
     # Nothing matched by title and artist; take the first cover with art.
     for result in results:
-        artwork = result.get("artworkUrl100") or ""
+        artwork = _large_artwork(result.get("artworkUrl100"))
         if artwork:
-            return artwork.replace("100x100bb", "600x600bb")
+            return artwork
     return None
+
+
+def _large_artwork(url: str) -> str:
+    """Ask iTunes for the biggest version of a cover it has."""
+    url = (url or "").strip()
+    if not url:
+        return ""
+    for size in ITUNES_SIZES:
+        if f"/{size}." in url or url.endswith(f"/{size}"):
+            return url.replace(f"/{size}.", f"/{ITUNES_SIZES[0]}.")
+    # The usual form is ".../100x100bb.jpg".
+    for old in ("100x100bb", "100x100", "60x60bb", "60x60"):
+        if old in url:
+            return url.replace(old, ITUNES_SIZES[0])
+    return url
 
 
 # --------------------------------------------------------- MusicBrainz
@@ -144,6 +196,19 @@ def _musicbrainz_cover(artist: str, title: str) -> Optional[str]:
 
 
 # ---------------------------------------------------------------- public
+
+
+def cover_cache_path(platform: str, media_id: str) -> Path:
+    """Where a song's cover is cached.
+
+    The size is part of the name, so a cover stored at the old 640 px is
+    not reused after an upgrade, and the bigger one is fetched once.
+    """
+    from musicdlp.core.paths import art_cache_dir
+
+    return art_cache_dir() / (
+        f"album_{platform}_{media_id}_{TARGET_COVER_SIZE}.jpg"
+    )
 
 
 def find_cover(

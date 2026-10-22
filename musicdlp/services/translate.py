@@ -67,6 +67,12 @@ Reply with JSON only, in exactly this shape:
 
 Rules:
 - "title" is the song title written in the target language's own script.
+- The "title" given for each song is the uploader's own title, and it is
+  the reliable source. Work out the real song title from it, applying the
+  rules below. Some songs also come with a "name already in the library";
+  that is a guess made by simple rules and may be wrong — a Japanese
+  uploader often writes "Title - Vocalist", which those rules read
+  backwards. When the two disagree, trust the upload title.
 - "title_latin" is that same title in Latin letters: romanisation for
   Japanese, Chinese, Korean, Hebrew, Arabic, Russian; for languages that
   already use Latin letters it is the same string as "title".
@@ -218,6 +224,7 @@ def _build_prompt(
     items: list[tuple[int, str, str]],
     language: str,
     translate_artist: bool,
+    current_titles: Optional[dict[int, str]] = None,
 ) -> str:
     lines = [f"Target language: {language}", ""]
     if not translate_artist:
@@ -228,10 +235,17 @@ def _build_prompt(
         lines.append("")
     lines.append("Songs:")
     for track_id, title, artist in items:
-        lines.append(
+        line = (
             f'- id "{track_id}": title "{title[:MAX_TITLE_CHARS]}", '
             f'artist "{artist[:MAX_TITLE_CHARS]}"'
         )
+        # The library's own name may be a guess made by the built-in rules.
+        # It is shown so the model can tell, but the upload title is what
+        # the answer must be based on.
+        guess = (current_titles or {}).get(track_id, "").strip()
+        if guess and guess != title.strip():
+            line += f', name already in the library "{guess[:MAX_TITLE_CHARS]}"'
+        lines.append(line)
     lines.append("")
     lines.append("Return the JSON object now.")
     return "\n".join(lines)
@@ -243,12 +257,15 @@ def translate_batch(
     *,
     language: str,
     translate_artist: bool = True,
+    current_titles: Optional[dict[int, str]] = None,
 ) -> dict[int, Translation]:
     """Translate several songs in one request.
 
-    ``items`` is ``(track_id, title, artist)``. Items the model leaves out
-    are simply absent from the result; the caller decides what to do with
-    them.
+    ``items`` is ``(track_id, title, artist)``, where ``title`` should be
+    the title as the uploader wrote it. ``current_titles`` maps a track id
+    to the name the library shows, when that is a guess the model should
+    be able to see past. Items the model leaves out are simply absent from
+    the result; the caller decides what to do with them.
     """
     batch = [(int(tid), title or "", artist or "") for tid, title, artist in items]
     if not batch:
@@ -257,7 +274,7 @@ def translate_batch(
     reply = chat(
         settings,
         _system_prompt(settings, SYSTEM_PROMPT),
-        _build_prompt(batch, language, translate_artist),
+        _build_prompt(batch, language, translate_artist, current_titles),
     )
 
     wanted = {track_id for track_id, _title, _artist in batch}
@@ -311,6 +328,7 @@ def translate_many(
     *,
     language: str,
     translate_artist: bool = True,
+    current_titles: Optional[dict[int, str]] = None,
     on_result: Optional[Callable[[int, Translation], None]] = None,
     should_stop: Optional[Callable[[], bool]] = None,
 ) -> tuple[list[tuple[int, Translation]], Optional[AIError]]:
@@ -336,6 +354,7 @@ def translate_many(
                 batch,
                 language=language,
                 translate_artist=translate_artist,
+                current_titles=current_titles,
             )
         except AIError as exc:
             # One bad batch should not lose the rest. Fall back to single
@@ -345,6 +364,7 @@ def translate_many(
                 batch,
                 language=language,
                 translate_artist=translate_artist,
+                current_titles=current_titles,
                 should_stop=should_stop,
             )
             for track_id, translation in results.items():
@@ -364,6 +384,7 @@ def translate_many(
                 missing,
                 language=language,
                 translate_artist=translate_artist,
+                current_titles=current_titles,
                 should_stop=should_stop,
             )
             results.update(retried)
@@ -395,6 +416,7 @@ def _retry_individually(
     language: str,
     translate_artist: bool,
     should_stop: Optional[Callable[[], bool]],
+    current_titles: Optional[dict[int, str]] = None,
 ) -> tuple[dict[int, Translation], Optional[AIError]]:
     results: dict[int, Translation] = {}
     if len(batch) == 1:
@@ -402,6 +424,7 @@ def _retry_individually(
             return translate_batch(
                 settings, batch,
                 language=language, translate_artist=translate_artist,
+                current_titles=current_titles,
             ), None
         except AIError as exc:
             return {}, exc
@@ -413,6 +436,7 @@ def _retry_individually(
             one = translate_batch(
                 settings, [item],
                 language=language, translate_artist=translate_artist,
+                current_titles=current_titles,
             )
         except AIError as exc:
             return results, exc

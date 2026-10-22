@@ -394,3 +394,53 @@ def test_smart_titles_counts_ai_names_across_polls(qapp):
     dialog._drain()
 
     assert "AI named 2 songs" in dialog.status.text()
+
+
+# ------------------------------------------------- the upload title is the source
+
+def test_the_prompt_carries_the_library_name_as_context_only():
+    prompt = translate_module._build_prompt(
+        [(1, "オーバーライド - 重音テトSV[吉田夜世]", "吉田夜世")],
+        "English", True,
+        {1: "重音テトsv[吉田夜世]"},
+    )
+    assert "オーバーライド - 重音テトSV[吉田夜世]" in prompt
+    assert "name already in the library" in prompt
+
+
+def test_no_library_name_is_added_when_it_matches():
+    prompt = translate_module._build_prompt(
+        [(1, "Same Title", "Artist")], "English", True, {1: "Same Title"}
+    )
+    assert "name already in the library" not in prompt
+
+
+def test_the_prompt_says_the_upload_title_wins():
+    from musicdlp.services.translate import SYSTEM_PROMPT
+
+    assert "upload title" in SYSTEM_PROMPT
+    assert "read\n  backwards" in SYSTEM_PROMPT or "backwards" in SYSTEM_PROMPT
+
+
+def test_the_dialog_translates_from_the_upload_title(qapp, monkeypatch):
+    """The library name may be a bad guess; it must not be the input."""
+    row = _row(track_id=1, title="オーバーライド - 重音テトSV[吉田夜世]",
+               artist="吉田夜世")
+    row.track.meta_title = "重音テトsv[吉田夜世]"
+    dialog = TranslationDialog([row], ai_settings=SETTINGS)
+
+    seen = {}
+
+    def fake_many(settings, items, **kwargs):
+        seen["items"] = items
+        seen["current"] = kwargs.get("current_titles")
+        return [], None
+
+    monkeypatch.setattr(
+        "musicdlp.ui.dialogs.translate.translate_many", fake_many
+    )
+    dialog._start()
+    dialog._stop.set()
+
+    assert seen["items"][0][1] == "オーバーライド - 重音テトSV[吉田夜世]"
+    assert seen["current"][1] == "重音テトsv[吉田夜世]"

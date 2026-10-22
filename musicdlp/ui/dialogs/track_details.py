@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 
 from musicdlp.core.models import Track, is_converted
 from musicdlp.core.paths import art_cache_dir
-from musicdlp.services.artwork import find_cover
+from musicdlp.services.artwork import cover_cache_path, find_cover
 from musicdlp.services.filenames import render_template
 
 
@@ -223,8 +223,8 @@ class TrackDetailsDialog(QDialog):
         self.find_art_button.setText("Looking…")
         QApplication.processEvents()
         try:
-            destination = art_cache_dir() / (
-                f"album_{self.track.platform}_{self.track.media_id}.jpg"
+            destination = cover_cache_path(
+                self.track.platform, self.track.media_id
             )
             found = find_cover(
                 artist,
