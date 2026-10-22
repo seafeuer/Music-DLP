@@ -378,6 +378,23 @@ musicdlp/
 | A site suddenly stops working | Settings → Advanced → **Update yt-dlp** |
 | AI says "not set up" | Settings → AI → pick a provider and model, then Test connection |
 | Translation came out wrong | Untick that row and edit it by hand; the model is only a first draft |
+| Song shows in Discord but with no artist or cover | Discord stopped reporting Spotify **local files** in its status; this is not something the app can change. See the note below. |
+
+### Discord status and local files
+
+Discord shows what Spotify is playing, but it only does so for songs in
+Spotify's own catalogue. A song that only exists as a local file is left out
+of the status, or shows with the title but no artist and no cover. This is a
+change on Discord's side, not something in the tags Music DLP writes, and
+nothing in the app can turn it back on.
+
+The workarounds are outside the app:
+
+- If the song is in Spotify's catalogue, play that version and Discord will
+  show it.
+- A separate rich-presence tool that reads Windows' media controls can report
+  any player, local files included. [Music Presence](https://github.com/ungive/discord-music-presence)
+  is one.
 
 Logs live in `%LOCALAPPDATA%\MusicDLP\logs\musicdlp.log`; the app's **Logs**
 drawer shows the same messages and can open the folder.
