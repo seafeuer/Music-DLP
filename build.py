@@ -51,11 +51,10 @@ def _local_ffmpeg() -> tuple[Path | None, Path | None]:
     """A real ffmpeg.exe and ffprobe.exe on this machine, if any."""
     try:
         sys.path.insert(0, str(ROOT))
-        from musicdlp.services.ffmpeg import find_ffmpeg, find_ffprobe
+        from musicdlp.services.ffmpeg import find_ffmpeg
 
-        ffmpeg = find_ffmpeg()
-        probe = find_ffprobe(ffmpeg)
-        return ffmpeg, probe
+        found = find_ffmpeg()
+        return _real_ffmpeg(found)
     except Exception as exc:  # noqa: BLE001 - a build must not fail on this
         print(f"Could not look for FFmpeg: {exc}")
         return None, None
