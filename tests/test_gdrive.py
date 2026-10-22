@@ -124,3 +124,18 @@ def test_a_configured_folder_that_vanished_falls_back_to_the_drive(
     monkeypatch.setattr(gdrive, "candidates", lambda: [root])
     gone = tmp_path / "Q" / "OldDrive" / "MusicDLP"
     assert gdrive.destination(str(gone)) == root / gdrive.SUBFOLDER
+
+
+def test_the_backup_and_sync_container_is_not_mistaken_for_the_drive(
+    tmp_path, monkeypatch
+):
+    """%USERPROFILE%\Google Drive only wraps My Drive; writing there syncs
+    nothing."""
+    container = tmp_path / "Google Drive"
+    real = container / "My Drive"
+    real.mkdir(parents=True)
+    monkeypatch.setattr(
+        gdrive, "candidates", lambda: [container, real]
+    )
+    assert gdrive.find_drive() == real
+    assert gdrive.destination("") == real / gdrive.SUBFOLDER

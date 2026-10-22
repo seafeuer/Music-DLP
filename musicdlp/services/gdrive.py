@@ -96,8 +96,14 @@ def find_drive() -> Optional[Path]:
     """The synced Google Drive folder, if one is present."""
     for path in candidates():
         try:
-            if path.is_dir():
-                return path
+            if not path.is_dir():
+                continue
+            # "Google Drive" with a "My Drive" inside is only the container
+            # that Backup and Sync wraps the real folder in. Writing there
+            # never reaches Google, so skip it and use the nested folder.
+            if (path / "My Drive").is_dir():
+                continue
+            return path
         except OSError:
             continue
     return None
