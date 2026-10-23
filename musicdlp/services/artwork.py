@@ -214,11 +214,12 @@ def _title_variants(title: str, artist_parts: list[str]) -> list[str]:
 
 # How far a catalogue track's length may be from the uploaded audio and
 # still be the same recording. An official music video can run a minute
-# longer than the song it contains, so this is set to catch a completely
-# different song rather than a video intro. Among several candidates the
-# closest length wins, which is what actually picks the right version.
-DURATION_TOLERANCE_SECONDS = 60
-DURATION_TOLERANCE_RATIO = 0.30
+# longer than the song, and an edited or leaked upload can be shorter, so
+# the allowance is generous: its job is to catch a different song, not to
+# police an intro. Among several candidates the closest length wins, which
+# is what actually picks the right version.
+DURATION_TOLERANCE_SECONDS = 90
+DURATION_TOLERANCE_RATIO = 0.45
 
 
 def _duration_gap(wanted: Optional[float], found: Optional[float]) -> float:
@@ -249,9 +250,40 @@ def _duration_matches(wanted: Optional[float], found: Optional[float]) -> bool:
         return True
     difference = abs(wanted - found)
     allowance = max(
-        DURATION_TOLERANCE_SECONDS, max(wanted, found) * DURATION_TOLERANCE_RATIO
+        DURATION_TOLERANCE_SECONDS,
+        max(wanted, found) * DURATION_TOLERANCE_RATIO,
     )
     return difference <= allowance
+
+
+# Voicebank names. A Vocaloid or UTAU upload usually lists the singer
+# before the producer, so the first name is the performer and the artist
+# the release is filed under comes next. These are distinctive enough not
+# to catch ordinary names.
+_VOICE_BANKS = (
+    "hatsune miku", "初音ミク", "kasane teto", "重音テト", "kagamine",
+    "鏡音", "megurine luka", "巡音ルカ", "gumi", "グミ",
+    "yuzuki yukari", "結月ゆかり", "meiko", "kaito",
+    "utau", "vocaloid", "ボカロ",
+)
+
+
+def _effective_main_artist(parts: list[str]) -> str:
+    """The artist a release is filed under, skipping a voicebank credit.
+
+    "Kasane Teto SV, Yoshida Yasei" is a Vocaloid single by Yoshida Yasei;
+    the voicebank comes first because the uploader names the singer. That
+    must not stop the cover being found, while "Travis Scott, Young Thug"
+    must still be treated as a Travis Scott song.
+    """
+    for part in parts:
+        text = _norm(part)
+        if not text:
+            continue
+        if any(bank.strip() in text for bank in _VOICE_BANKS):
+            continue
+        return part
+    return parts[0] if parts else ""
 
 
 def _is_the_same_song(
@@ -287,7 +319,7 @@ def _is_the_same_song(
     credited = _artist_parts(result_artist)
     credited_norm = {_norm(part) for part in credited}
     if wanted:
-        main = _norm(wanted[0])
+        main = _norm(_effective_main_artist(wanted))
         if main not in credited_norm:
             return False
         primary = _norm(credited[0]) if credited else ""

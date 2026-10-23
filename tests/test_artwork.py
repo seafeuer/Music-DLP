@@ -207,12 +207,8 @@ def test_the_single_beats_an_english_cover(monkeypatch):
     assert "real" in artwork._itunes_cover("Yoshida Yasei", "Override")
 
 
-def test_a_second_credited_artist_alone_is_not_enough(monkeypatch):
-    """When the vocalist is listed first, the cover is skipped.
-
-    This is the safe outcome: the video still is used rather than art for
-    a release whose main artist is not the one the upload names.
-    """
+def test_a_vocaloid_single_is_found_through_its_producer(monkeypatch):
+    """The voicebank is listed first, but the release is the producer's."""
     results = [
         {"trackName": "Override", "artistName": "Yoshida Yasei",
          "collectionName": "Override - Single",
@@ -223,7 +219,7 @@ def test_a_second_credited_artist_alone_is_not_enough(monkeypatch):
     )
     assert artwork._itunes_cover(
         "Kasane Teto SV, Yoshida Yasei", "Override"
-    ) is None
+    )
 
 
 # ------------------------------------- never borrow another song's cover
@@ -501,7 +497,8 @@ def test_a_missing_length_is_not_a_reason_to_reject():
 
 
 def test_a_guessed_title_pointing_at_another_song_is_rejected(monkeypatch):
-    """The parser guessed a real song; the audio length proves it is not it."""
+    """The parser guessed a real song; a wildly different length proves it
+    is not that recording."""
     results = [
         {"trackName": "Creep", "artistName": "Radiohead",
          "collectionName": "Pablo Honey",
@@ -511,8 +508,23 @@ def test_a_guessed_title_pointing_at_another_song_is_rejected(monkeypatch):
     monkeypatch.setattr(
         artwork, "_itunes_search", lambda term, limit=8: results
     )
-    assert artwork._itunes_cover("Radiohead", "Creep", 400) is None
+    # 90 seconds is not a video intro.
+    assert artwork._itunes_cover("Radiohead", "Creep", 90) is None
     assert artwork._itunes_cover("Radiohead", "Creep", 238) is not None
+
+
+def test_a_long_album_track_still_matches_its_release(monkeypatch):
+    """A 472 s upload is the 339 s album track, not a different song."""
+    results = [
+        {"trackName": "90210 (feat. Kacy Hill)",
+         "artistName": "Travis Scott", "collectionName": "Rodeo",
+         "trackTimeMillis": 339000,
+         "artworkUrl100": "https://x/rodeo/100x100bb.jpg"},
+    ]
+    monkeypatch.setattr(
+        artwork, "_itunes_search", lambda term, limit=8: results
+    )
+    assert artwork._itunes_cover("Travis Scott", "90210", 472)
 
 
 def test_the_closest_length_wins_between_two_versions(monkeypatch):
@@ -560,12 +572,12 @@ def test_a_multi_artist_credit_matches_its_main_artist():
     ) is True
 
 
-def test_a_vocalist_listed_first_is_not_taken_as_the_artist():
-    """Falling back to the video still is the safe outcome here."""
+def test_a_vocalist_listed_first_is_skipped_for_the_release_artist():
+    """The voicebank is the performer; the producer is the artist."""
     assert artwork._is_the_same_song(
         "Override", ["Kasane Teto SV", "Yoshida Yasei"],
         "Override", "Yoshida Yasei",
-    ) is False
+    ) is True
 
 
 # ------------------------------------- long parentheticals still find the song
@@ -831,4 +843,37 @@ def test_a_leak_still_finds_no_cover():
     assert artwork._is_the_same_song(
         "MONDAY MORNING Young Thug LEAK 2018", ["Henney"],
         "Monday Morning", "Young Thug",
+    ) is False
+
+
+# --------------------------------- a voicebank is not the release artist
+
+def test_a_voicebank_listed_first_does_not_hide_the_artist():
+    """A Vocaloid upload names the singer first and the producer second."""
+    assert artwork._effective_main_artist(
+        ["Kasane Teto SV", "Yoshida Yasei"]
+    ) == "Yoshida Yasei"
+    assert artwork._effective_main_artist(
+        ["Hatsune Miku", "Kurousa-P"]
+    ) == "Kurousa-P"
+
+
+def test_an_ordinary_credit_keeps_its_first_artist():
+    assert artwork._effective_main_artist(
+        ["Travis Scott", "Young Thug"]
+    ) == "Travis Scott"
+
+
+def test_a_vocaloid_song_finds_its_single():
+    assert artwork._is_the_same_song(
+        "Override", ["Kasane Teto SV", "Yoshida Yasei"],
+        "Override", "Yoshida Yasei",
+    ) is True
+
+
+def test_a_hip_hop_feature_is_still_rejected():
+    assert artwork._is_the_same_song(
+        "Yeah Yeah", ["Travis Scott", "Young Thug"],
+        "Yeah, Yeah", "Young Thug",
+        wanted_seconds=276, result_seconds=268,
     ) is False
