@@ -155,6 +155,63 @@ def _core_title(text: str) -> str:
     return _norm(re.sub(r"[\(\[\{][^\)\]\}]*[\)\]\}]", " ", text or ""))
 
 
+# Ways an uploader separates the artist from the song. A title written
+# "Adele - Hello (Official Video)" has to be read as "Hello", or the
+# catalogue can never match it and every cover falls back to the still.
+_ARTIST_SEPARATORS = (" - ", " – ", " — ", " | ", ": ", " ~ ")
+
+
+def _title_variants(title: str, artist_parts: list[str]) -> list[str]:
+    """Plausible song titles taken from an upload title.
+
+    Only variants that a strict match can still confirm are offered, so
+    this widens what is looked for without loosening what is accepted.
+    """
+    import re
+
+    title = _clean(title)
+    variants = [title]
+
+    # "Artist - Title", "Artist | Title", and the same with a trailing
+    # parenthetical, are the common upload forms.
+    stripped_brackets = _clean(
+        re.sub(r"[\(\[\{][^\)\]\}]*[\)\]\}]", " ", title)
+    )
+    for separator in _ARTIST_SEPARATORS:
+        if separator not in title:
+            continue
+        head, _sep, tail = title.partition(separator)
+        head_norm = _norm(head)
+        wanted = {_norm(part) for part in artist_parts if _norm(part)}
+        # Only strip when the part before the separator really is the
+        # artist. "Love - Hate" must keep its full title.
+        if head_norm and (head_norm in wanted or wanted & {head_norm}):
+            variants.append(tail)
+        # The bracketed form may carry the artist too: "Adele - Hello (Live)".
+        head_b = _clean(
+            re.sub(r"[\(\[\{][^\)\]\}]*[\)\]\}]", " ", head)
+        )
+        if _norm(head_b) in wanted and tail.strip():
+            variants.append(tail)
+
+    if stripped_brackets and stripped_brackets != title:
+        variants.append(stripped_brackets)
+        for separator in _ARTIST_SEPARATORS:
+            if separator not in stripped_brackets:
+                continue
+            head, _sep, tail = stripped_brackets.partition(separator)
+            if _norm(head) in {_norm(p) for p in artist_parts if _norm(p)}:
+                variants.append(tail)
+                break
+
+    unique: list[str] = []
+    for item in variants:
+        item = _clean(item)
+        if item and item not in unique:
+            unique.append(item)
+    return unique
+
+
 # How far a catalogue track's length may be from the uploaded audio and
 # still be the same recording. An official music video can run a minute
 # longer than the song it contains, so this is set to catch a completely
@@ -213,9 +270,13 @@ def _is_the_same_song(
     video's own picture: "Monday Morning" by Young Thug was given the cover
     of a Juicy J song he is only featured on.
     """
-    wanted_core = _core_title(wanted_title)
+    wanted_cores = {
+        _core_title(item)
+        for item in _title_variants(wanted_title, wanted_parts)
+    }
+    wanted_cores.discard("")
     result_core = _core_title(result_title)
-    if not wanted_core or wanted_core != result_core:
+    if not wanted_cores or result_core not in wanted_cores:
         return False
 
     # The main artist named by the upload has to be on the release. A
@@ -326,7 +387,9 @@ def _itunes_cover(
         return None
 
     wanted_parts = _artist_parts(artist)
-    wanted_core = _core_title(title)
+    wanted_cores = {
+        _core_title(item) for item in _title_variants(title, wanted_parts)
+    }
 
     scored: list[tuple[tuple, str]] = []
     for result in results:
@@ -352,7 +415,7 @@ def _itunes_cover(
             (
                 (
                     _itunes_kind_rank(_norm(track), _norm(album)),
-                    0 if _core_title(track) == wanted_core else 1,
+                    0 if _core_title(track) in wanted_cores else 1,
                     _duration_gap(seconds, result_seconds),
                 ),
                 artwork,
@@ -488,7 +551,9 @@ def _deezer_cover(
             results.append(item)
 
     wanted_parts = _artist_parts(artist)
-    wanted_core = _core_title(title)
+    wanted_cores = {
+        _core_title(item) for item in _title_variants(title, wanted_parts)
+    }
 
     scored: list[tuple[tuple, str]] = []
     for item in results:
@@ -508,7 +573,7 @@ def _deezer_cover(
             (
                 (
                     _itunes_kind_rank(_norm(track), _norm(album_name)),
-                    0 if _core_title(track) == wanted_core else 1,
+                    0 if _core_title(track) in wanted_cores else 1,
                     _duration_gap(seconds, item.get("duration")),
                 ),
                 url,

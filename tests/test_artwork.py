@@ -792,3 +792,43 @@ def test_refresh_cover_updates_the_spotify_copy_too(tmp_path, monkeypatch):
 
     assert embedded_cover_size(song) == (1400, 1400)
     assert embedded_cover_size(spotify / song.name) == (1400, 1400)
+
+
+# ------------------------------- an upload title names the artist too
+
+def test_the_artist_prefix_is_stripped_when_matching():
+    """'Adele - Hello (Official Video)' is the song Hello."""
+    assert artwork._is_the_same_song(
+        "Adele - Hello (Official Music Video)", ["Adele"], "Hello", "Adele"
+    ) is True
+
+
+def test_the_artist_prefix_is_stripped_for_the_lookup(monkeypatch):
+    results = [
+        {"trackName": "Hello", "artistName": "Adele",
+         "collectionName": "25", "trackTimeMillis": 295000,
+         "artworkUrl100": "https://x/hello/100x100bb.jpg"},
+    ]
+    monkeypatch.setattr(
+        artwork, "_itunes_search", lambda term, limit=8: results
+    )
+    assert artwork._itunes_cover(
+        "Adele", "Adele - Hello (Official Music Video)", 367
+    )
+
+
+def test_a_dash_in_a_title_is_not_treated_as_the_artist():
+    """'Love - Hate' must not become 'Hate'."""
+    variants = artwork._title_variants("Love - Hate", ["Somebody"])
+    assert variants == ["Love - Hate"]
+
+
+def test_a_leak_still_finds_no_cover():
+    variants = artwork._title_variants(
+        "MONDAY MORNING Young Thug LEAK 2018", ["Henney"]
+    )
+    assert variants == ["MONDAY MORNING Young Thug LEAK 2018"]
+    assert artwork._is_the_same_song(
+        "MONDAY MORNING Young Thug LEAK 2018", ["Henney"],
+        "Monday Morning", "Young Thug",
+    ) is False
