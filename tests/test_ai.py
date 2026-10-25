@@ -615,3 +615,135 @@ def test_extra_instructions_reach_the_translation_prompt(monkeypatch):
         [(1, "T", "A")], language="Japanese",
     )
     assert "Prefer the official English title" in seen["system"]
+
+
+# ------------------------------------ an address with its own API version
+
+def _url(base, path, provider="openai"):
+    return ai._endpoint(
+        AISettings(provider=provider, base_url=base, model="m"), path
+    )
+
+
+def test_an_address_with_its_own_version_keeps_it():
+    """z.ai publishes https://api.z.ai/api/paas/v4 and wants no /v1."""
+    base = "https://api.z.ai/api/paas/v4"
+    assert _url(base, "/v1/chat/completions") == \
+        "https://api.z.ai/api/paas/v4/chat/completions"
+    assert _url(base, "/v1/models") == "https://api.z.ai/api/paas/v4/models"
+
+
+def test_a_versioned_address_with_a_trailing_slash():
+    assert _url("https://api.z.ai/api/paas/v4/", "/v1/chat/completions") == \
+        "https://api.z.ai/api/paas/v4/chat/completions"
+
+
+def test_a_pasted_versioned_endpoint_is_trimmed():
+    for base in (
+        "https://api.z.ai/api/paas/v4/chat/completions",
+        "https://api.z.ai/api/paas/v4/models",
+    ):
+        assert _url(base, "/v1/chat/completions") == \
+            "https://api.z.ai/api/paas/v4/chat/completions"
+        assert _url(base, "/v1/models") == \
+            "https://api.z.ai/api/paas/v4/models"
+
+
+def test_a_beta_version_is_kept():
+    assert _url("https://host/v1beta", "/v1/chat/completions") == \
+        "https://host/v1beta/chat/completions"
+    assert _url("https://host/v1beta", "/v1/models") == \
+        "https://host/v1beta/models"
+
+
+def test_a_version_address_does_not_change_ollama_paths():
+    assert _url("https://api.z.ai/api/paas/v4", "/api/chat", "ollama") == \
+        "https://api.z.ai/api/paas/v4/api/chat"
+
+
+def test_the_anthropic_endpoint_works_on_a_versioned_address():
+    assert _url("https://api.z.ai/api/paas/v4", "/v1/messages", "anthropic") \
+        == "https://api.z.ai/api/paas/v4/messages"
+
+
+def test_ordinary_addresses_are_untouched_by_the_version_rule():
+    """Everything that worked before still produces the same URL."""
+    cases = [
+        ("https://api.example.com", "https://api.example.com/v1/chat/completions"),
+        ("https://api.example.com/v1",
+         "https://api.example.com/v1/chat/completions"),
+        ("https://api.example.com/v1/chat/completions",
+         "https://api.example.com/v1/chat/completions"),
+        ("https://host/proxy/v1", "https://host/proxy/v1/chat/completions"),
+    ]
+    for base, expected in cases:
+        assert _url(base, "/v1/chat/completions") == expected
+
+
+def test_an_anthropic_address_is_untouched():
+    assert _url("https://api.anthropic.com", "/v1/messages", "anthropic") == \
+        "https://api.anthropic.com/v1/messages"
+    assert _url("https://api.anthropic.com/v1", "/v1/messages", "anthropic") \
+        == "https://api.anthropic.com/v1/messages"
+    # /api/anthropic is a path segment, not a version.
+    assert _url("https://api.z.ai/api/anthropic", "/v1/messages",
+                "anthropic") == "https://api.z.ai/api/anthropic/v1/messages"
+
+
+def test_ollama_addresses_are_untouched():
+    assert _url("http://localhost:11434", "/api/chat", "ollama") == \
+        "http://localhost:11434/api/chat"
+    assert _url("http://localhost:11434/api", "/api/chat", "ollama") == \
+        "http://localhost:11434/api/chat"
+    assert _url("https://ollama.com", "/api/chat", "ollama") == \
+        "https://ollama.com/api/chat"
+
+
+def test_detection_finds_a_server_with_its_own_version(monkeypatch):
+    """The whole flow: a v4 server is reached without a doubled path."""
+    urls = []
+
+    class Response:
+        status_code = 200
+
+        def json(self):
+            return {"choices": [{"message": {"content": "ok"},
+                                 "finish_reason": "stop"}]}
+
+    def fake_post(url, **kwargs):
+        urls.append(url)
+        if url.endswith("/api/paas/v4/chat/completions"):
+            return Response()
+        raise ai.requests.exceptions.ConnectionError("404")
+
+    monkeypatch.setattr(ai.requests, "post", fake_post)
+    settings = AISettings(
+        provider="auto", base_url="https://api.z.ai/api/paas/v4", model="m"
+    )
+    assert ai.chat(settings, "s", "u") == "ok"
+    assert urls and all("/v1/" not in url for url in urls), urls
+    assert urls[-1] == "https://api.z.ai/api/paas/v4/chat/completions"
+
+
+def test_the_failure_hint_names_the_address_tried(monkeypatch):
+    """When every format fails, the URL is what explains why."""
+
+    def post(settings, path, payload, **_kwargs):
+        raise AIError(
+            "The AI server does not have that model or address.",
+            "Check the model name and the server address in Settings, AI.",
+            status=404,
+        )
+
+    monkeypatch.setattr(ai, "_post", post)
+    settings = AISettings(
+        provider="auto", base_url="https://api.z.ai/api/paas/v4",
+        model="glm-5.3-flash",
+    )
+    with pytest.raises(AIError) as caught:
+        ai.chat(settings, "s", "u")
+    hint = caught.value.args[1]
+    assert "Last address tried:" in hint
+    assert "api/paas/v4" in hint
+    # And it is the address the app now builds, without a doubled version.
+    assert "/v4/v1/" not in hint

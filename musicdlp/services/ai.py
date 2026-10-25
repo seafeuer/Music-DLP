@@ -177,16 +177,26 @@ _KNOWN_ENDPOINTS = (
 )
 
 
+# The same endpoints without their version prefix. An address that carries
+# its own version — z.ai's /api/paas/v4, Gemini's /v1beta — ends in one of
+# these once the version is taken off, so they are trimmed first.
+_VERSIONLESS_ENDPOINTS = ("/chat/completions", "/messages", "/models")
+
+# A version segment at the end of an address: /v1, /v4, /v1beta, /v2.
+_VERSION_SEGMENT = re.compile(r"/v\d+[a-z0-9]*$", re.IGNORECASE)
+
+
 def _strip_endpoint_suffix(base: str, path: str) -> str:
     """Drop the part of an address that the request path already adds.
 
-    People paste what they were told to paste: ``https://host/v1``, or
-    sometimes the whole ``https://host/v1/chat/completions``. Appending
-    ``/v1/chat/completions`` to either would give ``/v1/v1/...`` and a
-    404, so the duplicate is removed here instead of failing later.
+    People paste what they were told to paste: ``https://host/v1``,
+    ``https://host/v1/chat/completions``, or ``https://host/api/paas/v4``.
+    Appending ``/v1/chat/completions`` to any of them would give a doubled
+    path and a 404, so the duplicate is removed here instead of failing
+    later.
     """
     lowered = base.lower()
-    for known in (path,) + _KNOWN_ENDPOINTS:
+    for known in (path,) + _KNOWN_ENDPOINTS + _VERSIONLESS_ENDPOINTS:
         if lowered.endswith(known.lower()):
             return base[: -len(known)].rstrip("/")
     for prefix in ("/v1", "/api"):
@@ -195,11 +205,31 @@ def _strip_endpoint_suffix(base: str, path: str) -> str:
     return base
 
 
+def _own_version(base: str) -> Optional[str]:
+    """The version an address ends with, when it is not the default v1.
+
+    A server that publishes ``https://api.z.ai/api/paas/v4`` wants
+    ``/chat/completions`` after it, not ``/v1/chat/completions``: the
+    address already says which version it speaks.
+    """
+    match = _VERSION_SEGMENT.search(base)
+    if match is None or match.group(0).lower() == "/v1":
+        return None
+    return match.group(0)
+
+
 def _endpoint(settings: AISettings, path: str) -> str:
     base = settings.base_url.strip().rstrip("/")
     if not base:
         raise AIError("No server address is set.")
-    return f"{_strip_endpoint_suffix(base, path)}{path}"
+    base = _strip_endpoint_suffix(base, path)
+
+    # The address carries its own version, so the one in the request path
+    # is dropped and the address's version is kept. Only /v1/... paths are
+    # affected; Ollama's /api/... paths are built as they always were.
+    if path.startswith("/v1/") and _own_version(base):
+        return f"{base}{path[len('/v1'):]}"
+    return f"{base}{path}"
 
 
 def _headers(settings: AISettings, dialect: str = "") -> dict:
@@ -525,8 +555,17 @@ def _detect(settings: AISettings) -> str:
     message = exc.args[0] if exc.args else "The AI server did not answer."
     detail = exc.args[1] if len(exc.args) > 1 else ""
     tried = ", ".join(DIALECT_LABELS[item] for item, _exc in failures)
-    hint = f"{detail} Tried: {tried}.".strip()
-    raise AIError(message, hint, status=exc.status)
+    # Name the address that was actually requested. When an address is
+    # written in a shape the app cannot complete, the URL is the only
+    # thing that explains why every format failed.
+    try:
+        address = _endpoint(settings, _path_for(_dialect, "chat"))
+    except AIError:
+        address = ""
+    hint = f"{detail} Tried: {tried}."
+    if address:
+        hint += f" Last address tried: {address}"
+    raise AIError(message, hint.strip(), status=exc.status)
 
 
 # ------------------------------------------------------------------ requests

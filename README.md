@@ -138,7 +138,9 @@ is not a problem — a proxy that serves only `/v1/messages` still works when
 [OI]-compatible was chosen, and the other way round.
 
 Addresses are forgiving: `https://api.example.com`, `…/v1`, or the whole
-`…/v1/chat/completions` all work. Keys are sent as a bearer token, as
+`…/v1/chat/completions` all work. A server that publishes its own version in
+the path is fine too — z.ai's `https://api.z.ai/api/paas/v4` gets
+`/chat/completions` after it, not `/v1/chat/completions`. Keys are sent as a bearer token, as
 `x-api-key`, and as `api-key`, so most servers accept them without further
 setup. For Ollama on this computer, install Ollama and pull a model first
 (`ollama pull llama3.2`).
