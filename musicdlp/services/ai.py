@@ -444,6 +444,15 @@ def _read_reply(dialect: str, data: dict) -> str:
             )
     else:
         text = str(content or "")
+
+    if not text.strip() and str(choice.get("finish_reason") or "") != "length":
+        # Some reasoning models served this way put the whole reply in
+        # "reasoning_content" and leave "content" empty. Reading it beats
+        # reporting an empty answer.
+        fallback = message.get("reasoning_content")
+        if isinstance(fallback, str) and fallback.strip():
+            return fallback
+
     if not text.strip():
         _raise_if_truncated(choice.get("finish_reason"))
     return text

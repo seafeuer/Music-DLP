@@ -783,3 +783,39 @@ def test_a_reply_with_object_parts_is_understood(monkeypatch):
     result = ai.suggest_names(_settings("openai"), title="Whatever")
     assert result.title == "One"
     assert result.artist == "Two"
+
+
+def test_a_reasoning_reply_with_empty_content_is_used(monkeypatch):
+    """Some models put the answer in reasoning_content and leave content
+    empty; reading it beats reporting an empty answer."""
+    monkeypatch.setattr(
+        ai, "_post",
+        lambda *args, **kwargs: {
+            "choices": [{
+                "message": {"content": "",
+                            "reasoning_content":
+                                '{"title": "One", "artist": "Two", '
+                                '"confidence": 0.8}'},
+                "finish_reason": "stop",
+            }]
+        },
+    )
+    result = ai.suggest_names(_settings("openai"), title="Whatever")
+    assert result.title == "One"
+
+
+def test_a_truncated_reply_does_not_fall_back_to_reasoning(monkeypatch):
+    """When it ran out of room, the reasoning is not the answer."""
+    monkeypatch.setattr(
+        ai, "_post",
+        lambda *args, **kwargs: {
+            "choices": [{
+                "message": {"content": "",
+                            "reasoning_content": "thinking about it"},
+                "finish_reason": "length",
+            }]
+        },
+    )
+    with pytest.raises(AIError) as caught:
+        ai.suggest_names(_settings("openai"), title="Whatever")
+    assert "ran out of room" in caught.value.args[0]
