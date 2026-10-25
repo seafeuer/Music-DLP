@@ -747,3 +747,39 @@ def test_the_failure_hint_names_the_address_tried(monkeypatch):
     assert "api/paas/v4" in hint
     # And it is the address the app now builds, without a doubled version.
     assert "/v4/v1/" not in hint
+
+
+def test_a_reply_returned_as_an_object_is_understood(monkeypatch):
+    """A gateway may hand back the answer already parsed."""
+    monkeypatch.setattr(
+        ai, "_post",
+        lambda *args, **kwargs: {
+            "choices": [{
+                "message": {"content": {"title": "At the Gates",
+                                        "artist": "Drake",
+                                        "album": "", "confidence": 0.9}},
+                "finish_reason": "stop",
+            }]
+        },
+    )
+    result = ai.suggest_names(_settings("openai"), title="Whatever")
+    assert result.title == "At the Gates"
+    assert result.artist == "Drake"
+
+
+def test_a_reply_with_object_parts_is_understood(monkeypatch):
+    monkeypatch.setattr(
+        ai, "_post",
+        lambda *args, **kwargs: {
+            "choices": [{
+                "message": {"content": [
+                    {"text": '{"title": "One", '},
+                    {"text": '"artist": "Two", "confidence": 0.8}'},
+                ]},
+                "finish_reason": "stop",
+            }]
+        },
+    )
+    result = ai.suggest_names(_settings("openai"), title="Whatever")
+    assert result.title == "One"
+    assert result.artist == "Two"

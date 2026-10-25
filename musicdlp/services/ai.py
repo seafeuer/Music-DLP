@@ -428,13 +428,20 @@ def _read_reply(dialect: str, data: dict) -> str:
     choice = choices[0] if isinstance(choices[0], dict) else {}
     message = choice.get("message") or {}
     content = message.get("content")
-    if isinstance(content, list):
-        # Some compatible servers return content as a list of parts.
-        text = "".join(
-            str(part.get("text") or "")
-            for part in content
-            if isinstance(part, dict)
-        )
+    if isinstance(content, (dict, list)) and not isinstance(content, str):
+        # A gateway can hand back the answer already parsed, as an object
+        # or a list of parts, instead of a JSON string. Turning that into
+        # Python's own repr would give single quotes, which is not JSON
+        # and would be rejected a moment later.
+        if isinstance(content, dict):
+            text = json.dumps(content, ensure_ascii=False)
+        else:
+            text = "".join(
+                str(part.get("text") or "")
+                if isinstance(part, dict) and "text" in part
+                else json.dumps(part, ensure_ascii=False)
+                for part in content
+            )
     else:
         text = str(content or "")
     if not text.strip():
