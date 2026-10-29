@@ -272,3 +272,149 @@ def test_an_update_run_only_refreshes_songs_already_in_spotify(env):
 
     copies = list((env["tmp"] / "spotify").glob("*.mp3"))
     assert len(copies) == 1
+
+
+# ------------------------------------- the picture the user chose is final
+
+class FakeThumbnailsWithStill:
+    """Serves the video's own picture, as the real service would."""
+
+    def __init__(self, still: Path) -> None:
+        self.still = still
+        self.calls = 0
+
+    def fetch(self, *args, **kwargs):
+        self.calls += 1
+        return self.still
+
+
+def _covers(monkeypatch):
+    """Capture the picture handed to the tag writer."""
+    used: list = []
+    monkeypatch.setattr(
+        pipeline_module,
+        "embed_tags",
+        lambda path, **kwargs: used.append(kwargs.get("cover_path")) or True,
+    )
+    return used
+
+
+def test_use_video_thumbnail_replaces_the_cover_the_user_rejected(
+    env, monkeypatch
+):
+    """The reported bug: Save kept putting the bad artwork back.
+
+    The automatic lookup had cached a wrong cover. Choosing "Use video
+    thumbnail" recorded no choice, so the convert stage simply looked the
+    same artwork up again and re-embedded it.
+    """
+    db, tmp = env["db"], env["tmp"]
+    track_id = env["track_ids"][0]
+
+    bad = tmp / "album_youtube_vid1_1400_v3.jpg"
+    bad.write_bytes(b"the cover the user rejected")
+    still = tmp / "youtube_vid1_v2.jpg"
+    still.write_bytes(b"the video's own picture")
+    raw = tmp / "raw.webm"
+    raw.write_bytes(b"raw")
+    song = tmp / "out" / "MP3" / "Song 1.mp3"
+    song.parent.mkdir(parents=True, exist_ok=True)
+    song.write_bytes(b"old audio")
+
+    db.update_track(
+        track_id, cover_path=str(bad), raw_path=str(raw), mp3_path=str(song),
+        status="converted", meta_title="Song 1", meta_artist="Channel",
+    )
+
+    # What Save does when "Use video thumbnail" was pressed.
+    from musicdlp.services.library import LibraryService
+
+    LibraryService(db, env["settings"], None).restore_video_cover(track_id)
+    assert db.get_track(track_id).cover_source == "video"
+
+    looked_up: list = []
+    monkeypatch.setattr(
+        pipeline_module, "find_cover",
+        lambda *a, **k: looked_up.append(a) or bad,
+    )
+    used = _covers(monkeypatch)
+    env["pipeline"].thumbnails = FakeThumbnailsWithStill(still)
+
+    summary = _summary()
+    env["pipeline"]._execute(
+        env["items"][:1], ["convert"], True, env["settings"], summary
+    )
+
+    assert summary["failed"] == 0
+    assert looked_up == [], "the rejected artwork was looked up again"
+    assert used == [still], "the file kept the cover the user rejected"
+    assert db.get_track(track_id).cover_path == str(still)
+
+
+def test_the_catalogue_lookup_still_runs_when_nothing_was_chosen(
+    env, monkeypatch
+):
+    """The fix must not stop the automatic artwork from working."""
+    db, tmp = env["db"], env["tmp"]
+    track_id = env["track_ids"][0]
+
+    found = tmp / "album_youtube_vid1_1400_v3.jpg"
+    found.write_bytes(b"a real cover")
+    raw = tmp / "raw.webm"
+    raw.write_bytes(b"raw")
+    song = tmp / "out" / "MP3" / "Song 1.mp3"
+    song.parent.mkdir(parents=True, exist_ok=True)
+    song.write_bytes(b"old audio")
+
+    db.update_track(
+        track_id, cover_path=None, raw_path=str(raw), mp3_path=str(song),
+        status="converted", meta_title="Song 1", meta_artist="Channel",
+    )
+
+    monkeypatch.setattr(pipeline_module, "find_cover", lambda *a, **k: found)
+    used = _covers(monkeypatch)
+
+    summary = _summary()
+    env["pipeline"]._execute(
+        env["items"][:1], ["convert"], True, env["settings"], summary
+    )
+
+    assert used == [found]
+
+
+def test_a_chosen_picture_survives_a_fresh_download(env, monkeypatch):
+    """Re-downloading must not swap a chosen picture for the video still."""
+    db, tmp = env["db"], env["tmp"]
+    track_id = env["track_ids"][0]
+
+    chosen = tmp / "custom_youtube_vid1.jpg"
+    chosen.write_bytes(b"the picture the user picked")
+    still = tmp / "youtube_vid1_v2.jpg"
+    still.write_bytes(b"the video still")
+    song = tmp / "out" / "MP3" / "Song 1.mp3"
+    song.parent.mkdir(parents=True, exist_ok=True)
+    song.write_bytes(b"old audio")
+
+    db.update_track(
+        track_id, cover_path=str(chosen), cover_source="custom",
+        raw_path=None, mp3_path=str(song), status="converted",
+        meta_title="Song 1", meta_artist="Channel",
+    )
+
+    looked_up: list = []
+    monkeypatch.setattr(
+        pipeline_module, "find_cover",
+        lambda *a, **k: looked_up.append(a) or still,
+    )
+    used = _covers(monkeypatch)
+    env["pipeline"].thumbnails = FakeThumbnailsWithStill(still)
+
+    summary = _summary()
+    env["pipeline"]._execute(
+        env["items"][:1], ["download", "convert"], True,
+        env["settings"], summary,
+    )
+
+    assert db.get_track(track_id).cover_path == str(chosen)
+    assert looked_up == []
+    assert used == [chosen]

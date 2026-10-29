@@ -10,7 +10,12 @@ from typing import Callable, Iterable, Optional
 from musicdlp.core.config import Settings
 from musicdlp.core.db import Database
 from musicdlp.core.errors import AppError, Cancelled
-from musicdlp.core.models import is_converted, is_downloaded
+from musicdlp.core.models import (
+    COVER_CUSTOM,
+    COVER_VIDEO,
+    is_converted,
+    is_downloaded,
+)
 from musicdlp.core.paths import art_cache_dir
 from musicdlp.services.artwork import cover_cache_path, find_cover
 from musicdlp.services.filenames import safe_stem
@@ -290,8 +295,9 @@ class LibraryService:
     ) -> str:
         """Look the artwork up again and put it into the files that exist.
 
-        Returns ``updated``, ``unchanged``, ``skipped`` (no file to write)
-        or ``error``. The audio is not re-encoded: only the picture changes.
+        Returns ``updated``, ``unchanged``, ``skipped`` (no file to write),
+        ``kept`` (the cover is one the user chose) or ``error``. The audio
+        is not re-encoded: only the picture changes.
 
         This is what makes a corrected lookup reach songs that were
         converted before the rules were fixed, without downloading them
@@ -300,6 +306,12 @@ class LibraryService:
         track = self.db.get_track(track_id)
         if track is None:
             return "error"
+
+        # A picture the user picked, or the video's own still they chose
+        # instead, is not "wrong". Looking it up again would put back the
+        # artwork they just rejected.
+        if getattr(track, "cover_source", None) in (COVER_CUSTOM, COVER_VIDEO):
+            return "kept"
 
         files = [
             Path(path) for path in (track.mp3_path, track.m4a_path)
@@ -415,6 +427,7 @@ class LibraryService:
             self.db.update_track(
                 track_id,
                 cover_path=None,
+                cover_source=None,
                 needs_update=1 if is_converted(track.status) else 0,
             )
             return None
@@ -448,18 +461,25 @@ class LibraryService:
         self.db.update_track(
             track_id,
             cover_path=str(destination),
+            cover_source=COVER_CUSTOM,
             needs_update=1 if is_converted(track.status) else 0,
         )
         return destination
 
     def restore_video_cover(self, track_id: int) -> None:
-        """Drop a custom cover so the next conversion re-fetches the video's."""
+        """Drop a custom cover so the video's own picture is used.
+
+        The choice is recorded, not just the missing path: a conversion
+        would otherwise look for catalogue art again and quietly put back
+        the picture the user just rejected.
+        """
         track = self.db.get_track(track_id)
         if track is None:
             return
         self.db.update_track(
             track_id,
             cover_path=None,
+            cover_source=COVER_VIDEO,
             needs_update=1 if is_converted(track.status) else 0,
         )
 

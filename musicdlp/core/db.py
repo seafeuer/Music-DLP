@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS tracks (
     smart_artist  TEXT,
     smart_confidence REAL,
     smart_reason  TEXT,
+    cover_source  TEXT,
     UNIQUE(platform, media_id)
 );
 
@@ -98,7 +99,7 @@ TRACK_UPDATABLE = {
     "raw_path", "mp3_path", "m4a_path", "cover_path",
     "downloaded_at", "converted_at", "synced_at", "sync_error",
     "needs_update", "smart_title", "smart_artist", "smart_confidence",
-    "smart_reason", "duration",
+    "smart_reason", "duration", "cover_source",
 }
 
 SOURCE_UPDATABLE = {
@@ -228,6 +229,7 @@ class Database:
             ("smart_artist", "TEXT"),
             ("smart_confidence", "REAL"),
             ("smart_reason", "TEXT"),
+            ("cover_source", "TEXT"),
         ):
             if column not in columns:
                 conn.execute(f"ALTER TABLE tracks ADD COLUMN {column} {kind}")
@@ -867,9 +869,10 @@ class Database:
                      error, meta_title, meta_artist, meta_album, meta_track,
                      raw_path, mp3_path, m4a_path, cover_path, downloaded_at,
                      converted_at, synced_at, sync_error, needs_update,
-                     smart_title, smart_artist, smart_confidence, smart_reason)
+                     smart_title, smart_artist, smart_confidence, smart_reason,
+                     cover_source)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO NOTHING
                 """,
                 (
@@ -883,7 +886,7 @@ class Database:
                     track.synced_at, track.sync_error,
                     1 if track.needs_update else 0, track.smart_title,
                     track.smart_artist, track.smart_confidence,
-                    track.smart_reason,
+                    track.smart_reason, track.cover_source,
                 ),
             )
 

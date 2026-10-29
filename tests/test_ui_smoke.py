@@ -197,3 +197,59 @@ def test_reconvert_on_synced_track_includes_sync(window):
 
     assert captured["stages"][-1] == "sync", captured
 
+
+
+# ------------------------- "Use video thumbnail" reaches Save as a choice
+
+def _details_dialog(tmp_path, *, cover, thumbnail_url):
+    from PIL import Image
+
+    from musicdlp.ui.dialogs.track_details import TrackDetailsDialog
+
+    db = Database(tmp_path / "details.db")
+    tid = db.upsert_track(
+        platform="soundcloud", media_id="sc1",
+        url="https://soundcloud.com/a/song", title="A Song",
+        uploader="Chan", duration=180, thumbnail_url=thumbnail_url,
+    )
+    if cover is not None:
+        cover.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (1400, 1400), (200, 20, 20)).save(cover, "PNG")
+        db.update_track(tid, cover_path=str(cover), status="converted",
+                        mp3_path=str(tmp_path / "song.mp3"))
+    dialog = TrackDetailsDialog(
+        db.get_track(tid), album_default="Singles", track_default=1,
+        filename_template="{title}",
+    )
+    return db, dialog
+
+
+def test_use_video_thumbnail_clears_the_picture_and_marks_it_changed(
+    qapp, tmp_path
+):
+    bad = tmp_path / "art" / "album_soundcloud_sc1_1400_v3.jpg"
+    db, dialog = _details_dialog(
+        tmp_path, cover=bad, thumbnail_url="https://i1.sndcdn.com/x.jpg"
+    )
+
+    dialog._use_video_thumbnail()
+    dialog._save()
+
+    assert dialog.result_values["cover_path"] is None
+    assert dialog.result_values["cover_changed"] is True
+    db.close()
+
+
+def test_the_video_button_is_offered_only_when_there_is_a_video_picture(
+    qapp, tmp_path
+):
+    bad = tmp_path / "art" / "album_soundcloud_sc1_1400_v3.jpg"
+    db, dialog = _details_dialog(tmp_path, cover=bad, thumbnail_url="")
+    assert dialog.video_button.isEnabled() is False
+    db.close()
+
+    db2, dialog2 = _details_dialog(
+        tmp_path / "two", cover=bad, thumbnail_url="https://i1.sndcdn.com/x.jpg"
+    )
+    assert dialog2.video_button.isEnabled() is True
+    db2.close()

@@ -181,6 +181,8 @@ class TrackDetailsDialog(QDialog):
     # ------------------------------------------------------------------ art
 
     def _refresh_artwork(self) -> None:
+        # The button is offered only when there is a video still to use.
+        self.video_button.setEnabled(bool(self.track.thumbnail_url))
         if self.cover_path and Path(self.cover_path).exists():
             pixmap = QPixmap(self.cover_path)
             if not pixmap.isNull():
@@ -195,7 +197,6 @@ class TrackDetailsDialog(QDialog):
             else "No picture yet\n(the video's picture is used)"
         )
         self.artwork.setObjectName("muted")
-        self.video_button.setEnabled(bool(self.track.thumbnail_url))
 
     def _choose_picture(self) -> None:
         filename, _ = QFileDialog.getOpenFileName(

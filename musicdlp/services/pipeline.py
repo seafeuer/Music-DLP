@@ -24,6 +24,8 @@ from musicdlp.core.errors import AppError, Cancelled
 from musicdlp.core.models import (
     CANCELLED,
     CONVERTED,
+    COVER_CUSTOM,
+    COVER_VIDEO,
     DOWNLOADED,
     DOWNLOADING,
     CONVERTING,
@@ -285,6 +287,16 @@ class Pipeline(QObject):
 
     # --------------------------------------------------------------- stages
 
+    def _video_cover(self, track) -> Optional[Path]:
+        """The upload's own picture, from the cache when it is already there."""
+        fallbacks = (
+            youtube_fallbacks(track.media_id)
+            if track.platform == "youtube" else None
+        )
+        return self.thumbnails.fetch(
+            track.platform, track.media_id, track.thumbnail_url, fallbacks,
+        )
+
     def _stage_download(
         self,
         items: list[BatchItem],
@@ -339,13 +351,13 @@ class Pipeline(QObject):
                     cancel_event=self._cancel,
                 )
 
-                fallbacks = (
-                    youtube_fallbacks(track.media_id)
-                    if track.platform == "youtube" else None
-                )
-                cover = self.thumbnails.fetch(
-                    track.platform, track.media_id, track.thumbnail_url,
-                    fallbacks,
+                # A picture the user picked must survive a fresh download.
+                # Replacing the stored path with the video still here would
+                # throw the choice away before the convert stage ever runs.
+                cover = (
+                    None
+                    if getattr(track, "cover_source", None) == COVER_CUSTOM
+                    else self._video_cover(track)
                 )
 
                 self.db.update_track(
@@ -512,10 +524,21 @@ class Pipeline(QObject):
                         if _reusable_cover(track)
                         else None
                     )
+                    cover_source = getattr(track, "cover_source", None)
 
-                    # Prefer real album art over the video still, when the
-                    # user has that turned on.
-                    if settings.ai_find_artwork:
+                    # A picture the user chose is final. Running the lookup
+                    # here would replace it with the very artwork they
+                    # rejected — which is what "Use video thumbnail" is for.
+                    if cover_source == COVER_VIDEO:
+                        video = self._video_cover(track)
+                        if video is not None:
+                            cover = video
+                            self.db.update_track(
+                                track.id, cover_path=str(video)
+                            )
+                    elif cover_source is None and settings.ai_find_artwork:
+                        # Prefer real album art over the video still, when
+                        # the user has that turned on.
                         album_art = find_cover(
                             track.display_artist,
                             track.display_title,
@@ -530,14 +553,7 @@ class Pipeline(QObject):
                             )
 
                     if cover is None:
-                        fallbacks = (
-                            youtube_fallbacks(track.media_id)
-                            if track.platform == "youtube" else None
-                        )
-                        cover = self.thumbnails.fetch(
-                            track.platform, track.media_id,
-                            track.thumbnail_url, fallbacks,
-                        )
+                        cover = self._video_cover(track)
                         if cover:
                             self.db.update_track(track.id, cover_path=str(cover))
 

@@ -835,6 +835,7 @@ class MainWindow(QMainWindow):
             snapshot[track.id] = (
                 track.meta_title, track.meta_artist,
                 track.meta_album, track.meta_track, track.cover_path,
+                track.cover_source,
                 track.smart_title, track.smart_artist,
                 track.smart_confidence, track.smart_reason,
             )
@@ -842,7 +843,7 @@ class MainWindow(QMainWindow):
 
     def _restore_metadata(self, snapshot: dict) -> None:
         for track_id, values in snapshot.items():
-            (title, artist, album, number, cover,
+            (title, artist, album, number, cover, cover_source,
              smart_title, smart_artist, smart_confidence,
              smart_reason) = values
             track = self.db.get_track(track_id)
@@ -855,6 +856,7 @@ class MainWindow(QMainWindow):
                 meta_album=album,
                 meta_track=number,
                 cover_path=cover,
+                cover_source=cover_source,
                 # Undoing a rename also brings back the suggestion it used
                 # up, so the row can be reviewed again.
                 smart_title=smart_title,
@@ -2255,6 +2257,7 @@ class MainWindow(QMainWindow):
         updated = counts.get("updated", 0)
         failed = counts.get("error", 0)
         skipped = counts.get("skipped", 0)
+        kept = counts.get("kept", 0)
         parts = []
         if updated:
             parts.append(f"Updated {updated} cover{'' if updated == 1 else 's'}")
@@ -2262,6 +2265,8 @@ class MainWindow(QMainWindow):
             parts.append(f"{failed} could not be written")
         if skipped:
             parts.append(f"{skipped} had no file to change")
+        if kept:
+            parts.append(f"{kept} kept the picture you chose")
         message = ", ".join(parts) or "No covers needed changing"
         self.status.set_idle(message + ".")
         if failed:

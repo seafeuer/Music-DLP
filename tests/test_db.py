@@ -156,3 +156,40 @@ def test_closed_database_refuses_work(tmp_path):
         pass
     else:
         raise AssertionError("closed database should refuse work")
+
+def test_an_old_library_gains_the_cover_source_column(tmp_path):
+    """A library made before covers recorded their source still opens."""
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE tracks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform TEXT NOT NULL, media_id TEXT NOT NULL, url TEXT NOT NULL,
+            source_index INTEGER, title TEXT NOT NULL, uploader TEXT,
+            duration INTEGER, thumbnail_url TEXT, description TEXT,
+            status TEXT NOT NULL DEFAULT 'new', error TEXT,
+            meta_title TEXT, meta_artist TEXT, meta_album TEXT,
+            meta_track INTEGER, raw_path TEXT, mp3_path TEXT, m4a_path TEXT,
+            cover_path TEXT, downloaded_at TEXT, converted_at TEXT,
+            synced_at TEXT, sync_error TEXT,
+            needs_update INTEGER NOT NULL DEFAULT 0,
+            smart_title TEXT, smart_artist TEXT, smart_confidence REAL,
+            smart_reason TEXT,
+            UNIQUE(platform, media_id)
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO tracks (platform, media_id, url, title) "
+        "VALUES ('youtube', 'abc', 'u', 'Old song')"
+    )
+    conn.commit()
+    conn.close()
+
+    db = Database(path)
+    track = db.get_all_tracks()[0]
+    assert track.cover_source is None
+    db.update_track(track.id, cover_source="video")
+    assert db.get_track(track.id).cover_source == "video"
+    db.close()

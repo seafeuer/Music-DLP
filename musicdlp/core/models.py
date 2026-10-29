@@ -33,6 +33,12 @@ ACTIVE_STATES = (QUEUED, DOWNLOADING, CONVERTING, SYNCING)
 # ids start at 1.
 ALL_SONGS_ID = 0
 
+# Where a song's cover came from. No recorded source means the automatic
+# lookup found it, and a later, better lookup may replace it. A cover the
+# user picked may not be replaced by anything automatic.
+COVER_CUSTOM = "custom"
+COVER_VIDEO = "video"
+
 
 def status_label(status: str) -> str:
     return {
@@ -165,6 +171,7 @@ class Track:
     smart_artist: Optional[str] = None
     smart_confidence: Optional[float] = None
     smart_reason: Optional[str] = None
+    cover_source: Optional[str] = None
 
     @classmethod
     def from_row(cls, row: Mapping[str, Any]) -> "Track":
@@ -203,6 +210,9 @@ class Track:
                 if "smart_confidence" in row.keys() else None
             ),
             smart_reason=row["smart_reason"] if "smart_reason" in row.keys() else None,
+            cover_source=(
+                row["cover_source"] if "cover_source" in row.keys() else None
+            ),
         )
 
     @property

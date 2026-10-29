@@ -877,3 +877,95 @@ def test_a_hip_hop_feature_is_still_rejected():
         "Yeah, Yeah", "Young Thug",
         wanted_seconds=276, result_seconds=268,
     ) is False
+
+
+# --------------------------------------- a cover the user chose is not wrong
+
+def _library_with_song(tmp_path, *, cover, cover_source=None):
+    """A converted song in a library, with the cover it currently has."""
+    from musicdlp.core.config import Settings
+    from musicdlp.core.db import Database
+    from musicdlp.services.library import LibraryService
+
+    song = _mp3_with_cover(tmp_path, 640)
+    db = Database(tmp_path / "lib.db")
+    source = db.add_source(url="u", kind="item", platform="youtube",
+                           external_id="abc", title="t", uploader="u",
+                           item_count=1, thumbnail_url=None)
+    tid = db.upsert_track(platform="youtube", media_id="abc", url="u",
+                          title="A Song", uploader="Chan", duration=200)
+    db.update_track(tid, meta_title="A Song", meta_artist="Chan",
+                    mp3_path=str(song), status="converted",
+                    cover_path=str(cover) if cover else None,
+                    cover_source=cover_source)
+    db.set_source_tracks(source, [(tid, 1)])
+    return db, tid, song, LibraryService(db, Settings(), None)
+
+
+def test_restore_video_cover_records_the_choice(tmp_path):
+    """"Use video thumbnail" has to be remembered, not just applied."""
+    from musicdlp.core.models import COVER_VIDEO
+
+    old = tmp_path / "album_youtube_abc_1400_v3.jpg"
+    old.write_bytes(_png((1400, 1400)))
+    db, tid, _song, library = _library_with_song(tmp_path, cover=old)
+
+    library.restore_video_cover(tid)
+
+    track = db.get_track(tid)
+    assert track.cover_path is None
+    assert track.cover_source == COVER_VIDEO
+    assert track.needs_update is True
+    db.close()
+
+
+def test_set_cover_records_that_the_picture_is_the_users(tmp_path):
+    from musicdlp.core.models import COVER_CUSTOM
+
+    chosen = tmp_path / "chosen.jpg"
+    chosen.write_bytes(_png((900, 900)))
+    db, tid, _song, library = _library_with_song(tmp_path, cover=None)
+
+    library.set_cover(tid, chosen)
+
+    track = db.get_track(tid)
+    assert track.cover_source == COVER_CUSTOM
+    assert track.cover_path.endswith(".jpg")
+    db.close()
+
+
+def test_fix_covers_leaves_a_video_still_alone(tmp_path, monkeypatch):
+    """Re-looking-up would put back the artwork the user rejected."""
+    still = tmp_path / "youtube_abc_v2.jpg"
+    still.write_bytes(_png((1400, 1400)))
+    db, tid, _song, library = _library_with_song(
+        tmp_path, cover=still, cover_source="video"
+    )
+
+    looked_up: list = []
+    monkeypatch.setattr(
+        "musicdlp.services.library.find_cover",
+        lambda *a, **k: looked_up.append(a) or still,
+    )
+
+    assert library.refresh_cover(tid) == "kept"
+    assert looked_up == []
+    db.close()
+
+
+def test_fix_covers_leaves_a_chosen_picture_alone(tmp_path, monkeypatch):
+    chosen = tmp_path / "custom_youtube_abc.jpg"
+    chosen.write_bytes(_png((900, 900)))
+    db, tid, _song, library = _library_with_song(
+        tmp_path, cover=chosen, cover_source="custom"
+    )
+
+    looked_up: list = []
+    monkeypatch.setattr(
+        "musicdlp.services.library.find_cover",
+        lambda *a, **k: looked_up.append(a) or chosen,
+    )
+
+    assert library.refresh_cover(tid) == "kept"
+    assert looked_up == []
+    db.close()
