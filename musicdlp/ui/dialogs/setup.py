@@ -19,6 +19,7 @@ from musicdlp.core.paths import is_writable, start_directory
 from musicdlp.services import deps
 from musicdlp.services.ffmpeg import FFmpegService
 from musicdlp.services.spotify import SpotifyService
+from musicdlp.ui.theme import set_tone
 
 SPOTIFY_DOWNLOAD_URL = "https://www.spotify.com/download/windows/"
 
@@ -275,10 +276,8 @@ class SetupDialog(QDialog):
 
     def _mark(self, label: QLabel, ok: bool, text: str) -> None:
         label.setText(("✓  " if ok else "•  ") + text)
-        label.setStyleSheet(
-            "color: #16a34a; font-weight: 600;" if ok
-            else "color: #d97706; font-weight: 600;"
-        )
+        label.setStyleSheet("font-weight: 600;")
+        set_tone(label, "success" if ok else "warning")
 
     def refresh(self) -> None:
         self.ffmpeg = FFmpegService(self.settings.ffmpeg_path)
@@ -386,7 +385,7 @@ class SetupDialog(QDialog):
             db.close()
 
         self.tags_status.setText("\n".join(notes) or "No songs to update yet.")
-        self.tags_status.setStyleSheet("color: #16a34a;")
+        set_tone(self.tags_status, "success")
 
     def _reset_spotify_index(self) -> None:
         from musicdlp.core.maintenance import refresh_spotify_index
@@ -399,9 +398,7 @@ class SetupDialog(QDialog):
             self.spotify.start()
             message += " Spotify has been restarted."
         self.tags_status.setText(message)
-        self.tags_status.setStyleSheet(
-            "color: #16a34a;" if ok else "color: #d97706;"
-        )
+        set_tone(self.tags_status, "success" if ok else "warning")
 
     def _open_spotify(self) -> None:
         if not self.spotify.open_spotify():
@@ -413,9 +410,7 @@ class SetupDialog(QDialog):
     def _restart_spotify(self) -> None:
         ok, message = self.spotify.restart()
         self.tell_status.setText(message)
-        self.tell_status.setStyleSheet(
-            "color: #16a34a;" if ok else "color: #d97706;"
-        )
+        set_tone(self.tell_status, "success" if ok else "warning")
         self.tell_status.setVisible(True)
 
     def _change_folder(self) -> None:
@@ -439,8 +434,9 @@ class SetupDialog(QDialog):
         try:
             path.mkdir(parents=True, exist_ok=True)
         except OSError:
-            self.folder_edit.setStyleSheet("border: 1px solid #dc2626;")
+            set_tone(self.folder_edit, "danger")
             return
+        self.folder_edit.setProperty("tone", "")
         self.folder_edit.setStyleSheet("")
         self.settings.spotify_dir = str(path)
         self.settings.save()

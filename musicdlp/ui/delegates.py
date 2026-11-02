@@ -6,9 +6,9 @@ from PySide6.QtCore import QModelIndex, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter
 from PySide6.QtWidgets import QStyle, QStyledItemDelegate, QStyleOptionViewItem
 
-from musicdlp.core.models import display_status, status_label
+from musicdlp.core.models import NEW, display_status, status_label
 from musicdlp.ui.models.track_model import PROGRESS_ROLE, ROW_ROLE
-from musicdlp.ui.theme import ACCENT, STATUS_COLORS
+from musicdlp.ui.theme import ACCENT, STATUS_COLORS, tokens
 
 
 class StatusDelegate(QStyledItemDelegate):
@@ -28,7 +28,7 @@ class StatusDelegate(QStyledItemDelegate):
 
         status = display_status(row.track, row.file_missing)
         background, foreground = STATUS_COLORS.get(
-            status, ("#e5e7eb", "#374151")
+            status, STATUS_COLORS[NEW]
         )
         pill = option.rect.adjusted(6, 7, -6, -7)
         painter.setPen(Qt.NoPen)
@@ -80,7 +80,10 @@ class ProgressDelegate(QStyledItemDelegate):
             painter.setBrush(QColor(ACCENT))
             painter.drawRoundedRect(fill, 4, 4)
 
-        text_color = QColor("#ffffff") if percent >= 45 else option.palette.text().color()
+        text_color = (
+            QColor(tokens()["on_accent"]) if percent >= 45
+            else option.palette.text().color()
+        )
         painter.setPen(text_color)
         font = QFont(option.font)
         font.setPointSizeF(max(7.5, font.pointSizeF() - 1))

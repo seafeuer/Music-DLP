@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 )
 
 from musicdlp.services.ai_export import ImportedName, parse_reply
+from musicdlp.ui.theme import set_tone
 
 
 class AIImportDialog(QDialog):
@@ -38,7 +39,7 @@ class AIImportDialog(QDialog):
 
         self.error = QLabel("")
         self.error.setWordWrap(True)
-        self.error.setStyleSheet("color: #dc2626;")
+        set_tone(self.error, "danger")
         layout.addWidget(self.error)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Cancel)

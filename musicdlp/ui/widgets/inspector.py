@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 
 from musicdlp.core.models import TrackRow, display_status, status_label
 from musicdlp.services.thumbnails import ThumbnailService, youtube_fallbacks
+from musicdlp.ui.theme import set_tone
 
 
 class ArtworkSignals(QObject):
@@ -67,11 +68,11 @@ class Inspector(QWidget):
         layout.setSpacing(10)
 
         heading = QLabel("Song details")
-        heading.setStyleSheet("font-size: 14px; font-weight: 600;")
+        heading.setObjectName("sectionTitle")
         layout.addWidget(heading)
 
         self.artwork = QLabel("No picture")
-        self.artwork.setFixedSize(200, 200)
+        self.artwork.setFixedSize(150, 150)
         self.artwork.setAlignment(Qt.AlignCenter)
         self.artwork.setObjectName("muted")
         self.artwork.setStyleSheet(
@@ -104,8 +105,62 @@ class Inspector(QWidget):
 
         self.error_label = QLabel("")
         self.error_label.setWordWrap(True)
-        self.error_label.setStyleSheet("color: #f87171;")
+        self.error_label.setTextFormat(Qt.PlainText)
+        self.error_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        set_tone(self.error_label, "danger")
         layout.addWidget(self.error_label)
+
+        # The actions come before the file name: on a 620-px-tall window
+        # they were the part pushed out of sight, and they are the reason
+        # to look at this panel.
+        actions = QWidget()
+        actions_layout = QVBoxLayout(actions)
+        actions_layout.setContentsMargins(0, 0, 0, 0)
+        actions_layout.setSpacing(6)
+        self.actions_host = actions
+
+        buttons = QGridLayout()
+        buttons.setSpacing(6)
+        self.include_check = QCheckBox("Include in the next run")
+        self.include_check.setToolTip(
+            "The same as ticking the box next to the song in the list"
+        )
+        self.include_check.toggled.connect(self._include_toggled)
+        buttons.addWidget(self.include_check, 0, 0, 1, 2)
+
+        self.edit_button = QPushButton("Edit details…")
+        self.edit_button.setObjectName("primary")
+        self.edit_button.setToolTip(
+            "Change the title, artist, album, track number, or picture (F2)"
+        )
+        self.edit_button.clicked.connect(self._edit)
+        self.reconvert_button = QPushButton("Re-convert")
+        self.reconvert_button.setToolTip(
+            "Write the file again with the current details"
+        )
+        self.reconvert_button.clicked.connect(self._reconvert)
+        self.retry_button = QPushButton("Retry")
+        self.retry_button.setToolTip(
+            "Try the failed step again, from wherever it stopped"
+        )
+        self.retry_button.clicked.connect(self._retry)
+        buttons.addWidget(self.edit_button, 1, 0, 1, 2)
+        buttons.addWidget(self.reconvert_button, 2, 0)
+        buttons.addWidget(self.retry_button, 2, 1)
+        actions_layout.addLayout(buttons)
+
+        link_row = QHBoxLayout()
+        self.source_button = QPushButton("Open source")
+        self.source_button.setToolTip("Open the original link in your browser")
+        self.source_button.clicked.connect(self._open_source)
+        self.reveal_button = QPushButton("Show file")
+        self.reveal_button.setToolTip("Show the file in Windows Explorer")
+        self.reveal_button.clicked.connect(self._reveal)
+        link_row.addWidget(self.source_button)
+        link_row.addWidget(self.reveal_button)
+        actions_layout.addLayout(link_row)
+
+        layout.addWidget(actions)
 
         self.paths_label = QLabel("")
         self.paths_label.setWordWrap(True)
@@ -115,52 +170,27 @@ class Inspector(QWidget):
         self.paths_label.setMinimumWidth(0)
         layout.addWidget(self.paths_label)
 
-        buttons = QGridLayout()
-        buttons.setSpacing(6)
-        self.include_check = QCheckBox("Include this song in the next run")
-        self.include_check.setToolTip(
-            "The same as ticking the box next to the song in the list"
-        )
-        self.include_check.toggled.connect(self._include_toggled)
-        buttons.addWidget(self.include_check, 0, 0, 1, 2)
-
-        self.edit_button = QPushButton("Edit details…")
-        self.edit_button.setObjectName("primary")
-        self.edit_button.clicked.connect(self._edit)
-        self.reconvert_button = QPushButton("Re-convert")
-        self.reconvert_button.clicked.connect(self._reconvert)
-        self.retry_button = QPushButton("Retry")
-        self.retry_button.clicked.connect(self._retry)
-        buttons.addWidget(self.edit_button, 1, 0, 1, 2)
-        buttons.addWidget(self.reconvert_button, 2, 0)
-        buttons.addWidget(self.retry_button, 2, 1)
-        layout.addLayout(buttons)
-
-        link_row = QHBoxLayout()
-        self.source_button = QPushButton("Open source")
-        self.source_button.clicked.connect(self._open_source)
-        self.reveal_button = QPushButton("Show file")
-        self.reveal_button.clicked.connect(self._reveal)
-        link_row.addWidget(self.source_button)
-        link_row.addWidget(self.reveal_button)
-        layout.addLayout(link_row)
-
         layout.addStretch(1)
-        self.setEnabled(False)
+        self.actions_host.hide()
 
     def set_row(self, row: Optional[TrackRow], checked: bool = False) -> None:
         self.current_row = row
-        self.setEnabled(row is not None)
+        self.actions_host.setVisible(row is not None)
         self._updating_include = True
         self.include_check.setChecked(bool(row) and checked)
         self._updating_include = False
         if row is None:
             self.title_label.setText("No song selected")
-            self.artist_label.setText("Pick a song to see and edit its details.")
+            self.artist_label.setText(
+                "Pick a song to see its details and edit its name."
+            )
             self.album_label.clear()
+            self.album_label.hide()
             self.status_label.clear()
             self.hint_label.clear()
+            self.hint_label.hide()
             self.error_label.clear()
+            self.error_label.hide()
             self.paths_label.clear()
             self.artwork.setPixmap(QPixmap())
             self.artwork.setText("No picture")
@@ -244,7 +274,7 @@ class Inspector(QWidget):
             return
         self.artwork.setText("")
         self.artwork.setPixmap(
-            pixmap.scaled(200, 200, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            pixmap.scaled(150, 150, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         )
 
     def _on_artwork(self, track_id: int, path: str) -> None:

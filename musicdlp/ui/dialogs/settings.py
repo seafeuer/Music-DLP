@@ -13,8 +13,8 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
-    QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox,
-    QTabWidget, QToolButton, QVBoxLayout, QWidget,
+    QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea,
+    QSpinBox, QTabWidget, QToolButton, QVBoxLayout, QWidget,
 )
 
 logger = logging.getLogger("musicdlp.settings")
@@ -54,6 +54,7 @@ from musicdlp.services.ffmpeg import FFmpegService
 from musicdlp.services import gdrive
 from musicdlp.services.spotify import SpotifyService
 from musicdlp.services.ytdlp import YtDlpService
+from musicdlp.ui.theme import set_tone
 
 
 class SettingsDialog(QDialog):
@@ -99,6 +100,19 @@ class SettingsDialog(QDialog):
 
     # ------------------------------------------------------------------ tabs
 
+    def _add_tab(self, tab: QWidget, name: str) -> None:
+        """Add a tab that scrolls when the window is too short.
+
+        The AI tab is taller than the default window, and a clipped form
+        with no scrollbar hides settings the user is told to change.
+        """
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(tab)
+        self.tabs.addTab(scroll, name)
+
     def _build_general(self) -> None:
         tab = QWidget()
         form = QFormLayout(tab)
@@ -134,7 +148,7 @@ class SettingsDialog(QDialog):
         self._select(self.log_level_combo, self.settings.log_level)
         form.addRow("Log level", self.log_level_combo)
 
-        self.tabs.addTab(tab, "General")
+        self._add_tab(tab, "General")
 
     def _build_download(self) -> None:
         tab = QWidget()
@@ -209,7 +223,7 @@ class SettingsDialog(QDialog):
         )
 
         self._update_cookies()
-        self.tabs.addTab(tab, "Download")
+        self._add_tab(tab, "Download")
 
     def _build_output(self) -> None:
         tab = QWidget()
@@ -299,7 +313,7 @@ class SettingsDialog(QDialog):
         note.setObjectName("muted")
         form.addRow("", note)
 
-        self.tabs.addTab(tab, "Output")
+        self._add_tab(tab, "Output")
 
     def _build_spotify(self) -> None:
         tab = QWidget()
@@ -402,7 +416,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(steps)
         layout.addStretch(1)
 
-        self.tabs.addTab(tab, "Spotify")
+        self._add_tab(tab, "Spotify")
 
     def _build_ai(self) -> None:
         tab = QWidget()
@@ -517,7 +531,7 @@ class SettingsDialog(QDialog):
             "The video picture is used when nothing is found.",
         )
 
-        self.tabs.addTab(tab, "AI")
+        self._add_tab(tab, "AI")
 
         if self._start_tab:
             index = self._tab_index(self._start_tab)
@@ -624,7 +638,7 @@ class SettingsDialog(QDialog):
             return
         self._task_busy = True
         self._task_result: list = []
-        status_label.setStyleSheet("")
+        set_tone(status_label, "")
         status_label.setText(busy_text)
         widgets = tuple(disable)
         for widget in widgets:
@@ -685,7 +699,7 @@ class SettingsDialog(QDialog):
                 self.ai_status.setText(
                     f"{message}\n{hint}" if hint else message
                 )
-                self.ai_status.setStyleSheet("color: #d97706;")
+                set_tone(self.ai_status, "warning")
                 return
             if not models:
                 self.ai_status.setText(
@@ -711,13 +725,11 @@ class SettingsDialog(QDialog):
         def done(result, error) -> None:
             if error is not None:
                 self.ai_status.setText(f"Could not test: {error}")
-                self.ai_status.setStyleSheet("color: #d97706;")
+                set_tone(self.ai_status, "warning")
                 return
             ok, message = result
             self.ai_status.setText(message)
-            self.ai_status.setStyleSheet(
-                "color: #16a34a;" if ok else "color: #d97706;"
-            )
+            set_tone(self.ai_status, "success" if ok else "warning")
 
         self._run_ai_task(lambda: test_connection(settings), done, "Testing…")
 
@@ -860,7 +872,7 @@ class SettingsDialog(QDialog):
         form.addRow("", self.ytdlp_button)
         form.addRow("", self.ytdlp_status)
 
-        self.tabs.addTab(tab, "Advanced")
+        self._add_tab(tab, "Advanced")
 
     # ---------------------------------------------------------------- helpers
 

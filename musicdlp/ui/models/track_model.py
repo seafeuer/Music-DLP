@@ -5,7 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable, Optional
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Qt, Signal
+from PySide6.QtCore import (
+    QAbstractTableModel, QCollator, QLocale, QModelIndex,
+    QSortFilterProxyModel, Qt, Signal,
+)
 
 from musicdlp.core.models import (
     ERROR,
@@ -23,7 +26,7 @@ from musicdlp.core.models import (
 ROW_ROLE = Qt.UserRole + 1
 PROGRESS_ROLE = Qt.UserRole + 2
 
-COLUMNS = ["", "#", "Title", "Channel", "Length", "Format", "Status", "Progress"]
+COLUMNS = ["", "#", "Title", "Artist", "Length", "Format", "Status", "Progress"]
 COL_CHECK = 0
 COL_POSITION = 1
 COL_TITLE = 2
@@ -321,6 +324,21 @@ class TrackFilterProxy(QSortFilterProxyModel):
         self.status_filter = "all"
         self.search = ""
         self.setDynamicSortFilter(True)
+        # Sorting a name column as plain text puts "apple" after "Zebra"
+        # and "Track 10" before "Track 9". A collator compares the way a
+        # reader expects, without changing what is displayed.
+        self._collator = QCollator(QLocale())
+        self._collator.setCaseSensitivity(Qt.CaseInsensitive)
+        self._collator.setNumericMode(True)
+
+    def _text_less(self, left: QModelIndex, right: QModelIndex) -> bool:
+        model = self.sourceModel()
+        column = left.column()
+        left_value = str(model.data(left, Qt.DisplayRole) or "")
+        right_value = str(model.data(right, Qt.DisplayRole) or "")
+        if self._collator.compare(left_value, right_value) == 0:
+            return left.row() < right.row()
+        return self._collator.compare(left_value, right_value) < 0
 
     def set_status_filter(self, value: str) -> None:
         self.beginFilterChange()
@@ -362,6 +380,8 @@ class TrackFilterProxy(QSortFilterProxyModel):
             ) < _number(
                 progress.get(model.rows[right.row()].track.id)
             )
+        if column in (COL_TITLE, COL_ARTIST, COL_FORMAT, COL_STATUS):
+            return self._text_less(left, right)
         return super().lessThan(left, right)
 
     def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:

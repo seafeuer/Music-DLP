@@ -93,9 +93,9 @@ class TrackTableWidget(QWidget):
         header_row = QHBoxLayout()
         title_box = QVBoxLayout()
         title_box.setSpacing(1)
-        self.title_label = QLabel("No source selected")
+        self.title_label = QLabel("Your library")
         self.title_label.setStyleSheet("font-size: 17px; font-weight: 700;")
-        self.subtitle_label = QLabel("Add a link to get started.")
+        self.subtitle_label = QLabel("Paste a link in the bar above and press Add")
         self.subtitle_label.setObjectName("muted")
         title_box.addWidget(self.title_label)
         title_box.addWidget(self.subtitle_label)
@@ -107,29 +107,31 @@ class TrackTableWidget(QWidget):
         filter_row.setSpacing(6)
 
         self.filter_combo = QComboBox()
+        self.filter_combo.setToolTip("Show only songs in a particular state")
         for label, value in [
             ("All songs", "all"),
             ("Not downloaded", "new"),
             ("Downloaded", "downloaded"),
             ("Converted", "converted"),
             ("Needs update", "needs_update"),
-            ("Errors", "errors"),
+            ("Problems", "errors"),
         ]:
             self.filter_combo.addItem(label, value)
         self.filter_combo.currentIndexChanged.connect(self._on_filter_changed)
         filter_row.addWidget(self.filter_combo)
 
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Search titles or channels…")
+        self.search.setPlaceholderText("Filter these songs…")
         self.search.setClearButtonEnabled(True)
         self.search.setMinimumWidth(150)
-        self.search.textChanged.connect(self.proxy.set_search)
+        self.search.setToolTip("Hide every song whose title or artist does not match")
+        self.search.textChanged.connect(self._on_search_changed)
         filter_row.addWidget(self.search, 1)
 
         self.edit_button = QPushButton("Edit details…")
         self.edit_button.setToolTip(
             "Change the title, artist, album, track number, or picture "
-            "for the highlighted song"
+            "for the highlighted song (F2)"
         )
         self.edit_button.clicked.connect(self._edit_current)
         self.edit_button.setEnabled(False)
@@ -147,6 +149,7 @@ class TrackTableWidget(QWidget):
         self.select_button = QToolButton()
         self.select_button.setText("Select")
         self.select_button.setPopupMode(QToolButton.InstantPopup)
+        self.select_button.setToolTip("Tick songs by their state")
         select_menu = QMenu(self.select_button)
         select_menu.addAction("All songs", self.model.check_all)
         select_menu.addAction("Not downloaded", lambda: self.model.check_status(NEW))
@@ -182,6 +185,7 @@ class TrackTableWidget(QWidget):
         )
         actions_menu.addAction("Clear selection", self.model.clear_checks)
         self.actions_button.setMenu(actions_menu)
+        self.actions_button.setAccessibleName("More actions")
         filter_row.addWidget(self.actions_button)
 
         layout.addLayout(filter_row)
@@ -213,23 +217,23 @@ class TrackTableWidget(QWidget):
 
         header = self.table.horizontalHeader()
         header.setStretchLastSection(False)
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(True)
         header.setSectionResizeMode(COL_CHECK, QHeaderView.Fixed)
         header.setSectionResizeMode(COL_POSITION, QHeaderView.Fixed)
         header.setSectionResizeMode(COL_TITLE, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(
-            COL_ARTIST, QHeaderView.Interactive
-        )
+        header.setSectionResizeMode(COL_ARTIST, QHeaderView.Fixed)
         header.setSectionResizeMode(COL_DURATION, QHeaderView.Fixed)
         header.setSectionResizeMode(COL_FORMAT, QHeaderView.Fixed)
         header.setSectionResizeMode(COL_STATUS, QHeaderView.Fixed)
         header.setSectionResizeMode(COL_PROGRESS, QHeaderView.Fixed)
-        self.table.setColumnWidth(COL_CHECK, 30)
+        self.table.setColumnWidth(COL_CHECK, 32)
         self.table.setColumnWidth(COL_POSITION, 38)
-        self.table.setColumnWidth(COL_ARTIST, 130)
+        self.table.setColumnWidth(COL_ARTIST, 150)
         self.table.setColumnWidth(COL_DURATION, 58)
-        self.table.setColumnWidth(COL_FORMAT, 72)
-        self.table.setColumnWidth(COL_STATUS, 132)
-        self.table.setColumnWidth(COL_PROGRESS, 84)
+        self.table.setColumnWidth(COL_FORMAT, 76)
+        self.table.setColumnWidth(COL_STATUS, 136)
+        self.table.setColumnWidth(COL_PROGRESS, 92)
 
         self.stack.addWidget(self.table)
         self.empty_label = QLabel("Nothing here yet.")
@@ -237,6 +241,8 @@ class TrackTableWidget(QWidget):
         self.empty_label.setObjectName("muted")
         self.empty_label.setTextFormat(Qt.RichText)
         self.empty_label.setWordWrap(True)
+        self.empty_label.setOpenExternalLinks(False)
+        self.empty_label.linkActivated.connect(self._on_empty_link)
         self.stack.addWidget(self.empty_label)
         layout.addWidget(self.stack, 1)
 
@@ -262,16 +268,22 @@ class TrackTableWidget(QWidget):
         self.table.sortByColumn(COL_POSITION, Qt.AscendingOrder)
 
         if source is None:
-            self.title_label.setText("No source selected")
-            self.subtitle_label.setText("Add a link to get started.")
+            self.title_label.setText("Your library")
+            self.subtitle_label.setText(
+                "Paste a link in the bar above and press Add"
+            )
         else:
             self.title_label.setText(source.title)
             count = len(self.model.rows)
             songs = f"{count} song{'' if count == 1 else 's'}"
             if source.is_folder:
                 self.subtitle_label.setText(f"Folder · {songs}")
+            elif source.is_all:
+                self.subtitle_label.setText(
+                    f"Everything you have · {songs}"
+                )
             else:
-                uploader = source.uploader or "Unknown channel"
+                uploader = source.uploader or "Unknown artist"
                 self.subtitle_label.setText(f"{uploader} · {songs}")
 
         # Keep the highlighted song across a refresh, so the details panel
@@ -281,6 +293,7 @@ class TrackTableWidget(QWidget):
 
         self._update_counts()
         self._update_empty_state()
+        self.refresh_progress_column()
         self.edit_button.setEnabled(self.current_row() is not None)
 
     def _select_by_track_id(self, track_id: int) -> None:
@@ -298,12 +311,15 @@ class TrackTableWidget(QWidget):
     def update_track(self, track: Track) -> None:
         self.model.replace_track(track)
         self._update_counts()
+        self.refresh_progress_column()
 
     def set_progress(self, track_id: int, percent: float) -> None:
         self.model.set_progress(track_id, percent)
+        self.refresh_progress_column()
 
     def clear_progress(self) -> None:
         self.model.clear_progress()
+        self.refresh_progress_column()
 
     def checked_rows(self) -> list[TrackRow]:
         return self.model.checked_rows()
@@ -328,27 +344,41 @@ class TrackTableWidget(QWidget):
     def _apply_column_visibility(self) -> None:
         """Hide optional columns when there is not enough width for them.
 
-        This keeps the Status column readable instead of forcing a
-        horizontal scrollbar and clipping it.
+        This keeps the status readable instead of forcing a horizontal
+        scrollbar and clipping it. The progress column only appears while
+        something is actually running — a column of dashes on every row is
+        noise that looks like an unfinished feature.
         """
         width = self.table.viewport().width()
         mode = getattr(self, "mode", "easy")
 
-        show_format = mode == "pro" and width >= 620
-        show_progress = width >= 520
-        show_channel = width >= 430
+        show_format = mode == "pro" and width >= 560
+        show_progress = self._has_progress() and width >= 480
+        show_artist = width >= 580
 
         self.table.setColumnHidden(COL_FORMAT, not show_format)
         self.table.setColumnHidden(COL_PROGRESS, not show_progress)
-        self.table.setColumnHidden(COL_ARTIST, not show_channel)
+        self.table.setColumnHidden(COL_ARTIST, not show_artist)
 
         # Below this width the buttons clip, so the same actions move into
         # one menu rather than being cut off mid-word.
-        compact = self.width() < 1080
+        compact = self.width() < 900
         for widget in (self.edit_button, self.titles_button,
                        self.select_button):
             widget.setVisible(not compact)
         self.actions_button.setVisible(compact)
+
+    def _has_progress(self) -> bool:
+        if self.model.progress:
+            return True
+        return any(
+            row.track.status in ("queued", "downloading", "converting", "syncing")
+            for row in self.model.rows
+        )
+
+    def refresh_progress_column(self) -> None:
+        """Show the progress column only while a job is in flight."""
+        self._apply_column_visibility()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -358,6 +388,10 @@ class TrackTableWidget(QWidget):
 
     def _on_filter_changed(self, _index: int) -> None:
         self.proxy.set_status_filter(self.filter_combo.currentData())
+        self._update_empty_state()
+
+    def _on_search_changed(self, text: str) -> None:
+        self.proxy.set_search(text)
         self._update_empty_state()
 
     def _on_checks_changed(self) -> None:
@@ -374,15 +408,13 @@ class TrackTableWidget(QWidget):
         total = len(self.model.rows)
         checked = len(self.model.checked)
         if self.source.is_folder:
-            bits = ["Folder", f"{total} song{'' if total == 1 else 's'}"]
+            bits = ["Folder", _songs(total)]
         elif self.source.is_all:
-            bits = [self.source.uploader or "All songs", f"{total} tracks"]
+            bits = ["Everything you have", _songs(total)]
         else:
-            bits = [
-                self.source.uploader or "Unknown channel", f"{total} tracks"
-            ]
+            bits = [self.source.uploader or "Unknown artist", _songs(total)]
         if checked:
-            bits.append(f"{checked} selected")
+            bits.append(f"{checked} ticked")
         self.subtitle_label.setText(" · ".join(bits))
 
         pending = sum(
@@ -405,32 +437,42 @@ class TrackTableWidget(QWidget):
                 self.empty_label.setText(
                     "<div style='line-height:150%'>"
                     "<div style='font-size:18px; font-weight:700'>"
-                    "Nothing added yet</div><br>"
+                    "Nothing here yet</div><br>"
                     "<b>1.</b> Paste a link in the bar at the top "
                     "(YouTube, X, or another site).<br>"
                     "<b>2.</b> Press <b>Add</b>.<br>"
-                    "<b>3.</b> Pick the songs you want, then press "
+                    "<b>3.</b> Tick the songs you want, then press "
                     "<b>Download to Spotify</b>."
                     "</div>"
                 )
             elif self.source.is_folder:
                 self.empty_label.setText(
                     "This folder is empty.<br><br>"
-                    "Drag songs from another link onto it in the library "
-                    "on the left."
+                    "Drag songs onto it in the library on the left, or add "
+                    "that link and drag it in."
                 )
             else:
                 self.empty_label.setText(
                     "This link has no songs yet.<br>"
-                    "Press <b>Refresh</b> on the left to check it again."
+                    "Press <b>Refresh</b> for the selected link to read it "
+                    "again."
                 )
             self.stack.setCurrentWidget(self.empty_label)
             return
         if self.proxy.rowCount() == 0:
-            self.empty_label.setText("No songs match this filter.")
+            reason = "this filter" if self.search.text().strip() else "this view"
+            self.empty_label.setText(
+                f"No songs match {reason}.<br><br>"
+                "<a href='clear'>Show every song here</a>"
+            )
             self.stack.setCurrentWidget(self.empty_label)
             return
         self.stack.setCurrentWidget(self.table)
+
+    def _on_empty_link(self, link: str) -> None:
+        if link == "clear":
+            self.search.clear()
+            self.filter_combo.setCurrentIndex(0)
 
     def _on_double_click(self, index: QModelIndex) -> None:
         source_index = self.proxy.mapToSource(index)
@@ -478,3 +520,7 @@ class TrackTableWidget(QWidget):
             lambda: self.remove_requested.emit(track.id),
         )
         menu.exec(self.table.viewport().mapToGlobal(position))
+
+
+def _songs(count: int) -> str:
+    return f"{count} song{'' if count == 1 else 's'}"

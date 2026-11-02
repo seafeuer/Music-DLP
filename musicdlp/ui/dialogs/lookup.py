@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 
 from musicdlp.core.models import TrackRow
 from musicdlp.services.metadata_lookup import Lookup, lookup
+from musicdlp.ui.theme import set_tone
 
 COL_USE = 0
 COL_TITLE = 1
@@ -96,7 +97,7 @@ class LookupDialog(QDialog):
 
         self.error_label = QLabel("")
         self.error_label.setWordWrap(True)
-        self.error_label.setStyleSheet("color: #f87171;")
+        set_tone(self.error_label, "danger")
         self.error_label.hide()
         layout.addWidget(self.error_label)
 

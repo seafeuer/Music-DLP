@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 
 from musicdlp.core.models import TrackRow
 from musicdlp.services.ai import AIError, AISettings, friendly_error, suggest_names
+from musicdlp.ui.theme import set_tone
 
 COL_USE = 0
 COL_CURRENT_TITLE = 1
@@ -114,7 +115,7 @@ class SmartTitlesDialog(QDialog):
         # Kept separate so a later summary cannot hide the actual error.
         self.error_label = QLabel("")
         self.error_label.setWordWrap(True)
-        self.error_label.setStyleSheet("color: #f87171;")
+        set_tone(self.error_label, "danger")
         self.error_label.hide()
         layout.addWidget(self.error_label)
 

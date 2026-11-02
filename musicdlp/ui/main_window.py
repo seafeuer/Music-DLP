@@ -286,6 +286,8 @@ class MainWindow(QMainWindow):
 
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.setChildrenCollapsible(False)
+        self.splitter.splitterMoved.connect(self._on_splitter_moved)
+        self._splitter_touched = False
 
         self.sidebar = SourceListWidget()
         self.track_table = TrackTableWidget()
@@ -305,7 +307,10 @@ class MainWindow(QMainWindow):
         self.splitter.setStretchFactor(0, 0)
         self.splitter.setStretchFactor(1, 1)
         self.splitter.setStretchFactor(2, 0)
-        self.splitter.setSizes([260, 760, 340])
+        self.sidebar.setMinimumWidth(200)
+        self.sidebar.setMaximumWidth(340)
+        self.inspector_scroll.setMaximumWidth(380)
+        self.splitter.setSizes([240, 560, 330])
         layout.addWidget(self.splitter, 1)
 
         self.log_drawer = LogDrawer()
@@ -318,69 +323,108 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
     def _build_toolbar(self) -> QWidget:
+        """The header: one row to add a link, one row to work with songs.
+
+        Splitting it keeps the goal obvious. The first row is the way in —
+        paste a link, press Add. The second holds the things that act on
+        what is already in the library, with the one primary action at the
+        right edge. A single crowded row pushed the primary button off a
+        1000-px window, which is the app's minimum size.
+        """
         bar = QWidget()
-        layout = QHBoxLayout(bar)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        outer = QVBoxLayout(bar)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(6)
+
+        # Row 1: brand, the link, and the two ways to add it -------------
+        add_row = QHBoxLayout()
+        add_row.setContentsMargins(0, 0, 0, 0)
+        add_row.setSpacing(8)
 
         brand = QLabel("Music DLP")
-        brand.setStyleSheet("font-size: 18px; font-weight: 700;")
-        layout.addWidget(brand)
+        brand.setObjectName("brand")
+        add_row.addWidget(brand)
 
         self.link_edit = QLineEdit()
         self.link_edit.setPlaceholderText(
-            "Paste a YouTube playlist, video, X post, or other link…"
+            "Paste a YouTube, X, or other link, then press Add"
+        )
+        self.link_edit.setClearButtonEnabled(True)
+        self.link_edit.setMinimumWidth(220)
+        self.link_edit.setToolTip(
+            "A playlist, a video, or a post. You can paste several at once, "
+            "or drop them onto the window (Ctrl+N)"
         )
         self.link_edit.returnPressed.connect(self._add_from_input)
-        layout.addWidget(self.link_edit, 1)
-
-        self.add_button = QPushButton("Add")
-        self.add_button.setObjectName("primary")
-        self.add_button.clicked.connect(self._add_from_input)
-        layout.addWidget(self.add_button)
+        add_row.addWidget(self.link_edit, 1)
 
         self.paste_button = QPushButton("Paste")
+        self.paste_button.setToolTip(
+            "Read the link on the clipboard and add it"
+        )
         self.paste_button.clicked.connect(self._paste_links)
-        layout.addWidget(self.paste_button)
+        add_row.addWidget(self.paste_button)
+
+        self.add_button = QPushButton("Add")
+        self.add_button.setToolTip(
+            "Read the link and add its songs to the library (Enter)"
+        )
+        self.add_button.clicked.connect(self._add_from_input)
+        add_row.addWidget(self.add_button)
+
+        outer.addLayout(add_row)
+
+        # Row 2: mode, theme, search, and the action for the selection ----
+        work_row = QHBoxLayout()
+        work_row.setContentsMargins(0, 0, 0, 0)
+        work_row.setSpacing(8)
 
         self.mode_combo = QComboBox()
-        self.mode_combo.addItem("Easy", "easy")
-        self.mode_combo.addItem("Pro", "pro")
+        self.mode_combo.setMinimumWidth(108)
+        self.mode_combo.setMaximumWidth(140)
+        self.mode_combo.addItem("Easy mode", "easy")
+        self.mode_combo.addItem("Pro mode", "pro")
         index = self.mode_combo.findData(self.settings.mode)
         if index >= 0:
             self.mode_combo.setCurrentIndex(index)
+        self.mode_combo.setToolTip(
+            "Easy: one button downloads, converts, and sends to Spotify.\n"
+            "Pro: run the three steps separately."
+        )
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
-        layout.addWidget(self.mode_combo)
+        work_row.addWidget(self.mode_combo)
 
         self.theme_button = QToolButton()
         self.theme_button.setToolTip("Switch between dark and light")
         self.theme_button.clicked.connect(self._toggle_theme)
-        layout.addWidget(self.theme_button)
+        work_row.addWidget(self.theme_button)
         self._update_theme_button()
 
         self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("Search all songs…")
+        self.search_edit.setPlaceholderText("Search every song…")
         self.search_edit.setClearButtonEnabled(True)
-        self.search_edit.setMinimumWidth(160)
-        self.search_edit.setMaximumWidth(260)
+        self.search_edit.setMinimumWidth(180)
+        self.search_edit.setMaximumWidth(420)
         self.search_edit.setToolTip(
             "Search every song in the library, whichever link it came from "
-            "(Ctrl+F)"
+            "(Ctrl+F). Clearing the box returns to the link you came from."
         )
         self.search_edit.textChanged.connect(self._on_global_search)
-        layout.addWidget(self.search_edit)
+        work_row.addWidget(self.search_edit, 1)
 
         self.action_area = QWidget()
         self.action_layout = QHBoxLayout(self.action_area)
         self.action_layout.setContentsMargins(0, 0, 0, 0)
         self.action_layout.setSpacing(6)
-        layout.addWidget(self.action_area)
+        work_row.addWidget(self.action_area)
 
         self.more_button = QToolButton()
         self.more_button.setText("More")
         self.more_button.setPopupMode(QToolButton.InstantPopup)
-        layout.addWidget(self.more_button)
+        self.more_button.setToolTip("Settings, folders, logs, and other tools")
+        work_row.addWidget(self.more_button)
 
+        outer.addLayout(work_row)
         return bar
 
     def _build_menus(self) -> None:
@@ -1387,31 +1431,44 @@ class MainWindow(QMainWindow):
         count = len(self._checked)
         busy = self._is_busy()
         ffmpeg_ok = self.ctx.ffmpeg.available
+        suffix = f" ({count})" if count else ""
 
         if self.settings.mode == "easy":
-            label = f"Download to Spotify ({count})" if ffmpeg_ok else (
-                f"Download audio ({count})"
+            label = (
+                f"Download to Spotify{suffix}" if ffmpeg_ok
+                else f"Download audio{suffix}"
             )
             button = QPushButton(label)
             button.setObjectName("primary")
             button.setEnabled(count > 0 and not busy)
+            button.setToolTip(
+                f"Download, convert, and send {count or 'the ticked'} song"
+                f"{'' if count == 1 else 's'} to Spotify"
+                if ffmpeg_ok else
+                "FFmpeg is needed to convert songs. Set it up first."
+            )
             button.clicked.connect(self._start_easy)
             self.action_layout.addWidget(button)
         else:
-            download = QPushButton(f"Download ({count})")
+            download = QPushButton(f"Download{suffix}")
+            download.setToolTip("Only fetch the audio for the ticked songs")
             download.setEnabled(count > 0 and not busy)
             download.clicked.connect(lambda: self._start_stage("download"))
             self.action_layout.addWidget(download)
 
-            convert = QPushButton(f"Convert ({count})")
-            convert.setEnabled(count > 0 and not busy and ffmpeg_ok)
+            convert = QPushButton(f"Convert{suffix}")
             convert.setToolTip(
-                "" if ffmpeg_ok else "FFmpeg is required for conversion."
+                "Turn the downloads into tagged files"
+                if ffmpeg_ok else "FFmpeg is required for conversion."
             )
+            convert.setEnabled(count > 0 and not busy and ffmpeg_ok)
             convert.clicked.connect(lambda: self._start_stage("convert"))
             self.action_layout.addWidget(convert)
 
-            sync = QPushButton(f"Spotify ({count})")
+            sync = QPushButton(f"Send to Spotify{suffix}")
+            sync.setToolTip(
+                "Copy the converted files into your Spotify folder"
+            )
             sync.setEnabled(count > 0 and not busy)
             sync.clicked.connect(lambda: self._start_stage("sync"))
             self.action_layout.addWidget(sync)
@@ -1461,10 +1518,29 @@ class MainWindow(QMainWindow):
             detail = "Tick the songs you want"
 
         enabled = (count > 0, count > 0 and ffmpeg_ok, count > 0)
+        self.steps.set_titles(self._convert_title())
         # The strip is a progress display. Running a stage is done with the
         # buttons, so exploring the numbered circles cannot start a job.
         self.steps.set_clickable(False)
         self.steps.reset(detail, enabled=enabled)
+        if not ffmpeg_ok:
+            self.steps.set_step(1, WAITING, "Not available until FFmpeg is set up")
+            self.steps.set_tooltip(
+                1,
+                "Music DLP needs FFmpeg to convert songs. Use the button at "
+                "the top of the window to set it up.",
+            )
+        else:
+            self.steps.set_tooltip(
+                1, "Turns the downloaded audio into tagged files"
+            )
+
+    def _convert_title(self) -> str:
+        """Name the middle step after the formats actually written."""
+        formats = self.settings.formats or ["mp3"]
+        if len(formats) > 1:
+            return "Convert to MP3 + M4A"
+        return "Convert to M4A" if formats[0] == "m4a" else "Convert to MP3"
 
     def _on_step_clicked(self, index: int) -> None:
         """The strip is informational; stages run from the buttons."""
@@ -1476,6 +1552,16 @@ class MainWindow(QMainWindow):
         self.steps.set_step(index, ACTIVE, detail)
 
     def _finish_steps(self, summary: dict) -> None:
+        """Show the finished run, then return to the normal display.
+
+        The result stays long enough to read — about four seconds — and
+        the strip then goes back to describing the current selection, so
+        it never keeps saying "Starting…" next to a window that is idle.
+        """
+        self._show_run_result(summary)
+        QTimer.singleShot(4500, self._update_steps)
+
+    def _show_run_result(self, summary: dict) -> None:
         if summary.get("cancelled"):
             self.steps.reset("Cancelled", enabled=(True, True, True))
             return
@@ -2925,13 +3011,28 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         self._apply_responsive_layout()
 
+    def _on_splitter_moved(self, *_args) -> None:
+        # Once the user has sized the panels, resizing the window no
+        # longer overrides their choice; the splitter keeps its own ratio.
+        self._splitter_touched = True
+
     def _apply_responsive_layout(self) -> None:
-        """Give the song list room on smaller windows."""
+        """Give the song list room on smaller windows.
+
+        The sidebar and the details panel have bounded widths, so an
+        extra-wide screen spends its space on the song list rather than
+        stretching three columns apart. The defaults are only applied
+        until the user drags the splitter themselves.
+        """
+        if getattr(self, "_splitter_touched", False):
+            return
         width = self.width()
         if width < 1200:
-            self.splitter.setSizes([210, max(420, width - 210 - 300), 300])
+            self.splitter.setSizes([200, max(420, width - 200 - 300), 300])
+        elif width < 1600:
+            self.splitter.setSizes([220, max(520, width - 220 - 340), 340])
         else:
-            self.splitter.setSizes([260, max(520, width - 260 - 340), 340])
+            self.splitter.setSizes([240, max(700, width - 240 - 360), 360])
 
     def dragEnterEvent(self, event) -> None:
         if event.mimeData().hasUrls() or event.mimeData().hasText():

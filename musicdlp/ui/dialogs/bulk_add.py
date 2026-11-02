@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
 )
 
 from musicdlp.services.urls import split_links
+from musicdlp.ui.theme import set_tone
 
 
 class BulkAddDialog(QDialog):
@@ -27,7 +28,7 @@ class BulkAddDialog(QDialog):
         layout.addWidget(self.text, 1)
 
         self.error = QLabel("")
-        self.error.setStyleSheet("color: #dc2626;")
+        set_tone(self.error, "danger")
         layout.addWidget(self.error)
 
         buttons = QDialogButtonBox(

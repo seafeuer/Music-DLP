@@ -10,14 +10,15 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QColor, QDrag, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
-    QApplication, QHBoxLayout, QLabel, QLineEdit, QListView, QMenu,
-    QPushButton, QStyle, QStyledItemDelegate, QStyleOptionViewItem,
-    QVBoxLayout, QWidget,
+    QApplication, QGridLayout, QLabel, QLineEdit, QListView, QMenu,
+    QPushButton, QStackedWidget, QStyle, QStyledItemDelegate,
+    QStyleOptionViewItem, QVBoxLayout, QWidget,
 )
 
 from musicdlp.core.models import (
     ALL_SONGS_ID, CONVERTED, DOWNLOADED, ERROR, SYNCED, Source,
 )
+from musicdlp.ui.theme import ACCENT, tone
 
 COUNT_ROLE = Qt.UserRole + 1
 INDENT_ROLE = Qt.UserRole + 2
@@ -30,6 +31,13 @@ def _downloaded_count(counts: dict[str, int]) -> int:
         counts.get(status, 0)
         for status in (DOWNLOADED, CONVERTED, SYNCED)
     )
+
+
+def _alpha(color: str, alpha: int) -> QColor:
+    """A colour from the theme at a given opacity."""
+    value = QColor(color)
+    value.setAlpha(alpha)
+    return value
 
 
 class SourceListModel(QAbstractListModel):
@@ -233,15 +241,15 @@ class SourceDelegate(QStyledItemDelegate):
             and getattr(option.widget, "_hovered_folder", None) == source.id
         )
         if drop_target:
-            painter.setBrush(QColor(59, 130, 246, 60))
-            painter.setPen(QPen(QColor("#3b82f6"), 1.5))
+            painter.setBrush(_alpha(ACCENT, 60))
+            painter.setPen(QPen(QColor(ACCENT), 1.5))
             painter.drawRoundedRect(rect, 7, 7)
             painter.setPen(Qt.NoPen)
         elif selected:
-            painter.setBrush(QColor(59, 130, 246, 45))
+            painter.setBrush(_alpha(ACCENT, 51))
             painter.setPen(Qt.NoPen)
             painter.drawRoundedRect(rect, 7, 7)
-            painter.setBrush(QColor("#3b82f6"))
+            painter.setBrush(QColor(ACCENT))
             bar = rect.adjusted(0, 6, 0, -6)
             bar.setWidth(3)
             painter.drawRoundedRect(bar, 1.5, 1.5)
@@ -251,14 +259,26 @@ class SourceDelegate(QStyledItemDelegate):
             painter.drawRoundedRect(rect, 7, 7)
 
         text_rect = rect.adjusted(14, 7, -30, -7)
+        if source.is_folder:
+            # A native folder icon says "container" without the chevron,
+            # which looked like something that could be expanded.
+            icon_rect = rect.adjusted(2, 9, 0, 0)
+            icon_rect.setWidth(14)
+            icon_rect.setHeight(14)
+            painter.drawPixmap(
+                icon_rect,
+                option.widget.style().standardIcon(
+                    QStyle.SP_DirIcon
+                ).pixmap(14, 14),
+            )
+            text_rect = rect.adjusted(22, 7, -30, -7)
+
         title_font = QFont(option.font)
         title_font.setBold(True)
         painter.setFont(title_font)
         painter.setPen(option.palette.text().color())
 
         title = source.title
-        if source.is_folder:
-            title = "▸ " + title
         if title in source_model.duplicate_titles:
             marker = (source.external_id or source.url)[-4:]
             title = f"{title}  ·{marker}"
@@ -289,13 +309,13 @@ class SourceDelegate(QStyledItemDelegate):
 
         if total:
             if errors:
-                dot = QColor("#ef4444")
+                dot = QColor(tone("danger"))
             elif downloaded >= total:
-                dot = QColor("#22c55e")
+                dot = QColor(tone("success"))
             elif downloaded:
-                dot = QColor("#f59e0b")
+                dot = QColor(tone("warning"))
             else:
-                dot = QColor("#9ca3af")
+                dot = QColor(option.palette.placeholderText().color())
             painter.setBrush(dot)
             painter.setPen(Qt.NoPen)
             painter.drawEllipse(rect.right() - 18, rect.center().y() - 4, 8, 8)
@@ -460,12 +480,17 @@ class SourceListWidget(QWidget):
         layout.setSpacing(8)
 
         header = QLabel("Library")
-        header.setStyleSheet("font-weight: 600; font-size: 14px;")
+        header.setObjectName("sectionTitle")
         layout.addWidget(header)
 
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Filter library…")
-        self.search.textChanged.connect(self.proxy.set_search)
+        self.search.setPlaceholderText("Filter links…")
+        self.search.setClearButtonEnabled(True)
+        self.search.setToolTip(
+            "Show only links and folders whose name matches. To search the "
+            "songs themselves, use the box at the top of the window."
+        )
+        self.search.textChanged.connect(self._on_filter_text)
         layout.addWidget(self.search)
 
         self.view = SourceListView()
@@ -479,24 +504,43 @@ class SourceListWidget(QWidget):
         self.view.selectionModel().currentChanged.connect(self._on_current_changed)
         self.view.tracks_dropped.connect(self.tracks_dropped)
         self.view.source_dropped.connect(self.source_dropped)
-        layout.addWidget(self.view, 1)
 
-        footer = QHBoxLayout()
+        self.empty = QLabel(
+            "No links yet.<br><br>"
+            "Paste a link in the box at the top and press <b>Add</b>."
+        )
+        self.empty.setAlignment(Qt.AlignCenter)
+        self.empty.setWordWrap(True)
+        self.empty.setObjectName("muted")
+
+        self.stack = QStackedWidget()
+        self.stack.addWidget(self.view)
+        self.stack.addWidget(self.empty)
+        layout.addWidget(self.stack, 1)
+
+        footer = QGridLayout()
         footer.setSpacing(6)
-        self.add_button = QPushButton("Add")
+        self.add_button = QPushButton("Add link…")
+        self.add_button.setToolTip("Go to the link box at the top of the window")
         self.add_button.clicked.connect(self.add_requested)
-        self.folder_button = QPushButton("Folder")
-        self.folder_button.setToolTip("Create a folder to drag songs into")
+        self.folder_button = QPushButton("New folder")
+        self.folder_button.setToolTip(
+            "Create a folder, then drag links or songs onto it"
+        )
         self.folder_button.clicked.connect(self.new_folder_requested)
-        footer.addWidget(self.folder_button)
         self.refresh_button = QPushButton("Refresh")
+        self.refresh_button.setToolTip("Read the selected link again (F5)")
         self.refresh_button.clicked.connect(self._refresh)
         self.remove_button = QPushButton("Remove")
         self.remove_button.setObjectName("danger")
+        self.remove_button.setToolTip("Remove the selected link from the library")
         self.remove_button.clicked.connect(self._remove)
-        footer.addWidget(self.add_button)
-        footer.addWidget(self.refresh_button)
-        footer.addWidget(self.remove_button)
+        # Two rows: at the narrowest window a single row of four buttons
+        # was cut to "N folder", "Add lin…", "Refre", "Remo".
+        footer.addWidget(self.add_button, 0, 0)
+        footer.addWidget(self.folder_button, 0, 1)
+        footer.addWidget(self.refresh_button, 1, 0)
+        footer.addWidget(self.remove_button, 1, 1)
         layout.addLayout(footer)
 
     def set_busy(self, busy: bool) -> None:
@@ -518,8 +562,32 @@ class SourceListWidget(QWidget):
         if current is None:
             current = self.selected_source_id()
         self.model.set_sources(sources, counts)
+        self._update_empty_state()
         if current is not None:
             self.select_source(current)
+
+    def _update_empty_state(self) -> None:
+        """An empty library says what to do; it is not a blank panel."""
+        empty = self.model.rowCount() == 0
+        self.stack.setCurrentWidget(self.empty if empty else self.view)
+        self._update_buttons()
+
+    def _on_filter_text(self, text: str) -> None:
+        self.proxy.set_search(text)
+        # A filter that matches nothing should say so rather than showing
+        # an empty white box.
+        if self.model.rowCount() and self.proxy.rowCount() == 0:
+            self.empty.setText(
+                "No link matches that filter.<br><br>"
+                "Clear the box above to see every link."
+            )
+            self.stack.setCurrentWidget(self.empty)
+        else:
+            self.empty.setText(
+                "No links yet.<br><br>"
+                "Paste a link in the box at the top and press <b>Add</b>."
+            )
+            self._update_empty_state()
 
     def select_source(self, source_id: int) -> None:
         row = self.model.row_for_id(source_id)
