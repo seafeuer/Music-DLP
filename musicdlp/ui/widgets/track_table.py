@@ -297,7 +297,12 @@ class TrackTableWidget(QWidget):
         self.source = source
         self.search.clear()
         self.filter_combo.setCurrentIndex(0)
-        self.model.numbered_rows = bool(source is not None and source.is_all)
+        # "All songs" and a folder gather songs from several links, where
+        # each link's own position would repeat (1, 1, 2...). Those views
+        # number the rows instead. A single link keeps its own positions.
+        self.model.numbered_rows = bool(
+            source is not None and (source.is_all or source.is_folder)
+        )
         self.model.set_rows(rows, checked)
         self.table.sortByColumn(COL_POSITION, Qt.AscendingOrder)
 

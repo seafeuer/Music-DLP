@@ -297,3 +297,20 @@ def test_details_preview_uses_the_folder_file_name_pattern(window, monkeypatch):
     main._open_details(data["playlist_tracks"][0])
 
     assert captured["filename_template"] == "{track:02d} - {title}"
+
+
+def test_a_folder_numbers_its_rows_instead_of_repeating_positions(window):
+    """Songs from several links in one folder would otherwise all say 1."""
+    main, db, data = window
+    folder_id = db.add_folder("Shiurim")
+    db.move_tracks_to_folder(data["playlist_tracks"], folder_id)
+    db.move_tracks_to_folder([data["single_track"]], folder_id)
+
+    main._load_source(folder_id)
+
+    model = main.track_table.model
+    assert model.numbered_rows is True
+    numbers = [
+        model.data(model.index(row, 1)) for row in range(model.rowCount())
+    ]
+    assert numbers == [str(i + 1) for i in range(model.rowCount())]
