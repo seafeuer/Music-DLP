@@ -482,3 +482,131 @@ def test_a_chosen_picture_survives_a_fresh_download(env, monkeypatch):
     assert db.get_track(track_id).cover_path == str(chosen)
     assert looked_up == []
     assert used == [chosen]
+
+
+# ------------------------------------------------- retag instead of re-encode
+
+
+def test_editing_details_rewrites_tags_without_re_encoding(env, monkeypatch):
+    """The audio must survive a metadata edit bit-for-bit."""
+    calls = []
+
+    def fake_embed(path, **kwargs):
+        calls.append((Path(path), kwargs))
+        return True
+
+    monkeypatch.setattr(pipeline_module, "embed_tags", fake_embed)
+
+    out = Path(env["settings"].output_dir) / "MP3"
+    out.mkdir(parents=True, exist_ok=True)
+    song = out / "Song 1.mp3"
+    song.write_bytes(b"audio-bytes")
+    track_id = env["track_ids"][0]
+    env["db"].update_track(
+        track_id, status="converted", mp3_path=str(song), raw_path=None,
+    )
+    env["db"].update_track(track_id, meta_title="Renamed", meta_artist="Artist",
+                           needs_update=1)
+    item = BatchItem(
+        source=env["source"], track=env["db"].get_track(track_id), position=1
+    )
+
+    env["pipeline"].start([item], ["convert"], force=True, retag=True)
+    env["pipeline"].wait(10)
+
+    renamed = out / "Renamed.mp3"
+    assert renamed.read_bytes() == b"audio-bytes"
+    assert not song.exists()
+    assert env["ffmpeg"].calls == []          # nothing was re-encoded
+    assert env["ytdlp"].calls == []           # nothing was downloaded
+    track = env["db"].get_track(track_id)
+    assert track.mp3_path == str(renamed)
+    assert track.status == "converted"
+    assert track.needs_update == 0
+    assert calls and calls[-1][1]["title"] == "Renamed"
+
+
+def test_retag_keeps_the_chosen_cover(env, monkeypatch):
+    seen = {}
+
+    def fake_embed(path, **kwargs):
+        seen.update(kwargs)
+        return True
+
+    monkeypatch.setattr(pipeline_module, "embed_tags", fake_embed)
+
+    out = Path(env["settings"].output_dir) / "MP3"
+    out.mkdir(parents=True, exist_ok=True)
+    song = out / "Song 1.mp3"
+    song.write_bytes(b"audio")
+    cover = env["tmp"] / "cover.jpg"
+    cover.write_bytes(b"picture")
+    track_id = env["track_ids"][0]
+    env["db"].update_track(
+        track_id, status="converted", mp3_path=str(song),
+        cover_path=str(cover), cover_source="custom",
+    )
+    item = BatchItem(
+        source=env["source"], track=env["db"].get_track(track_id), position=1
+    )
+
+    env["pipeline"].start([item], ["convert"], force=True, retag=True)
+    env["pipeline"].wait(10)
+
+    assert Path(seen["cover_path"]) == cover
+
+
+def test_retag_sends_the_song_to_spotify_again(env, monkeypatch):
+    monkeypatch.setattr(
+        pipeline_module, "embed_tags", lambda *args, **kwargs: True
+    )
+    out = Path(env["settings"].output_dir) / "MP3"
+    out.mkdir(parents=True, exist_ok=True)
+    song = out / "Old.mp3"
+    song.write_bytes(b"audio")
+    track_id = env["track_ids"][0]
+    env["db"].update_track(
+        track_id, status="synced", mp3_path=str(song),
+        synced_at="2026-01-01T00:00:00", meta_title="New",
+    )
+
+    # A stale copy of the old name sits in the Spotify folder.
+    spotify_dir = Path(env["settings"].spotify_dir)
+    spotify_dir.mkdir(parents=True, exist_ok=True)
+    (spotify_dir / "Old.mp3").write_bytes(b"old")
+
+    item = BatchItem(
+        source=env["source"], track=env["db"].get_track(track_id), position=1
+    )
+    env["pipeline"].start(
+        [item], ["convert", "sync"], force=True, retag=True
+    )
+    env["pipeline"].wait(10)
+
+    track = env["db"].get_track(track_id)
+    assert Path(track.mp3_path).name == "New.mp3"
+    assert (spotify_dir / "New.mp3").exists()
+    assert not (spotify_dir / "Old.mp3").exists()
+    assert track.status == "synced"
+    assert track.needs_update is False
+
+
+def test_a_song_with_no_file_still_converts_normally(env, monkeypatch):
+    """Retag is only possible when there is something to retag."""
+    monkeypatch.setattr(
+        pipeline_module, "embed_tags", lambda *args, **kwargs: True
+    )
+    track_id = env["track_ids"][0]
+    env["db"].update_track(track_id, needs_update=1)
+    item = BatchItem(
+        source=env["source"], track=env["db"].get_track(track_id), position=1
+    )
+
+    env["pipeline"].start(
+        [item], ["download", "convert"], force=True, retag=True
+    )
+    env["pipeline"].wait(10)
+
+    assert env["ytdlp"].calls == [track_id]
+    assert env["ffmpeg"].calls == ["mp3"]
+    assert env["db"].get_track(track_id).status == "converted"

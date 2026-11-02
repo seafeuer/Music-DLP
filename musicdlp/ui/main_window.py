@@ -1705,6 +1705,7 @@ class MainWindow(QMainWindow):
         *,
         force: bool = False,
         only_synced: bool = False,
+        retag: bool = False,
     ) -> None:
         if self._is_busy():
             self.status.set_idle("A job is already running.")
@@ -1714,7 +1715,7 @@ class MainWindow(QMainWindow):
             for row in rows
         ]
         if not self.ctx.pipeline.start(
-            items, stages, force=force, only_synced=only_synced
+            items, stages, force=force, only_synced=only_synced, retag=retag
         ):
             self.status.set_idle("Could not start the job.")
             return
@@ -2321,14 +2322,26 @@ class MainWindow(QMainWindow):
         if values["update_file"] and updated is not None:
             raw = updated.raw_path
             has_raw = bool(raw and Path(raw).exists())
-            # Re-tagging needs the original audio. When it was cleaned up
-            # after the first conversion, fetch it again rather than failing.
-            stages = ["convert"] if has_raw else ["download", "convert"]
+            # Only the details changed, so the existing file is re-tagged in
+            # place: the audio is not decoded or re-encoded, and nothing is
+            # downloaded again. A song with no file yet still needs the
+            # full download → convert path.
+            has_output = any(
+                Path(p).exists() for p in updated.output_paths
+            )
+            if has_output:
+                stages = ["convert"]
+            elif has_raw:
+                stages = ["convert"]
+            else:
+                stages = ["download", "convert"]
             if updated.synced_at:
                 stages.append("sync")
             row = self.track_table.model.row_for_id(track_id)
             if row is not None:
-                self._start_pipeline([row], stages, force=True)
+                self._start_pipeline(
+                    [row], stages, force=True, retag=True
+                )
                 self.status.set_busy("Updating the song with your new details…")
                 return
 
@@ -2390,9 +2403,13 @@ class MainWindow(QMainWindow):
             )
             return
 
+        # A song whose file exists only needs its tags and name rewritten;
+        # the audio is untouched. Only a song with no file at all has to be
+        # fetched again.
         needs_download = [
             row for row in rows
-            if not (row.track.raw_path and Path(row.track.raw_path).exists())
+            if not any(Path(p).exists() for p in row.track.output_paths)
+            and not (row.track.raw_path and Path(row.track.raw_path).exists())
         ]
         stages = ["convert"]
         if needs_download:
@@ -2400,7 +2417,9 @@ class MainWindow(QMainWindow):
         if any(row.track.synced_at for row in rows):
             stages.append("sync")
 
-        self._start_pipeline(rows, stages, force=True, only_synced=True)
+        self._start_pipeline(
+            rows, stages, force=True, only_synced=True, retag=True
+        )
         self.status.set_busy(
             f"Updating {len(rows)} file{'' if len(rows) == 1 else 's'}…"
         )

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import os
 import random
 import threading
 import time
@@ -180,6 +181,7 @@ class Pipeline(QObject):
         *,
         force: bool = False,
         only_synced: bool = False,
+        retag: bool = False,
     ) -> bool:
         items = list(items)
         stages = [stage for stage in self.STAGES if stage in set(stages)]
@@ -193,7 +195,7 @@ class Pipeline(QObject):
             self._only_synced = only_synced
             self._thread = threading.Thread(
                 target=self._run,
-                args=(items, stages, force),
+                args=(items, stages, force, retag),
                 daemon=True,
                 name="MusicDLP-Pipeline",
             )
@@ -210,7 +212,13 @@ class Pipeline(QObject):
 
     # ------------------------------------------------------------------ run
 
-    def _run(self, items: list[BatchItem], stages: list[str], force: bool) -> None:
+    def _run(
+        self,
+        items: list[BatchItem],
+        stages: list[str],
+        force: bool,
+        retag: bool = False,
+    ) -> None:
         settings = copy.deepcopy(self.settings)
         summary = {
             "downloaded": 0,
@@ -223,7 +231,7 @@ class Pipeline(QObject):
             "stages": stages,
         }
         try:
-            self._execute(items, stages, force, settings, summary)
+            self._execute(items, stages, force, settings, summary, retag)
         except Cancelled:
             summary["cancelled"] = True
             self._mark_cancelled(items)
@@ -255,6 +263,7 @@ class Pipeline(QObject):
         force: bool,
         settings: Settings,
         summary: dict,
+        retag: bool = False,
     ) -> None:
         tracker = _Tracker(self, len(items), len(stages))
         for stage in stages:
@@ -264,7 +273,9 @@ class Pipeline(QObject):
             if stage == "download":
                 self._stage_download(items, settings, tracker, summary, force)
             elif stage == "convert":
-                self._stage_convert(items, settings, tracker, summary, force)
+                self._stage_convert(
+                    items, settings, tracker, summary, force, retag
+                )
             elif stage == "sync":
                 self._stage_sync(items, settings, tracker, summary)
         if self._cancel.is_set():
@@ -429,6 +440,142 @@ class Pipeline(QObject):
             folder_template=folder_template,
         )
 
+    def _retag_existing(
+        self,
+        item: BatchItem,
+        track: Track,
+        settings: Settings,
+        summary: dict,
+    ) -> bool:
+        """Rewrite tags in a file that already exists, without re-encoding.
+
+        Used when nothing but the song's details changed. The file is
+        tagged where it is and then renamed, so the audio stream is
+        exactly what it was before the edit; the old name is remembered so
+        the Spotify copy with the old name can be removed after the new
+        one is delivered.
+
+        Returns False when there is no existing output to work on, in
+        which case the caller converts from the downloaded audio.
+        """
+        album = track.display_album or (
+            item.source.title if item.source.kind == "playlist" else "Singles"
+        )
+        track_no = track.display_track or item.position
+        template = self._filename_template(item.source, settings)
+
+        existing: list[tuple[str, Path]] = []
+        for fmt in settings.formats:
+            path = track.mp3_path if fmt == "mp3" else track.m4a_path
+            if path and Path(path).exists():
+                existing.append((fmt, Path(path)))
+        if not existing:
+            return False
+
+        cover = self._cover_for_write(track, settings)
+
+        for fmt, old_path in existing:
+            if self._cancel.is_set():
+                raise Cancelled()
+
+            stem = render_template(
+                template,
+                title=track.display_title,
+                artist=track.display_artist,
+                album=album,
+                track=track_no,
+                media_id=track.media_id,
+                source=item.source.title,
+            )
+            out_dir = old_path.parent
+
+            if not embed_tags(
+                old_path,
+                title=track.display_title,
+                artist=track.display_artist or "Unknown",
+                album=album,
+                track=track_no,
+                cover_path=cover,
+            ):
+                self.db.update_track(
+                    track.id, status=ERROR,
+                    error=(
+                        f"Could not write the song details into "
+                        f"{old_path.name}."
+                    ),
+                )
+                _record_failure(
+                    summary, track.id,
+                    f"{track.display_title}: could not write its details",
+                )
+                return True
+
+            output = old_path
+            if old_path.stem != stem:
+                output = unique_path(
+                    out_dir, stem, old_path.suffix, fallback_id=track.media_id
+                )
+                try:
+                    os.replace(old_path, output)
+                except OSError as exc:
+                    logger.warning("Could not rename %s: %s", old_path, exc)
+                    output = old_path
+                else:
+                    summary.setdefault("_stale_spotify", []).append(
+                        old_path.name
+                    )
+
+            self.db.update_track(
+                track.id,
+                **({
+                    "mp3_path": str(output)
+                } if fmt == "mp3" else {"m4a_path": str(output)}),
+            )
+            if cover is not None and str(cover) != (track.cover_path or ""):
+                self.db.update_track(track.id, cover_path=str(cover))
+
+        self.db.update_track(
+            track.id,
+            status=CONVERTED,
+            converted_at=_now(),
+            error=None,
+            needs_update=0,
+        )
+        return True
+
+    def _cover_for_write(self, track: Track, settings: Settings) -> Optional[Path]:
+        """The picture to embed in a file that is being written again.
+
+        The same rules as a conversion: a picture the user chose is final,
+        the video's own still is used when they asked for it, the
+        catalogue is consulted only when nobody has decided, and the
+        picture already stored is the last resort.
+        """
+        cover_source = getattr(track, "cover_source", None)
+        cover = Path(track.cover_path) if _reusable_cover(track) else None
+
+        if cover_source == COVER_VIDEO:
+            video = self._video_cover(track)
+            if video is not None:
+                return video
+        elif cover_source is None and settings.ai_find_artwork:
+            album_art = find_cover(
+                track.display_artist,
+                track.display_title,
+                cover_cache_path(track.platform, track.media_id),
+                album=track.display_album,
+                seconds=track.duration,
+            )
+            if album_art is not None:
+                return album_art
+        if cover is None:
+            cover = self._video_cover(track)
+        if cover is None and track.cover_path:
+            stored = Path(track.cover_path)
+            if stored.exists():
+                cover = stored
+        return cover
+
     def _stage_convert(
         self,
         items: list[BatchItem],
@@ -436,6 +583,7 @@ class Pipeline(QObject):
         tracker: _Tracker,
         summary: dict,
         force: bool,
+        retag: bool = False,
     ) -> None:
         for item in items:
             if self._cancel.is_set():
@@ -449,6 +597,16 @@ class Pipeline(QObject):
             # Do not let a later stage overwrite the error that caused the
             # failure, or count the same track twice.
             if track.id in summary.get("_failed_ids", set()):
+                tracker.complete_unit("convert", title, track.id)
+                continue
+
+            # Only the details changed. The audio in the existing file is
+            # already right, so the tags and the name are rewritten and the
+            # sound is left bit-for-bit alone: re-encoding a lossy file
+            # loses quality every time it is done.
+            if retag and self._retag_existing(item, track, settings, summary):
+                summary["converted"] += 1
+                self.track_changed.emit(track.id)
                 tracker.complete_unit("convert", title, track.id)
                 continue
 
