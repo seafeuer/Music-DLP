@@ -9,10 +9,12 @@ from typing import Optional
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, QUrl, Qt, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QApplication, QDialog, QDialogButtonBox, QFileDialog, QFrame,
+    QApplication, QDialog, QFileDialog, QFrame,
     QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QVBoxLayout,
     QWidget,
 )
+
+from musicdlp.ui.dialogs.footer import DialogFooter
 
 from musicdlp.core.config import Settings
 from musicdlp.core.paths import is_writable, start_directory
@@ -245,11 +247,9 @@ class SetupDialog(QDialog):
 
         self.content.addStretch(1)
 
-        buttons = QDialogButtonBox()
-        save = buttons.addButton("Save and close", QDialogButtonBox.AcceptRole)
-        save.setObjectName("primary")
-        save.clicked.connect(self._save)
-        outer.addWidget(buttons)
+        self.footer = DialogFooter(self, cancel_text="Close")
+        self.footer.set_primary("Save and close", self._save)
+        outer.addWidget(self.footer)
 
         self.refresh()
 

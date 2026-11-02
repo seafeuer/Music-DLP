@@ -11,9 +11,11 @@ from typing import Iterable
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDialog, QDialogButtonBox, QHeaderView, QLabel, QMessageBox,
-    QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
+    QDialog, QHeaderView, QLabel, QMessageBox,
+    QTreeWidget, QTreeWidgetItem, QVBoxLayout,
 )
+
+from musicdlp.ui.dialogs.footer import DialogFooter
 
 from musicdlp.core.models import TrackRow, status_label
 
@@ -77,14 +79,11 @@ class DuplicateDialog(QDialog):
         self.tree.itemChanged.connect(lambda *_: self._update_count())
         self._update_count()
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
-        self.remove_button = buttons.addButton(
-            "Remove ticked", QDialogButtonBox.AcceptRole
+        self.footer = DialogFooter(self)
+        self.remove_button = self.footer.set_primary(
+            "Remove ticked", self._accept
         )
-        self.remove_button.setObjectName("primary")
-        buttons.accepted.connect(self._accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        layout.addWidget(self.footer)
 
     # ------------------------------------------------------------------ rows
 

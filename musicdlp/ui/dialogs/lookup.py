@@ -12,10 +12,12 @@ from typing import Iterable, Optional
 
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QDialog, QDialogButtonBox, QHeaderView,
-    QLabel, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem,
+    QAbstractItemView, QCheckBox, QDialog, QHeaderView,
+    QLabel, QMessageBox, QTableWidget, QTableWidgetItem,
     QVBoxLayout,
 )
+
+from musicdlp.ui.dialogs.footer import DialogFooter
 
 from musicdlp.core.models import TrackRow
 from musicdlp.services.metadata_lookup import Lookup, lookup
@@ -101,21 +103,13 @@ class LookupDialog(QDialog):
         self.error_label.hide()
         layout.addWidget(self.error_label)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
-        self.apply_button = buttons.addButton(
-            "Apply selected", QDialogButtonBox.AcceptRole
+        self.footer = DialogFooter(self)
+        self.apply_button = self.footer.set_primary(
+            "Apply selected", self._apply
         )
-        self.apply_button.setObjectName("primary")
         self.apply_button.setEnabled(False)
-        buttons.accepted.connect(self._apply)
-        buttons.rejected.connect(self.reject)
-
-        self.go_button = QPushButton("Look up")
-        self.go_button.setDefault(True)
-        self.go_button.clicked.connect(self._start)
-        buttons.addButton(self.go_button, QDialogButtonBox.ActionRole)
-
-        layout.addWidget(buttons)
+        self.go_button = self.footer.add_action("Look up", self._start)
+        layout.addWidget(self.footer)
 
     # ------------------------------------------------------------------ rows
 

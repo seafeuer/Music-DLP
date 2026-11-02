@@ -5,9 +5,10 @@ from __future__ import annotations
 from typing import Optional
 
 from PySide6.QtWidgets import (
-    QApplication, QDialog, QDialogButtonBox, QFileDialog, QLabel,
-    QPlainTextEdit, QPushButton, QVBoxLayout,
+    QApplication, QDialog, QFileDialog, QLabel, QPlainTextEdit, QVBoxLayout,
 )
+
+from musicdlp.ui.dialogs.footer import DialogFooter
 
 from musicdlp.services.ai_export import ImportedName, parse_reply
 from musicdlp.ui.theme import set_tone
@@ -42,16 +43,10 @@ class AIImportDialog(QDialog):
         set_tone(self.error, "danger")
         layout.addWidget(self.error)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
-        import_button = buttons.addButton("Import", QDialogButtonBox.AcceptRole)
-        import_button.setObjectName("primary")
-        buttons.accepted.connect(self._accept)
-        buttons.rejected.connect(self.reject)
-
-        open_button = QPushButton("Open file…")
-        open_button.clicked.connect(self._open_file)
-        buttons.addButton(open_button, QDialogButtonBox.ActionRole)
-        layout.addWidget(buttons)
+        self.footer = DialogFooter(self)
+        self.footer.add_action("Open file…", self._open_file)
+        self.footer.set_primary("Import", self._accept)
+        layout.addWidget(self.footer)
 
         clipboard = QApplication.clipboard().text()
         if clipboard.strip().startswith(("[", "{")):

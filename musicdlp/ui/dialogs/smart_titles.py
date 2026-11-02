@@ -13,13 +13,15 @@ from typing import Callable, Iterable, Optional
 
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView, QDialog, QDialogButtonBox, QHeaderView, QLabel,
-    QMessageBox, QProgressDialog, QPushButton, QTableWidget,
-    QTableWidgetItem, QVBoxLayout,
+    QAbstractItemView, QDialog, QHeaderView, QLabel,
+    QMessageBox, QTableWidget, QTableWidgetItem, QVBoxLayout,
 )
+
+from musicdlp.ui.dialogs.footer import DialogFooter
 
 from musicdlp.core.models import TrackRow
 from musicdlp.services.ai import AIError, AISettings, friendly_error, suggest_names
+from musicdlp.services.smart_titles import reason_label
 from musicdlp.ui.theme import set_tone
 
 COL_USE = 0
@@ -122,21 +124,15 @@ class SmartTitlesDialog(QDialog):
         if not self.rows:
             self.intro.setText("There are no suggestions to review for this link.")
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
-        self.apply_button = buttons.addButton(
-            "Apply selected", QDialogButtonBox.AcceptRole
+        self.footer = DialogFooter(self)
+        self.apply_button = self.footer.set_primary(
+            "Apply selected", self._apply
         )
-        self.apply_button.setObjectName("primary")
         self.apply_button.setEnabled(bool(self.rows))
-        buttons.accepted.connect(self._apply)
-        buttons.rejected.connect(self.reject)
-
-        self.ai_button = QPushButton()
-        self.ai_button.clicked.connect(self._on_ai_clicked)
-        buttons.addButton(self.ai_button, QDialogButtonBox.ActionRole)
+        self.ai_button = self.footer.add_action("", self._on_ai_clicked)
         self._update_ai_button()
 
-        layout.addWidget(buttons)
+        layout.addWidget(self.footer)
 
     # ------------------------------------------------------------------ rows
 
@@ -171,7 +167,7 @@ class SmartTitlesDialog(QDialog):
             index, COL_ARTIST, QTableWidgetItem(track.smart_artist or "")
         )
 
-        note = QTableWidgetItem(track.smart_reason or "")
+        note = QTableWidgetItem(reason_label(track.smart_reason or ""))
         note.setFlags(Qt.ItemIsEnabled)
         self.table.setItem(index, COL_NOTE, note)
 

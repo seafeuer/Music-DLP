@@ -8,10 +8,11 @@ from typing import Optional
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QDialog, QDialogButtonBox, QFileDialog,
+    QApplication, QCheckBox, QDialog, QFileDialog,
     QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox,
     QVBoxLayout, QWidget,
 )
+from musicdlp.ui.dialogs.footer import DialogFooter
 
 from musicdlp.core.models import COVER_CUSTOM, Track, is_converted
 from musicdlp.core.paths import art_cache_dir
@@ -145,19 +146,27 @@ class TrackDetailsDialog(QDialog):
 
         # What happens on save ------------------------------------------
         converted = is_converted(track.status)
-        self.update_check = QCheckBox("Update the audio file now")
+        self.update_check = QCheckBox("Write these details into the audio file now")
         self.update_check.setChecked(converted)
         self.update_check.setEnabled(converted)
+        self.update_check.setToolTip(
+            "The file's tags and name change; the sound itself is left "
+            "exactly as it is, so nothing is re-encoded"
+        )
         layout.addWidget(self.update_check)
 
         if converted:
             hint = (
-                "Saves your changes and rewrites the file with the new "
-                "details. If the song is already in Spotify, the copy there "
-                "is refreshed too."
+                "Your changes are saved and written into the file. The "
+                "sound is not re-encoded, so it stays exactly as it is. If "
+                "the song is already in Spotify, the copy there is updated "
+                "too."
             )
             if track.sync_error:
-                hint = "Saves your changes and rewrites the file."
+                hint = (
+                    "Your changes are saved and written into the file. The "
+                    "Spotify copy failed last time, so it is sent again."
+                )
         else:
             hint = (
                 "This song has not been downloaded yet. Your details are "
@@ -168,12 +177,9 @@ class TrackDetailsDialog(QDialog):
         hint_label.setWordWrap(True)
         layout.addWidget(hint_label)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
-        save = buttons.addButton("Save", QDialogButtonBox.AcceptRole)
-        save.setObjectName("primary")
-        buttons.accepted.connect(self._save)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        self.footer = DialogFooter(self)
+        self.footer.set_primary("Save", self._save)
+        layout.addWidget(self.footer)
 
         self._update_preview()
         self._refresh_artwork()

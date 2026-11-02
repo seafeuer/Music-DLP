@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (
-    QDialog, QDialogButtonBox, QGridLayout, QLabel, QVBoxLayout,
-)
+from PySide6.QtWidgets import QDialog, QGridLayout, QLabel, QVBoxLayout
+
+from musicdlp.ui.dialogs.footer import DialogFooter
 
 SHORTCUTS: tuple[tuple[str, str], ...] = (
     ("Ctrl+N", "Put the cursor in the link box"),
@@ -61,7 +61,7 @@ class ShortcutsDialog(QDialog):
         grid.setColumnStretch(3, 1)
         layout.addLayout(grid)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Close)
-        buttons.rejected.connect(self.reject)
-        buttons.accepted.connect(self.accept)
-        layout.addWidget(buttons)
+        self.footer = DialogFooter(self, cancel_text="Close")
+        self.footer.set_primary("Close", self.accept)
+        self.footer.cancel_button.hide()
+        layout.addWidget(self.footer)

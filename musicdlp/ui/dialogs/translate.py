@@ -13,10 +13,12 @@ from typing import Callable, Iterable, Optional
 
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+    QAbstractItemView, QCheckBox, QComboBox, QDialog,
     QHBoxLayout, QHeaderView, QLabel, QMessageBox, QPushButton,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
+
+from musicdlp.ui.dialogs.footer import DialogFooter
 
 from musicdlp.core.models import TrackRow
 from musicdlp.services.ai import AIError, AISettings, friendly_error
@@ -128,21 +130,15 @@ class TranslationDialog(QDialog):
         if not self.rows:
             intro.setText("There are no songs to translate here.")
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
-        self.apply_button = buttons.addButton(
-            "Apply selected", QDialogButtonBox.AcceptRole
+        self.footer = DialogFooter(self)
+        self.apply_button = self.footer.set_primary(
+            "Apply selected", self._apply
         )
-        self.apply_button.setObjectName("primary")
         self.apply_button.setEnabled(False)
-        buttons.accepted.connect(self._apply)
-        buttons.rejected.connect(self.reject)
-
-        self.go_button = QPushButton("Translate")
-        self.go_button.setDefault(True)
-        self.go_button.clicked.connect(self._on_translate_clicked)
-        buttons.addButton(self.go_button, QDialogButtonBox.ActionRole)
-
-        layout.addWidget(buttons)
+        self.go_button = self.footer.add_action(
+            "Translate", self._on_translate_clicked
+        )
+        layout.addWidget(self.footer)
 
         self._update_go_button()
         self._update_apply_state()

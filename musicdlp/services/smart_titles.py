@@ -83,6 +83,34 @@ _SMALL_WORDS = {
 }
 
 
+# How a rule's own wording is shown to a person. The stored reason is what
+# lets the app recognise an imported AI reply later, so it is not changed in
+# the database; only the sentence in the review table is.
+_REASON_LABELS = {
+    "artist and title separated": "The title has an artist before a dash",
+    "channel matches the artist": "The channel name is the artist",
+    "upload account prefix removed, artist unknown":
+        "An upload account's name was removed; the artist is not known",
+    "one side was empty": "There was nothing on one side of the dash",
+    "no artist found": "No artist could be worked out",
+    "no title": "No title could be worked out",
+    "title is only noise": "The title was only upload noise",
+}
+
+
+def reason_label(reason: str) -> str:
+    """A stored rule name as a sentence a person can read."""
+    text = (reason or "").strip()
+    if not text:
+        return ""
+    if text in _REASON_LABELS:
+        return _REASON_LABELS[text]
+    # Reasons from a recognised artist name carry the name after the colon.
+    if "known artist" in text:
+        return "An artist name you have used before"
+    return text[:1].upper() + text[1:]
+
+
 @dataclass
 class Suggestion:
     title: str

@@ -54,6 +54,7 @@ from musicdlp.services.ffmpeg import FFmpegService
 from musicdlp.services import gdrive
 from musicdlp.services.spotify import SpotifyService
 from musicdlp.services.ytdlp import YtDlpService
+from musicdlp.ui.dialogs.footer import DialogFooter
 from musicdlp.ui.theme import set_tone
 
 
@@ -88,15 +89,9 @@ class SettingsDialog(QDialog):
         self._build_spotify()
         self._build_advanced()
 
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.Save | QDialogButtonBox.Cancel
-        )
-        buttons.accepted.connect(self._save)
-        buttons.rejected.connect(self.reject)
-        save_button = buttons.button(QDialogButtonBox.Save)
-        if save_button:
-            save_button.setObjectName("primary")
-        layout.addWidget(buttons)
+        self.footer = DialogFooter(self)
+        self.footer.set_primary("Save", self._save)
+        layout.addWidget(self.footer)
 
     # ------------------------------------------------------------------ tabs
 

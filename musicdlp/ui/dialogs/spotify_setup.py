@@ -7,9 +7,11 @@ from typing import Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
+    QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
     QMessageBox, QPushButton, QVBoxLayout,
 )
+
+from musicdlp.ui.dialogs.footer import DialogFooter
 
 from musicdlp.core.paths import is_writable, start_directory
 from musicdlp.services.spotify import SpotifyService
@@ -81,12 +83,9 @@ class SpotifyDialog(QDialog):
         note.setObjectName("muted")
         layout.addWidget(note)
 
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.Save | QDialogButtonBox.Cancel
-        )
-        buttons.accepted.connect(self._save)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        self.footer = DialogFooter(self)
+        self.footer.set_primary("Save", self._save)
+        layout.addWidget(self.footer)
 
     def _browse(self) -> None:
         folder = QFileDialog.getExistingDirectory(

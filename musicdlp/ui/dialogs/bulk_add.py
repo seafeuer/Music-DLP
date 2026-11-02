@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import (
-    QDialog, QDialogButtonBox, QLabel, QPlainTextEdit, QVBoxLayout,
-)
+from PySide6.QtWidgets import QDialog, QLabel, QPlainTextEdit, QVBoxLayout
+
+from musicdlp.ui.dialogs.footer import DialogFooter
 
 from musicdlp.services.urls import split_links
 from musicdlp.ui.theme import set_tone
@@ -31,12 +31,9 @@ class BulkAddDialog(QDialog):
         set_tone(self.error, "danger")
         layout.addWidget(self.error)
 
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
-        )
-        buttons.accepted.connect(self._accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        self.footer = DialogFooter(self)
+        self.footer.set_primary("Add links", self._accept)
+        layout.addWidget(self.footer)
 
     def _accept(self) -> None:
         links = split_links(self.text.toPlainText())

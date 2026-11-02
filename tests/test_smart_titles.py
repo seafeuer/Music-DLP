@@ -118,3 +118,17 @@ def test_collection_channel_detection():
     assert is_collection_channel("Lyrics Archive")
     assert not is_collection_channel("Young Thug")
     assert not is_collection_channel("Mariya Takeuchi")
+
+
+def test_rule_reasons_are_shown_as_plain_english():
+    from musicdlp.services.smart_titles import reason_label
+
+    assert reason_label("artist and title separated") == (
+        "The title has an artist before a dash"
+    )
+    assert reason_label("no artist found") == "No artist could be worked out"
+    assert reason_label("matched a known artist name") == (
+        "An artist name you have used before"
+    )
+    assert reason_label("AI reply") == "AI reply"
+    assert reason_label("") == ""
