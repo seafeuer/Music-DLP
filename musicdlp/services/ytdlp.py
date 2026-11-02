@@ -112,6 +112,11 @@ class YtDlpService:
         })
         if is_item:
             opts["noplaylist"] = True
+            # Without this, yt-dlp reports the empty item as success and
+            # the app adds a row called "twitter video #…" with no length
+            # and no picture, which can never download. Let the extractor
+            # raise, so the user is told the post has no media.
+            opts["ignore_no_formats_error"] = False
 
         logger.info("Reading link: %s", target)
         try:
