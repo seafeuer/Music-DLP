@@ -442,3 +442,21 @@ def test_a_stored_still_can_be_used_when_the_url_is_gone(qapp, tmp_path):
     assert dialog.result_values["cover_path"] == str(still)
     assert dialog.result_values["cover_changed"] is True
     db.close()
+
+
+def test_switching_mode_leaves_no_stale_action_buttons(window):
+    """Old buttons stayed visible for a frame and painted over the new ones."""
+    main, _db, _ids = window
+    main.mode_combo.setCurrentIndex(1)   # Pro: three buttons
+    qtbot = None
+    first = [
+        main.action_layout.itemAt(i).widget()
+        for i in range(main.action_layout.count())
+    ]
+    assert len(first) == 3
+
+    main.mode_combo.setCurrentIndex(0)   # Easy: one button
+    assert main.action_layout.count() == 1
+    # The Pro buttons must be hidden at once, not merely queued for deletion.
+    for button in first:
+        assert button.isHidden()

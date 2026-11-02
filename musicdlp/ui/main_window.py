@@ -16,7 +16,8 @@ from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QDialog, QFileDialog, QHBoxLayout, QInputDialog,
     QLabel, QLineEdit, QMainWindow, QMessageBox, QPushButton, QScrollArea,
-    QSplitter, QStyle, QSystemTrayIcon, QToolButton, QVBoxLayout, QWidget,
+    QSizePolicy, QSplitter, QStyle, QSystemTrayIcon, QToolButton,
+    QVBoxLayout, QWidget,
 )
 
 from musicdlp import __version__
@@ -410,14 +411,14 @@ class MainWindow(QMainWindow):
         )
         self.search_edit.textChanged.connect(self._on_global_search)
         work_row.addWidget(self.search_edit, 1)
-        # Keeps the primary action at the right edge instead of stretching
-        # it across whatever space the search box leaves.
-        work_row.addStretch(1)
 
         self.action_area = QWidget()
         self.action_layout = QHBoxLayout(self.action_area)
         self.action_layout.setContentsMargins(0, 0, 0, 0)
         self.action_layout.setSpacing(6)
+        self.action_area.setSizePolicy(
+            QSizePolicy.Minimum, QSizePolicy.Fixed
+        )
         work_row.addWidget(self.action_area)
 
         self.more_button = QToolButton()
@@ -1430,10 +1431,20 @@ class MainWindow(QMainWindow):
     # --------------------------------------------------------------- actions
 
     def _update_actions(self) -> None:
+        """Rebuild the buttons for the selection and mode.
+
+        The old buttons are hidden before they are deleted, not only
+        queued for deletion: a widget scheduled with deleteLater is still
+        painted until the event loop returns, so for one frame the new
+        buttons and the old ones occupied the same space and painted over
+        each other.
+        """
         while self.action_layout.count():
             item = self.action_layout.takeAt(0)
             widget = item.widget()
             if widget:
+                widget.hide()
+                widget.setParent(None)
                 widget.deleteLater()
 
         count = len(self._checked)
