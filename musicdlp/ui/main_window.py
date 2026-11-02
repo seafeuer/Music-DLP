@@ -293,13 +293,13 @@ class MainWindow(QMainWindow):
         self.sidebar = SourceListWidget()
         self.track_table = TrackTableWidget()
         self.inspector = Inspector(self.ctx.thumbnails)
-        self.inspector.setMinimumWidth(300)
+        self.inspector.setMinimumWidth(280)
         inspector_scroll = QScrollArea()
         inspector_scroll.setWidgetResizable(True)
         inspector_scroll.setFrameShape(QScrollArea.NoFrame)
         inspector_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         inspector_scroll.setWidget(self.inspector)
-        inspector_scroll.setMinimumWidth(320)
+        inspector_scroll.setMinimumWidth(300)
         self.inspector_scroll = inspector_scroll
 
         self.splitter.addWidget(self.sidebar)
@@ -3115,7 +3115,7 @@ class MainWindow(QMainWindow):
             return
         width = self.width()
         if width < 1200:
-            self.splitter.setSizes([200, max(420, width - 200 - 300), 300])
+            self.splitter.setSizes([200, max(300, width - 200 - 290), 290])
         elif width < 1600:
             self.splitter.setSizes([220, max(520, width - 220 - 340), 340])
         else:
