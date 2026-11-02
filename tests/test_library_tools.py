@@ -787,6 +787,69 @@ def test_a_removed_duplicate_can_be_put_back(window):
     )] == data["tracks"]
 
 
+def test_removing_a_song_with_kept_files_forgets_it_and_undo_restores_it(
+    window, monkeypatch
+):
+    """A removed song used to linger as an invisible "Unlinked" row."""
+    main, db, data = window
+    track_id = data["tracks"][0]
+
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        staticmethod(lambda *args, **kwargs: QMessageBox.No),
+    )
+    main._remove_track(track_id)
+
+    assert db.get_track(track_id) is None
+    assert track_id not in {row.track.id for row in db.get_all_track_rows()}
+
+    main._undo_last()
+
+    assert db.get_track(track_id) is not None
+    assert [row.track.id for row in db.get_tracks_for_source(
+        data["playlist"]
+    )] == data["tracks"]
+
+
+def test_removing_a_link_with_kept_files_removes_its_songs_and_undo_restores(
+    window, monkeypatch
+):
+    main, db, data = window
+    playlist = data["playlist"]
+
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        staticmethod(lambda *args, **kwargs: QMessageBox.No),
+    )
+    main._remove_source(playlist)
+
+    assert db.get_source(playlist) is None
+    assert db.get_track(data["tracks"][0]) is None
+    assert db.count_tracks() == 0
+
+    main._undo_last()
+
+    assert db.get_source(playlist) is not None
+    assert [row.track.id for row in db.get_tracks_for_source(playlist)] == \
+        data["tracks"]
+
+
+def test_deleting_a_link_keeps_songs_another_link_still_holds(library):
+    from musicdlp.services.library import LibraryService
+
+    db, data = library
+    service = LibraryService(db, Settings(), ytdlp=None)
+    other = db.get_source_by_url("https://www.youtube.com/watch?v=dup1")
+
+    service.delete_source(other.id, delete_files=False)
+
+    # The duplicate lived only in the removed link; the playlist's songs
+    # are still linked there and must survive.
+    assert db.get_track(data["duplicate"]) is None
+    assert db.get_track(data["tracks"][0]) is not None
+    assert len(db.get_tracks_for_source(data["source"])) == 2
+
+
 def test_undoing_a_rename_brings_back_the_suggestion(window):
     main, db, data = window
     track_id = data["tracks"][0]

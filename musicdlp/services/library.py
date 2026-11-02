@@ -205,16 +205,22 @@ class LibraryService:
     # ------------------------------------------------------------- delete
 
     def delete_source(self, source_id: int, *, delete_files: bool = False) -> None:
+        """Remove a link. Songs that only it held leave the library too.
+
+        ``delete_files`` decides whether their audio is removed from disk.
+        With it off the files stay, which is what "keep the files" means —
+        the library rows still go, or the songs would remain invisible
+        entries that no link lists and no refresh can bring back.
+        """
         rows = self.db.get_tracks_for_source(source_id)
         self.db.delete_source(source_id)
 
-        if not delete_files:
-            return
-
         for row in rows:
-            if self.db.count_track_links(row.track.id) == 0:
+            if self.db.count_track_links(row.track.id) != 0:
+                continue
+            if delete_files:
                 self._delete_files(row.track)
-                self.db.delete_track(row.track.id)
+            self.db.delete_track(row.track.id)
 
     def delete_track(
         self,

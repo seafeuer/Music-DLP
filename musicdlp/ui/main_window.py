@@ -906,6 +906,53 @@ class MainWindow(QMainWindow):
             self.db.restore_track(track)
             self.db.restore_track_links(track.id, links)
 
+    def _snapshot_removal(self, track_ids) -> tuple[list, list]:
+        """Everything needed to put these songs back after a removal.
+
+        A one-song link disappears with its song, so it is part of the
+        snapshot too; restoring the song alone would leave it unlinked.
+        """
+        snapshot = []
+        doomed = []
+        for track_id in track_ids:
+            track = self.db.get_track(int(track_id))
+            if track is None:
+                continue
+            links = self.db.track_links(track.id)
+            snapshot.append((track, links))
+            for source_id, _position in links:
+                source = self.db.get_source(source_id)
+                if (
+                    source is not None
+                    and source.kind == "item"
+                    and self.db.count_source_tracks(source_id) <= 1
+                    and source not in doomed
+                ):
+                    doomed.append(source)
+        return snapshot, doomed
+
+    def _restore_removal(self, snapshot, doomed=()) -> None:
+        for source in doomed:
+            self.db.restore_source(source)
+        self._restore_tracks(snapshot)
+
+    def _snapshot_source(self, source_id: int) -> tuple:
+        """A link and every song it holds, for undoing its removal."""
+        source = self.db.get_source(source_id)
+        rows = []
+        if source is not None:
+            for row in self.db.get_tracks_for_source(source_id):
+                rows.append(
+                    (row.track, self.db.track_links(row.track.id))
+                )
+        return source, rows
+
+    def _restore_source(self, snapshot) -> None:
+        source, rows = snapshot
+        if source is not None:
+            self.db.restore_source(source)
+        self._restore_tracks(rows)
+
     def _rename_folder(self, folder_id: int) -> None:
         if self._blocked_by_job():
             return
@@ -2462,13 +2509,21 @@ class MainWindow(QMainWindow):
             return
         delete_files = reply == QMessageBox.Yes
         if not delete_files:
-            # With the files kept, the row survives and the removal can be
-            # undone. Deleting files cannot be undone, so no promise there.
-            self._push_link_undo("Removing a song", [track_id])
+            # With the files kept, the row can be put back exactly as it
+            # was. Deleting files cannot be undone, so no promise there.
+            snapshot, doomed = self._snapshot_removal([track_id])
+            self._push_undo(
+                "Removing a song",
+                lambda: self._restore_removal(snapshot, doomed),
+            )
         self.ctx.library.delete_track(
-            track_id, delete_files=delete_files
+            track_id, delete_files=delete_files, forget=True
         )
         self._refresh_sources(self._current_source_id)
+        self.status.set_idle(
+            "Removed the song from the library."
+            + (" Its files were deleted." if delete_files else " Its files were kept.")
+        )
 
     def _remove_source(self, source_id: int) -> None:
         if self._blocked_by_job():
@@ -2508,12 +2563,25 @@ class MainWindow(QMainWindow):
         )
         if reply == QMessageBox.Cancel:
             return
+        delete_files = reply == QMessageBox.Yes
+        if not delete_files:
+            # The songs that only this link held leave the library with it.
+            # Their rows are remembered so the whole removal can be undone.
+            snapshot = self._snapshot_source(source_id)
+            self._push_undo(
+                "Removing a link",
+                lambda: self._restore_source(snapshot),
+            )
         self.ctx.library.delete_source(
-            source_id, delete_files=(reply == QMessageBox.Yes)
+            source_id, delete_files=delete_files
         )
         if self._current_source_id == source_id:
             self._current_source_id = None
         self._refresh_sources()
+        self.status.set_idle(
+            f"Removed “{source.title}” from the library."
+            + (" Its files were deleted." if delete_files else " Its files were kept.")
+        )
 
     def _reveal_track(self, track_id: int) -> None:
         track = self.db.get_track(track_id)

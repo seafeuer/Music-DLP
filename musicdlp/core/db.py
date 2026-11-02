@@ -957,7 +957,12 @@ class Database:
         return groups
 
     def unlink_track_everywhere(self, track_id: int) -> None:
-        """Remove a track from every source and refresh those counts."""
+        """Remove a track from every source and refresh those counts.
+
+        A one-song entry that is left with nothing is deleted as well: it
+        would otherwise stay in the library as an empty section with no
+        song and no explanation.
+        """
         conn = self._conn()
         with conn:
             rows = conn.execute(
@@ -968,13 +973,7 @@ class Database:
             conn.execute(
                 "DELETE FROM source_tracks WHERE track_id = ?", (track_id,)
             )
-            for source_id in source_ids:
-                conn.execute(
-                    "UPDATE sources SET item_count = "
-                    "(SELECT COUNT(*) FROM source_tracks WHERE source_id = ?) "
-                    "WHERE id = ?",
-                    (source_id, source_id),
-                )
+            self._prune_and_recount(conn, source_ids)
 
     # -------------------------------------------------------------- settings
 
