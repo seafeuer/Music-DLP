@@ -65,14 +65,14 @@ class Inspector(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(7)
 
         heading = QLabel("Song details")
         heading.setObjectName("sectionTitle")
         layout.addWidget(heading)
 
         self.artwork = QLabel("No picture")
-        self.artwork.setFixedSize(150, 150)
+        self.artwork.setFixedSize(140, 140)
         self.artwork.setAlignment(Qt.AlignCenter)
         self.artwork.setObjectName("muted")
         self.artwork.setStyleSheet(
@@ -274,7 +274,7 @@ class Inspector(QWidget):
             return
         self.artwork.setText("")
         self.artwork.setPixmap(
-            pixmap.scaled(150, 150, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            pixmap.scaled(140, 140, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         )
 
     def _on_artwork(self, track_id: int, path: str) -> None:

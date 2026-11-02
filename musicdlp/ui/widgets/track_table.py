@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 
 from musicdlp.core.models import ERROR, NEW, Source, Track, TrackRow
 from musicdlp.ui.delegates import ProgressDelegate, StatusDelegate
+from musicdlp.ui.widgets.elided_label import ElidedLabel
 from musicdlp.ui.widgets.search_box import SearchBox
 from musicdlp.ui.models.track_model import (
     COL_ARTIST, COL_CHECK, COL_DURATION, COL_FORMAT, COL_POSITION,
@@ -123,9 +124,11 @@ class TrackTableWidget(QWidget):
         header_row = QHBoxLayout()
         title_box = QVBoxLayout()
         title_box.setSpacing(1)
-        self.title_label = QLabel("Your library")
+        self.title_label = ElidedLabel("Your library")
         self.title_label.setStyleSheet("font-size: 17px; font-weight: 700;")
-        self.subtitle_label = QLabel("Paste a link in the bar above and press Add")
+        self.subtitle_label = ElidedLabel(
+            "Paste a link in the bar above and press Add"
+        )
         self.subtitle_label.setObjectName("muted")
         title_box.addWidget(self.title_label)
         title_box.addWidget(self.subtitle_label)
