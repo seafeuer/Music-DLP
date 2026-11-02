@@ -410,6 +410,9 @@ class MainWindow(QMainWindow):
         )
         self.search_edit.textChanged.connect(self._on_global_search)
         work_row.addWidget(self.search_edit, 1)
+        # Keeps the primary action at the right edge instead of stretching
+        # it across whatever space the search box leaves.
+        work_row.addStretch(1)
 
         self.action_area = QWidget()
         self.action_layout = QHBoxLayout(self.action_area)
