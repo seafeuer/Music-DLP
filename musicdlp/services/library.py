@@ -17,7 +17,12 @@ from musicdlp.core.models import (
     is_downloaded,
 )
 from musicdlp.core.paths import art_cache_dir
-from musicdlp.services.artwork import cover_cache_path, find_cover
+from musicdlp.services.artwork import (
+    MIN_STORED_SIZE,
+    TARGET_COVER_SIZE,
+    cover_cache_path,
+    find_cover,
+)
 from musicdlp.services.filenames import safe_stem
 from musicdlp.services.smart_titles import suggest as smart_suggest
 from musicdlp.services.tagging import replace_cover
@@ -165,6 +170,14 @@ class LibraryService:
         if stored is None:
             return False
 
+        # A song the user has named is theirs. Fetching its link again must
+        # not replace the name, and it must not quietly swap in a new
+        # suggestion either: for "BANKROLL - UTOPIA LEAK..." that would
+        # offer the parser's backwards reading beside the corrected name.
+        untouched = stored.meta_title is None and stored.meta_artist is None
+        if not untouched:
+            return False
+
         suggestion = smart_suggest(
             track.title,
             channel=track.uploader,
@@ -181,14 +194,13 @@ class LibraryService:
             "smart_reason": suggestion.reason,
         }
 
-        untouched = stored.meta_title is None and stored.meta_artist is None
-        if suggestion.confident and untouched:
+        if suggestion.confident:
             update["meta_title"] = suggestion.title
             if suggestion.artist:
                 update["meta_artist"] = suggestion.artist
 
         self.db.update_track(track_id, **update)
-        return bool(suggestion.confident and untouched)
+        return bool(suggestion.confident)
 
     # ------------------------------------------------------------- delete
 
@@ -290,6 +302,50 @@ class LibraryService:
             smart_reason=None,
         )
 
+    def ensure_thumbnail(self, track_id: int):
+        """Fill in a song's missing picture URL and length from its link.
+
+        A track added by an older build — or one whose post was read while
+        the site returned no media details — can be stored without a
+        thumbnail URL. The video button was then never offered, and the
+        cover lookup had nothing to fall back to. Reading the link again
+        repairs that in place.
+
+        Returns the refreshed track, or the unchanged one when there is
+        nothing to repair or the link cannot be read.
+        """
+        track = self.db.get_track(track_id)
+        if track is None or self.ytdlp is None:
+            return track
+        if track.thumbnail_url and track.duration:
+            return track
+        if not track.url:
+            return track
+
+        try:
+            extracted = self.ytdlp.extract(track.url)
+        except Exception as exc:  # noqa: BLE001 - a repair must never break
+            logger.debug("Could not read %s for its picture: %s", track.url, exc)
+            return track
+        if not extracted.tracks:
+            return track
+        if len(extracted.tracks) != 1:
+            # A link that turned out to be a playlist must not give this
+            # song the first entry's picture.
+            return track
+
+        found = extracted.tracks[0]
+        updates: dict = {}
+        if not track.thumbnail_url and found.thumbnail_url:
+            updates["thumbnail_url"] = found.thumbnail_url
+        if not track.duration and found.duration:
+            updates["duration"] = found.duration
+        if not track.description and found.description:
+            updates["description"] = found.description
+        if updates:
+            self.db.update_track(track_id, **updates)
+        return self.db.get_track(track_id)
+
     def refresh_cover(
         self, track_id: int, *, thumbnails=None
     ) -> str:
@@ -319,6 +375,11 @@ class LibraryService:
         ]
         if not files:
             return "skipped"
+
+        # A song stored without its picture URL (an older build, or a post
+        # read before the site published the media details) has nothing to
+        # fall back to. Repair that before looking, so the still can be found.
+        track = self.ensure_thumbnail(track_id) or track
 
         artist = track.display_artist
         title = track.display_title
@@ -363,6 +424,69 @@ class LibraryService:
                 replace_cover(copy, found)
 
         self.db.update_track(track_id, cover_path=str(found))
+        return "updated"
+
+    def apply_video_cover(self, track_id: int, thumbnails=None) -> str:
+        """Put the upload's own picture into the files as the cover.
+
+        Unlike ``refresh_cover`` this never consults the catalogues: the
+        point is the picture the uploader published, on SoundCloud or
+        YouTube. Only the picture is rewritten, so the audio is untouched.
+
+        Returns ``updated``, ``unchanged``, ``skipped``, ``kept`` or
+        ``error``.
+        """
+        track = self.db.get_track(track_id)
+        if track is None:
+            return "error"
+        if thumbnails is None:
+            return "error"
+
+        files = [
+            Path(path) for path in (track.mp3_path, track.m4a_path)
+            if path and Path(path).exists()
+        ]
+        if not files:
+            return "skipped"
+
+        # A post stored before its picture URL was published has none to
+        # fetch. Read the link again first, the same as Fix covers does.
+        track = self.ensure_thumbnail(track_id) or track
+
+        from musicdlp.services.thumbnails import youtube_fallbacks
+
+        fallbacks = (
+            youtube_fallbacks(track.media_id)
+            if track.platform == "youtube" else None
+        )
+        found = thumbnails.fetch(
+            track.platform,
+            track.media_id,
+            track.thumbnail_url,
+            fallbacks,
+            refresh=True,
+        )
+        if found is None:
+            return "unchanged"
+
+        wrote = False
+        for path in files:
+            if replace_cover(path, found):
+                wrote = True
+        if not wrote:
+            return "error"
+
+        for path in files:
+            copy = self.settings.spotify_path / path.name
+            if copy.exists() and copy != path:
+                replace_cover(copy, found)
+
+        self.db.update_track(
+            track_id,
+            cover_path=str(found),
+            cover_source=COVER_VIDEO,
+            needs_update=0,
+        )
         return "updated"
 
     def relink_from_folder(self, folder: Path) -> dict:
@@ -443,8 +567,15 @@ class LibraryService:
             image = Image.open(source)
             if image.mode != "RGB":
                 image = image.convert("RGB")
+            # Keep the picture at the same size the automatic covers use.
+            # It used to be forced down to 640 px, so choosing a sharp
+            # 1400 px picture in Edit details still left a soft cover in
+            # the file. A smaller picture is not enlarged here: that would
+            # only add blur.
+            edge = min(image.size)
+            target = min(TARGET_COVER_SIZE, max(MIN_STORED_SIZE, edge))
             image = ImageOps.fit(
-                image, (640, 640),
+                image, (target, target),
                 method=Image.Resampling.LANCZOS,
                 centering=(0.5, 0.5),
             )
@@ -467,18 +598,29 @@ class LibraryService:
         return destination
 
     def restore_video_cover(self, track_id: int) -> None:
-        """Drop a custom cover so the video's own picture is used.
+        """Use the upload's own picture instead of a chosen one.
 
         The choice is recorded, not just the missing path: a conversion
         would otherwise look for catalogue art again and quietly put back
-        the picture the user just rejected.
+        the picture the user just rejected. A video still that is already
+        on disk is kept as the fallback for when the site no longer serves
+        the picture; a catalogue cover or a custom picture is dropped.
         """
         track = self.db.get_track(track_id)
         if track is None:
             return
+        # Keep a video still that is already on disk as a fallback for
+        # when the upload's picture can no longer be fetched. A catalogue
+        # picture is dropped: it is the artwork the user rejected, and
+        # keeping it would put the wrong cover back.
+        stored = None
+        if track.cover_path and Path(track.cover_path).exists():
+            name = Path(track.cover_path).name
+            if not name.startswith(("album_", "custom_")):
+                stored = track.cover_path
         self.db.update_track(
             track_id,
-            cover_path=None,
+            cover_path=stored,
             cover_source=COVER_VIDEO,
             needs_update=1 if is_converted(track.status) else 0,
         )

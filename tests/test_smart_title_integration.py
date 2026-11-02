@@ -124,6 +124,58 @@ def test_manual_edits_are_never_overwritten(library):
     assert track.meta_artist == "My Artist"
 
 
+def test_a_refresh_does_not_replace_a_corrected_suggestion(library):
+    """Re-reading the link must not offer the parser's backwards reading.
+
+    "BANKROLL - UTOPIA LEAK TRAVIS SCOTT..." is read as title "Utopia
+    Leak..." by artist "Bankroll" — backwards. Once the song has been
+    corrected, a refresh should leave both the name and its suggestion
+    alone rather than putting that reading back on screen.
+    """
+    service, db, _settings = library
+    _add(service, [
+        ("vid8",
+         "BANKROLL - UTOPIA LEAK TRAVIS SCOTT BEST VERSION INTRO/OUTRO",
+         "SHORTY"),
+    ])
+    track = db.get_track_by_media("youtube", "vid8")
+    service.set_metadata(track.id, title="Bankroll", artist="Travis Scott")
+    db.update_track(
+        track.id, smart_title="Bankroll", smart_artist="Travis Scott",
+        smart_confidence=0.9,
+    )
+
+    _add(service, [
+        ("vid8",
+         "BANKROLL - UTOPIA LEAK TRAVIS SCOTT BEST VERSION INTRO/OUTRO",
+         "SHORTY"),
+    ])
+
+    track = db.get_track_by_media("youtube", "vid8")
+    assert track.meta_title == "Bankroll"
+    assert track.meta_artist == "Travis Scott"
+    assert track.smart_title == "Bankroll"
+    assert track.smart_artist == "Travis Scott"
+    # The corrected song is not offered for review again.
+    assert not track.has_suggestion
+
+
+def test_an_imported_chatbot_reply_is_still_offered(library):
+    """A reply the user asked for must be reviewable, even after an edit."""
+    service, db, _settings = library
+    _add(service, [("vid9", "DRAKE - AT THE GATES", "MuddyBeats")])
+    track = db.get_track_by_media("youtube", "vid9")
+    service.set_metadata(track.id, title="My Own Title", artist="My Artist")
+
+    service.set_suggestion(
+        track.id, "The Better Name", "The Better Artist", 0.9, "AI reply"
+    )
+
+    track = db.get_track_by_media("youtube", "vid9")
+    assert track.has_suggestion
+    assert track.smart_title == "The Better Name"
+
+
 def test_setting_off_disables_suggestions(library):
     service, db, settings = library
     settings.smart_titles = False

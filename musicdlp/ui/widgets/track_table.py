@@ -373,7 +373,14 @@ class TrackTableWidget(QWidget):
             return
         total = len(self.model.rows)
         checked = len(self.model.checked)
-        bits = [self.source.uploader or "Unknown channel", f"{total} tracks"]
+        if self.source.is_folder:
+            bits = ["Folder", f"{total} song{'' if total == 1 else 's'}"]
+        elif self.source.is_all:
+            bits = [self.source.uploader or "All songs", f"{total} tracks"]
+        else:
+            bits = [
+                self.source.uploader or "Unknown channel", f"{total} tracks"
+            ]
         if checked:
             bits.append(f"{checked} selected")
         self.subtitle_label.setText(" · ".join(bits))

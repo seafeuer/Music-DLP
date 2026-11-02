@@ -100,6 +100,9 @@ TRACK_UPDATABLE = {
     "downloaded_at", "converted_at", "synced_at", "sync_error",
     "needs_update", "smart_title", "smart_artist", "smart_confidence",
     "smart_reason", "duration", "cover_source",
+    # The media details can be repaired from the link later (an older
+    # entry may have been stored before the site published them).
+    "thumbnail_url", "description",
 }
 
 SOURCE_UPDATABLE = {
@@ -560,10 +563,21 @@ class Database:
                         excluded.source_index, tracks.source_index
                     ),
                     title = excluded.title,
-                    uploader = excluded.uploader,
-                    duration = excluded.duration,
-                    thumbnail_url = excluded.thumbnail_url,
-                    description = excluded.description
+                    -- A refresh that could not read one of these must not
+                    -- erase what an earlier read stored. Without the
+                    -- COALESCE, a post whose media metadata came back empty
+                    -- lost its picture URL and length, and the song could
+                    -- never use its own thumbnail again.
+                    uploader = COALESCE(excluded.uploader, tracks.uploader),
+                    duration = COALESCE(
+                        NULLIF(excluded.duration, 0), tracks.duration
+                    ),
+                    thumbnail_url = COALESCE(
+                        excluded.thumbnail_url, tracks.thumbnail_url
+                    ),
+                    description = COALESCE(
+                        excluded.description, tracks.description
+                    )
                 """,
                 (platform, media_id, url, source_index, title, uploader,
                  duration, thumbnail_url, description),

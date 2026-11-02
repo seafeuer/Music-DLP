@@ -64,37 +64,72 @@ def _wait_for_turn() -> None:
         _last_call = time.monotonic()
 
 
+def _main_artist_for_search(text: str) -> str:
+    """The first name in a credit, for a second, narrower search.
+
+    MusicBrainz stores a release under the artist it is filed under, and
+    its ``artist:`` field does not match "Drake, Lil Uzi Vert". The full
+    credit is searched first, so a group named "Earth, Wind & Fire" still
+    works; this is only the fallback when that finds nothing.
+    """
+    parts = [part.strip() for part in (text or "").split(",") if part.strip()]
+    return parts[0] if parts else ""
+
+
+def _request_recordings(query: str, official: bool) -> list[dict]:
+    """Ask MusicBrainz once, retrying a busy answer."""
+    if official:
+        # Without this, the top hits are often bootleg live recordings,
+        # because those are what the index happens to rank highest.
+        query = f"{query} AND status:official"
+    params = {"query": query, "fmt": "json", "limit": 10}
+
+    for attempt in (0, 1):
+        _wait_for_turn()
+        try:
+            response = requests.get(
+                SEARCH_URL,
+                params=params,
+                headers={"User-Agent": USER_AGENT},
+                timeout=15,
+            )
+        except requests.exceptions.RequestException as exc:
+            logger.debug("MusicBrainz lookup failed: %s", exc)
+            return []
+        if response.status_code in (429, 503) and attempt == 0:
+            # The public server is rate-limited or briefly overloaded. One
+            # short pause usually clears it; reporting "not found" while it
+            # is busy is what made songs look absent from the catalogue.
+            logger.info("MusicBrainz is busy; trying once more")
+            time.sleep(2.0)
+            continue
+        if response.status_code >= 400:
+            logger.info("MusicBrainz answered %s", response.status_code)
+            return []
+        try:
+            data = response.json()
+        except ValueError:
+            return []
+        return list(data.get("recordings") or [])
+    return []
+
+
 def _search(artist: str, title: str, *, official: bool = False) -> list[dict]:
     query = [f'recording:"{title}"']
     if artist:
         query.append(f'artist:"{artist}"')
-    if official:
-        # Without this, the top hits are often bootleg live recordings,
-        # because those are what the index happens to rank highest.
-        query.append("status:official")
-    params = {
-        "query": " AND ".join(query),
-        "fmt": "json",
-        "limit": 10,
-    }
-    _wait_for_turn()
-    try:
-        response = requests.get(
-            SEARCH_URL,
-            params=params,
-            headers={"User-Agent": USER_AGENT},
-            timeout=15,
-        )
-    except requests.exceptions.RequestException as exc:
-        logger.debug("MusicBrainz lookup failed: %s", exc)
-        return []
-    if response.status_code >= 400:
-        return []
-    try:
-        data = response.json()
-    except ValueError:
-        return []
-    return list(data.get("recordings") or [])
+    recordings = _request_recordings(" AND ".join(query), official)
+
+    # "Drake, Lil Uzi Vert" does not match the release filed under Drake.
+    # Try the main credit only when the full one found nothing, so a group
+    # whose name contains a comma is not split unnecessarily.
+    if not recordings and artist:
+        main = _main_artist_for_search(artist)
+        if main and main.lower() != artist.strip().lower():
+            recordings = _request_recordings(
+                f'recording:"{title}" AND artist:"{main}"', official
+            )
+    return recordings
 
 
 def _artist_of(recording: dict) -> str:
@@ -106,6 +141,40 @@ def _artist_of(recording: dict) -> str:
             if name:
                 names.append(str(name))
     return ", ".join(names)
+
+
+def _credit_parts(text: str) -> list[str]:
+    """The separate names in an artist credit.
+
+    "Kanye West, Nicki Minaj & Ty Dolla $ign" is three names; the release
+    is filed under the first one, and a feature must not stop a match.
+    """
+    import re
+
+    parts = re.split(
+        r"\s*(?:,|&|/|\bfeat\.?|\bft\.?|\bfeaturing\b|\bwith\b|\sx\s)\s*",
+        text or "",
+        flags=re.IGNORECASE,
+    )
+    return [part.strip() for part in parts if part.strip()]
+
+
+def _same_main_artist(requested: str, credited: str) -> bool:
+    """Whether the catalogue credits the artist the song belongs to.
+
+    Only the main artist is compared, so "Kanye West, Nicki Minaj" matches
+    a release credited to Kanye West alone. A different person with a
+    similar name does not: "Drake" must never match "Christopher Drake",
+    which is what gave an unreleased Drake song the Wonder Woman
+    soundtrack's album and track number.
+    """
+    wanted = _credit_parts(requested)
+    found = {
+        tuple(_artist_tokens(part)) for part in _credit_parts(credited)
+    }
+    if not wanted or not found:
+        return True
+    return tuple(_artist_tokens(wanted[0])) in found
 
 
 def _release_candidates(recording: dict) -> list[dict]:
@@ -280,6 +349,16 @@ def _lookup_once(
             score = 0
 
         credited = _artist_of(recording) or artist
+        # A song the catalogue credits to someone else is a different
+        # song. Ranking it lower is not enough: when it is the only hit,
+        # it was still offered and ticked, giving a song another artist's
+        # album and number. The album the user already named is the one
+        # exception — that is a deliberate choice, not a guess.
+        if artist and not _same_main_artist(artist, credited):
+            named_album = _clean(album).lower()
+            release_title = _clean(release.get("title", "")).lower()
+            if not named_album or release_title != named_album:
+                continue
         date = str(release.get("date") or "")
         result = Lookup(
             artist=credited,

@@ -255,6 +255,70 @@ def test_cancellation(env):
         )
 
 
+def test_an_update_run_does_not_download_a_song_it_already_has(env):
+    """Update files forces a rewrite, not a second download.
+
+    When one song in the batch needed a fresh download, the force flag
+    used to make the download stage fetch every other song again too.
+    """
+    kept = env["tmp"] / "kept-vid1.webm"
+    kept.write_bytes(b"already downloaded")
+    env["db"].update_track(
+        env["track_ids"][0], raw_path=str(kept), status="downloaded"
+    )
+
+    summary = _summary()
+    env["pipeline"]._execute(
+        env["items"], ["download", "convert"], True,
+        env["settings"], summary,
+    )
+
+    # Only the song without a download was fetched.
+    assert env["ytdlp"].calls == [env["track_ids"][1]]
+    assert summary["skipped"] == 1
+
+
+def test_conversion_keeps_the_cover_it_already_had(env, monkeypatch):
+    """A lookup with no answer must not strip the existing picture."""
+    used = _covers(monkeypatch)
+    monkeypatch.setattr(
+        pipeline_module, "find_cover", lambda *args, **kwargs: None
+    )
+    env["pipeline"].thumbnails = FakeThumbnails()  # no video still either
+
+    track_id = env["track_ids"][0]
+    stored = env["tmp"] / "album_youtube_vid1_640.jpg"
+    stored.write_bytes(b"the old cover")
+    raw = env["tmp"] / "raw-vid1.webm"
+    raw.write_bytes(b"raw")
+    env["db"].update_track(
+        track_id, raw_path=str(raw), cover_path=str(stored),
+        status="downloaded",
+    )
+
+    env["pipeline"]._execute(
+        [env["items"][0]], ["convert"], True, env["settings"], _summary()
+    )
+
+    assert used[-1] == stored
+
+
+def test_a_failed_tag_write_is_reported(env, monkeypatch):
+    """A file whose details could not be written is not a success."""
+    monkeypatch.setattr(
+        pipeline_module, "embed_tags", lambda *args, **kwargs: False
+    )
+    summary = _summary()
+    env["pipeline"]._execute(
+        env["items"], ["download", "convert"], False,
+        env["settings"], summary,
+    )
+
+    assert summary["failed"] == 2
+    for track_id in env["track_ids"]:
+        assert env["db"].get_track(track_id).status == "error"
+
+
 def test_an_update_run_only_refreshes_songs_already_in_spotify(env):
     """Updating files must not add new songs to the Spotify folder."""
     db = env["db"]

@@ -7,6 +7,29 @@ MP3/M4A, and delivers it to **Spotify Local Files**.
 Titles are kept exactly as published. You can edit title, artist, album, and
 track number per song before converting.
 
+## Status
+
+**Version 2.8.2 — working.** The base app is verified end to end against a
+real library: adding and re-adding links, download, convert, Spotify delivery,
+the detail editor, album art, translation, AI naming, catalogue lookup,
+duplicates, folders, undo, and editing every part of a song after it has
+already been sent to Spotify.
+
+Last verified on 2026-11-02:
+
+- Full test suite passes (449 tests, offscreen Qt included).
+- Editing title, artist, album, track number, and cover rewrites the file,
+  replaces the Spotify copy, and removes the stale one.
+- A chosen picture is stored at full resolution (up to 1400 px) and survives
+  later conversions; the audio stream is not re-encoded.
+- Cover lookup never uses another song's artwork, and keeps the existing
+  picture when a lookup finds nothing.
+- Catalogue lookup only offers a release credited to the song's own main
+  artist.
+- The translator and AI naming require a model chosen in **Settings → AI**.
+  A small local model (0.5B) connects but is too weak to name or translate
+  songs usefully; use a 7B-class or hosted model.
+
 ## What it does
 
 - **Three clear steps**, always visible at the top: Download → Convert → Send
@@ -359,6 +382,65 @@ library → **File name pattern…**. Songs filed in that folder use it instead
 of the global one, so an album can be numbered `{track:02d} - {title}` while
 the rest of the library stays `{title}`.
 
+## The panel inside Spotify
+
+Spotify will not let another program add local files to a playlist, but
+Spicetify runs inside the client, where it can. With the panel installed,
+Music DLP appears in Spotify's top bar: browse your folders, start a
+download without leaving Spotify, and mirror a folder into a playlist.
+
+### Installing it
+
+1. Install [Spicetify](https://spicetify.app) and Marketplace first, and
+   confirm they work.
+2. From the project folder, run:
+
+   ```powershell
+   .\spicetify\install-panel.ps1
+   ```
+
+3. Start Music DLP, then Spotify. **Music DLP** appears in the top bar.
+
+Run the installer again after changing the bridge port. It copies the panel
+into Spicetify's `CustomApps` folder, writes the port and token into it,
+registers it, and applies the theme.
+
+### What a sync does
+
+Each folder in Music DLP has one playlist of the same name, kept inside a
+Spotify library folder called **Music DLP**. **Sync playlist** makes that
+playlist contain exactly what the folder contains:
+
+- songs in the folder that are missing from the playlist are added;
+- songs in the playlist that are not in the folder are removed, **including
+  ones you added by hand**;
+- songs with no file in Spotify's Local Files yet are reported rather than
+  silently skipped — download and convert them, then sync again.
+
+Only playlists already inside the Music DLP folder are reused, so a playlist
+of your own that happens to share a folder's name is never touched.
+
+Matching uses the title, the artist, and the length, so a cover or a sped-up
+version of the same song is not mistaken for the original.
+
+### The rest of the panel
+
+The toolbar carries the same actions as the desktop app: download, convert,
+send to Spotify, edit details (with cover art and "update the audio file
+now"), AI naming, translation, album numbering, fixing covers, rewriting
+files, looking up album details, and sending to Google Drive. Anything that
+changes a song's name or album is shown for review first.
+
+Not in the panel yet: finding duplicates, reconnecting missing files, and
+the chatbot export/import. Use the desktop app for those.
+
+### The bridge
+
+The panel talks to the app over a small HTTP server on `127.0.0.1` (port
+8317 by default). It is off the network: it binds to loopback, requires a
+token stored in `config.json`, and only answers Spotify's own page. Turn it
+off in Settings, or by setting `bridge_enabled` to `false`.
+
 ## Building a standalone app
 
 ```bash
@@ -376,8 +458,9 @@ python -m pytest
 ```
 
 The test suite covers link parsing, filenames, the database, pipeline
-orchestration (with fake services), Spotify copying, legacy import, and an
-offscreen Qt smoke test.
+orchestration (with fake services), Spotify copying, legacy import, artwork
+and cover replacement, catalogue lookup, translation, the bridge the Spotify
+panel talks to, and an offscreen Qt smoke test of the main window and dialogs.
 
 ```
 musicdlp/

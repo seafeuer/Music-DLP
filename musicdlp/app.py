@@ -18,6 +18,7 @@ from musicdlp.core.logging import setup_logging
 from musicdlp.core.maintenance import repair_library
 from musicdlp.core.paths import db_path, ensure_app_dirs, log_dir
 from musicdlp.services.legacy_import import find_legacy_db, import_legacy
+from musicdlp.services.bridge import Bridge
 from musicdlp.ui.dialogs.setup import SetupDialog
 from musicdlp.ui.main_window import MainWindow, build_context
 from musicdlp.ui.theme import apply_theme
@@ -159,9 +160,35 @@ def main() -> int:
     server = _listen_for_show(window)
     window.show()
 
+    # The panel inside Spotify talks to the library through this. It is
+    # optional: a port already in use only means the panel stays offline.
+    bridge = None
+    if settings.bridge_enabled:
+        try:
+            bridge = Bridge(
+                ctx.settings,
+                ctx.db,
+                ctx.library,
+                ctx.pipeline,
+                logger,
+                thumbnails=ctx.thumbnails,
+            )
+            bridge.start_pipeline.connect(window.start_pipeline_for_bridge)
+            ctx.pipeline.progress.connect(bridge.record_progress)
+            if not bridge.start():
+                bridge = None
+        except Exception as exc:
+            logger.warning("Music DLP bridge unavailable: %s", exc)
+            bridge = None
+
     try:
         code = app.exec()
     finally:
+        if bridge is not None:
+            try:
+                bridge.stop()
+            except Exception:
+                pass
         try:
             db.close()
         except Exception:

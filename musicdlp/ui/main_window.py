@@ -1209,6 +1209,12 @@ class MainWindow(QMainWindow):
         self._stop_add_ticker()
         self._set_controls_enabled(True)
 
+        # A cancelled read is not a failure: the worker sends it back as
+        # an ordinary result so the controls can be released immediately.
+        if "Cancelled." in result.errors and not result.sources:
+            self.status.set_idle("Cancelled.")
+            return
+
         if result.sources:
             # Tick every new song from every link that was just added, so a
             # batch of links can be reviewed and sent in one go.
@@ -1261,6 +1267,12 @@ class MainWindow(QMainWindow):
 
     def _refresh_current(self) -> None:
         if self._current_source_id is not None and self._current_source_id != ALL_SONGS_ID:
+            source = self.db.get_source(self._current_source_id)
+            # A folder is not a link: it has nothing to read again, and
+            # trying would show an error for a normal part of the library.
+            if source is not None and source.is_folder:
+                self.status.set_idle("A folder has no link to refresh.")
+                return
             self._refresh_source(self._current_source_id)
 
     def _refresh_source(self, source_id: int) -> None:
@@ -1287,6 +1299,10 @@ class MainWindow(QMainWindow):
     def _on_refresh_finished(self, result: AddResult) -> None:
         self._add_running = False
         self._set_controls_enabled(True)
+        if "Cancelled." in result.errors and not result.sources:
+            self._refresh_sources(self._current_source_id)
+            self.status.set_idle("Cancelled.")
+            return
         self._refresh_sources(result.sources[0] if result.sources else None)
         if result.errors:
             self.status.set_idle(
@@ -1506,6 +1522,17 @@ class MainWindow(QMainWindow):
             rows = ready
 
         self._start_pipeline(rows, [stage])
+
+    def start_pipeline_for_bridge(
+        self, rows: list[TrackRow], stages: list[str]
+    ) -> None:
+        """Start a job the panel inside Spotify asked for.
+
+        The bridge runs on its own threads; this is called on the GUI
+        thread through a queued signal, which is where the pipeline has to
+        be started from.
+        """
+        self._start_pipeline(rows, stages)
 
     def _start_pipeline(
         self,
@@ -2051,6 +2078,26 @@ class MainWindow(QMainWindow):
         row = self.track_table.model.row_for_id(track_id)
         if row is None:
             return
+
+        # An older library entry can be stored without the upload's picture
+        # URL or length. The details dialog's video button and the artwork
+        # matcher both need them, so read the link once, in place, rather
+        # than silently offering a disabled button forever.
+        if row.track.url and not (row.track.thumbnail_url and row.track.duration):
+            # Not set_busy: this call cannot be cancelled, and showing the
+            # Cancel button would promise something it cannot do.
+            self.status.set_idle("Looking for the upload's picture…")
+            QApplication.processEvents()
+            try:
+                refreshed = self.ctx.library.ensure_thumbnail(track_id)
+            except Exception:  # noqa: BLE001 - details still open without it
+                self.logger.exception("Could not repair the song's picture")
+                refreshed = None
+            finally:
+                self.status.set_idle()
+            if refreshed is not None:
+                self.track_table.update_track(refreshed)
+                row = self.track_table.model.row_for_id(track_id) or row
 
         album_default = (
             row.source.title if row.source.kind == "playlist" else "Singles"

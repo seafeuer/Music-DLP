@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
@@ -95,6 +96,15 @@ class Settings:
     translate_language: str = "Japanese"
     translate_style: str = "both"
     translate_artist: bool = True
+
+    # The local bridge lets the Music DLP panel inside Spotify read the
+    # library and start work. It listens on loopback only and needs the
+    # token, so another program cannot drive it by accident.
+    bridge_enabled: bool = True
+    bridge_port: int = 8317
+    bridge_token: str = ""
+    # Spotify folder that holds the playlists the panel creates.
+    spotify_dlp_folder: str = "Music DLP"
 
     log_level: str = "INFO"
 
@@ -219,9 +229,32 @@ class Settings:
         if self.translate_style not in TRANSLATE_STYLES:
             self.translate_style = "both"
 
+        try:
+            self.bridge_port = max(1024, min(65535, int(self.bridge_port)))
+        except (TypeError, ValueError):
+            self.bridge_port = 8317
+        self.bridge_token = (self.bridge_token or "").strip()
+        self.spotify_dlp_folder = (
+            (self.spotify_dlp_folder or "").strip() or "Music DLP"
+        )
+
     @property
     def ai_configured(self) -> bool:
         return bool(self.ai_model and self.ai_base_url)
+
+    def ensure_bridge_token(self) -> str:
+        """The bridge token, created and saved the first time it is needed.
+
+        A token per install means another program on the machine cannot
+        drive the bridge just by knowing the port.
+        """
+        if not self.bridge_token:
+            self.bridge_token = secrets.token_urlsafe(32)
+            try:
+                self.save()
+            except OSError:
+                pass
+        return self.bridge_token
 
     # ------------------------------------------------------------- accessors
 

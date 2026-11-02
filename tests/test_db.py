@@ -55,6 +55,34 @@ def test_track_upsert_dedupes_and_updates_description(tmp_path):
     db.close()
 
 
+def test_a_refresh_that_reads_no_media_keeps_what_was_stored(tmp_path):
+    """A post read without media details must not erase its picture URL.
+
+    The video thumbnail URL and length are what the cover lookup falls
+    back to. A later flat read used to write None over both, leaving the
+    song with no picture it could ever fetch again.
+    """
+    db = _db(tmp_path)
+    track_id = db.upsert_track(
+        platform="twitter", media_id="1",
+        url="https://x.com/user/status/1", title="A song",
+        uploader="Poster", duration=140,
+        thumbnail_url="https://pbs.twimg.com/thumb.jpg",
+        description="Artist: Someone",
+    )
+    db.upsert_track(
+        platform="twitter", media_id="1",
+        url="https://x.com/user/status/1", title="A song",
+        uploader=None, duration=0,
+        thumbnail_url=None, description=None,
+    )
+    track = db.get_track(track_id)
+    assert track.duration == 140
+    assert track.thumbnail_url == "https://pbs.twimg.com/thumb.jpg"
+    assert track.description == "Artist: Someone"
+    db.close()
+
+
 def test_source_tracks_order_and_counts(tmp_path):
     db = _db(tmp_path)
     source_id = _source(db)

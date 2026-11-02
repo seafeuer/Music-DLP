@@ -1089,6 +1089,13 @@ class SettingsDialog(QDialog):
             translate_language=self.settings.translate_language,
             translate_style=self.settings.translate_style,
             translate_artist=self.settings.translate_artist,
+            # These are not shown here either. Dropping them would reset
+            # the bridge token, and the panel inside Spotify would then
+            # fail its token check on the next start.
+            bridge_enabled=self.settings.bridge_enabled,
+            bridge_port=self.settings.bridge_port,
+            bridge_token=self.settings.bridge_token,
+            spotify_dlp_folder=self.settings.spotify_dlp_folder,
             log_level=self.log_level_combo.currentData(),
             ffmpeg_path=self.ffmpeg_edit.text().strip(),
             window_geometry=self.settings.window_geometry,

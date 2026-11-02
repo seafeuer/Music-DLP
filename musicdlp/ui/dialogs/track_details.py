@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from musicdlp.core.models import Track, is_converted
+from musicdlp.core.models import COVER_CUSTOM, Track, is_converted
 from musicdlp.core.paths import art_cache_dir
 from musicdlp.services.artwork import cover_cache_path, find_cover
 from musicdlp.services.filenames import render_template
@@ -180,9 +180,28 @@ class TrackDetailsDialog(QDialog):
 
     # ------------------------------------------------------------------ art
 
+    def _stored_video_picture(self) -> Optional[str]:
+        """The video still already on disk, when there is no URL for it.
+
+        An old library entry can have the picture saved but no thumbnail
+        URL, because the site did not publish one when the song was added.
+        That picture is still the upload's own, so "Use video thumbnail"
+        can keep it instead of clearing the only copy.
+        """
+        path = self.track.cover_path
+        if not path or self.track.cover_source == COVER_CUSTOM:
+            return None
+        stored = Path(path)
+        if stored.exists() and not stored.name.startswith("album_"):
+            return str(stored)
+        return None
+
     def _refresh_artwork(self) -> None:
         # The button is offered only when there is a video still to use.
-        self.video_button.setEnabled(bool(self.track.thumbnail_url))
+        self.video_button.setEnabled(
+            bool(self.track.thumbnail_url)
+            or self._stored_video_picture() is not None
+        )
         if self.cover_path and Path(self.cover_path).exists():
             pixmap = QPixmap(self.cover_path)
             if not pixmap.isNull():
@@ -259,7 +278,13 @@ class TrackDetailsDialog(QDialog):
             self.art_status_label.hide()
 
     def _use_video_thumbnail(self) -> None:
-        self.cover_path = None
+        # With a URL the conversion fetches the picture again. Without
+        # one, keep the still that is already stored rather than clearing
+        # the only copy there is.
+        if not self.track.thumbnail_url:
+            self.cover_path = self._stored_video_picture()
+        else:
+            self.cover_path = None
         self.cover_changed = True
         self.artwork.setText(
             "The video's picture will be used when the file is written."
@@ -269,7 +294,7 @@ class TrackDetailsDialog(QDialog):
 
     def _update_suggestion(self) -> None:
         track = self.track
-        if not track.smart_title:
+        if not track.has_suggestion:
             self.suggestion_box.hide()
             return
 

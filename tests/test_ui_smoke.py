@@ -198,6 +198,139 @@ def test_reconvert_on_synced_track_includes_sync(window):
     assert captured["stages"][-1] == "sync", captured
 
 
+def test_editing_a_synced_song_rewrites_and_resends_it(window, monkeypatch):
+    """Every field, the picture, and the Spotify copy in one Save."""
+    from PySide6.QtWidgets import QDialog
+
+    from musicdlp.ui import main_window as main_window_module
+
+    main, db, ids = window
+    track_id = ids[0]
+    raw = main.settings.output_path / "_raw" / "raw.webm"
+    raw.parent.mkdir(parents=True, exist_ok=True)
+    raw.write_bytes(b"raw")
+    song = main.settings.output_path / "MP3" / "Song 1.mp3"
+    song.parent.mkdir(parents=True, exist_ok=True)
+    song.write_bytes(b"old")
+    (main.settings.spotify_path).mkdir(parents=True, exist_ok=True)
+    (main.settings.spotify_path / song.name).write_bytes(b"old")
+    db.update_track(
+        track_id, raw_path=str(raw), mp3_path=str(song),
+        status="synced", synced_at="2026-01-01T00:00:00",
+    )
+    main._load_source(db.get_sources()[0].id)
+
+    picture = main.settings.output_path / "chosen.png"
+    from PIL import Image
+    Image.new("RGB", (800, 800), (1, 2, 3)).save(picture)
+
+    class FakeDetails:
+        def __init__(self, *args, **kwargs):
+            self.result_values = {
+                "title": "Renamed", "artist": "New Artist",
+                "album": "New Album", "track_number": 9,
+                "cover_path": str(picture), "cover_changed": True,
+                "update_file": True,
+            }
+
+        def exec(self):
+            return QDialog.Accepted
+
+    monkeypatch.setattr(main_window_module, "TrackDetailsDialog", FakeDetails)
+    captured = {}
+    monkeypatch.setattr(
+        main, "_start_pipeline",
+        lambda rows, stages, **kwargs: captured.update(
+            rows=rows, stages=stages, force=kwargs.get("force")
+        ),
+    )
+
+    main._open_details(track_id)
+
+    track = db.get_track(track_id)
+    assert (track.meta_title, track.meta_artist, track.meta_album,
+            track.meta_track) == ("Renamed", "New Artist", "New Album", 9)
+    assert track.cover_source == "custom"
+    assert captured["stages"] == ["convert", "sync"]
+    assert captured["force"] is True
+    assert [row.track.id for row in captured["rows"]] == [track_id]
+
+
+
+def test_cancelling_an_add_does_not_report_a_failure(window, monkeypatch):
+    """Cancel is a normal outcome, not "Could not add link"."""
+    from PySide6.QtWidgets import QMessageBox
+
+    from musicdlp.services.library import AddResult
+
+    main, _db, _ids = window
+    shown = []
+    monkeypatch.setattr(
+        QMessageBox, "warning",
+        staticmethod(lambda *args, **kwargs: shown.append(args)),
+    )
+
+    main._on_add_finished(AddResult(errors=["Cancelled."]))
+
+    assert shown == []
+    assert "Cancelled" in main.status.status_label.text()
+
+
+def test_cancelling_a_refresh_is_not_a_problem(window):
+    from musicdlp.services.library import AddResult
+
+    main, _db, _ids = window
+    main._on_refresh_finished(AddResult(errors=["Cancelled."]))
+    assert main.status.status_label.text() == "Cancelled."
+
+
+def test_refreshing_a_folder_does_not_treat_it_as_a_link(window, monkeypatch):
+    """F5 on a folder used to try to read folder:// as a web link."""
+    main, db, _ids = window
+    folder_id = db.add_folder("A folder")
+    main._refresh_sources(folder_id)
+
+    started = []
+    monkeypatch.setattr(
+        main, "_refresh_source", lambda source_id: started.append(source_id)
+    )
+    main._refresh_current()
+
+    assert started == []
+    assert "folder" in main.status.status_label.text().lower()
+
+
+def test_use_video_thumbnail_from_the_details_dialog_records_the_choice(
+    window, monkeypatch
+):
+    """Picking the video's picture must be stored as that choice."""
+    from PySide6.QtWidgets import QDialog
+
+    from musicdlp.ui import main_window as main_window_module
+
+    main, db, ids = window
+    track_id = ids[0]
+    db.update_track(track_id, status="converted")
+
+    class FakeDetails:
+        def __init__(self, *args, **kwargs):
+            self.result_values = {
+                "title": "Song 1", "artist": "Channel", "album": "",
+                "track_number": None, "cover_path": None,
+                "cover_changed": True, "update_file": False,
+            }
+
+        def exec(self):
+            return QDialog.Accepted
+
+    monkeypatch.setattr(main_window_module, "TrackDetailsDialog", FakeDetails)
+    main._open_details(track_id)
+
+    track = db.get_track(track_id)
+    assert track.cover_source == "video"
+    assert track.cover_path is None
+    assert track.needs_update is True
+
 
 # ------------------------- "Use video thumbnail" reaches Save as a choice
 
@@ -253,3 +386,21 @@ def test_the_video_button_is_offered_only_when_there_is_a_video_picture(
     )
     assert dialog2.video_button.isEnabled() is True
     db2.close()
+
+
+def test_a_stored_still_can_be_used_when_the_url_is_gone(qapp, tmp_path):
+    """An old post has its picture on disk but no URL to fetch it again.
+
+    The button used to be disabled, so the only picture the song had could
+    not be chosen, and clearing it would have left the file with none.
+    """
+    still = tmp_path / "art" / "twitter_1.jpg"
+    db, dialog = _details_dialog(tmp_path, cover=still, thumbnail_url="")
+
+    assert dialog.video_button.isEnabled() is True
+    dialog._use_video_thumbnail()
+    dialog._save()
+
+    assert dialog.result_values["cover_path"] == str(still)
+    assert dialog.result_values["cover_changed"] is True
+    db.close()

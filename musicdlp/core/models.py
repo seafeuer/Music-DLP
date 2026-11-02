@@ -217,8 +217,25 @@ class Track:
 
     @property
     def has_suggestion(self) -> bool:
-        """True when a smart title exists and is not what is already used."""
+        """True when a smart title exists and is not what is already used.
+
+        A song whose name was set by the user has no pending suggestion.
+        The parser's old reading is still stored beside it, but offering it
+        again would put back the reading the user corrected — this is how
+        "BANKROLL - UTOPIA LEAK..." kept offering "Utopia Leak..." by
+        "Bankroll" after it had been fixed by hand.
+
+        A reply the user imported from a chatbot is different: it was
+        asked for after the song was named, so it stays available to
+        review and apply.
+        """
         if not self.smart_title:
+            return False
+        requested = (self.smart_reason or "") == "AI reply"
+        if (
+            (self.meta_title is not None or self.meta_artist is not None)
+            and not requested
+        ):
             return False
         return (
             self.smart_title != self.display_title

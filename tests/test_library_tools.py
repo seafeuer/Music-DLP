@@ -243,6 +243,237 @@ def test_lookup_survives_a_network_failure(monkeypatch):
     assert lookup("The Band", "Same Song") is None
 
 
+def test_lookup_ignores_a_song_by_a_different_artist(monkeypatch):
+    """A shared title is not enough: the catalogue must mean this artist.
+
+    "At The Gates" by Drake was matched to Christopher Drake's Wonder
+    Woman soundtrack, ticked for review, and offered as its album.
+    """
+    payload = {
+        "recordings": [{
+            "title": "At The Gates",
+            "score": 100,
+            "artist-credit": [{"name": "Christopher Drake"}],
+            "releases": [{
+                "id": "rel-wonder",
+                "title": "Wonder Woman",
+                "date": "2010",
+                "media": [{"track-offset": 13}],
+            }],
+        }]
+    }
+    monkeypatch.setattr(
+        metadata_lookup.requests, "get",
+        lambda *args, **kwargs: FakeResponse(payload),
+    )
+    monkeypatch.setattr(metadata_lookup, "_wait_for_turn", lambda: None)
+
+    assert lookup("Drake", "At The Gates") is None
+
+
+def test_lookup_accepts_a_release_under_the_main_artist(monkeypatch):
+    """A feature in the song's credit must not hide its own album."""
+    payload = {
+        "recordings": [{
+            "title": "New Body",
+            "score": 100,
+            "artist-credit": [{"name": "Kanye West"}],
+            "releases": [{
+                "id": "rel-body",
+                "title": "Yandhi",
+                "date": "2018",
+                "media": [{"track-offset": 0}],
+            }],
+        }]
+    }
+    monkeypatch.setattr(
+        metadata_lookup.requests, "get",
+        lambda *args, **kwargs: FakeResponse(payload),
+    )
+    monkeypatch.setattr(metadata_lookup, "_wait_for_turn", lambda: None)
+
+    found = lookup("Kanye West, Nicki Minaj, Ty Dolla $ign", "New Body")
+    assert found is not None
+    assert found.album == "Yandhi"
+
+
+def test_lookup_searches_the_main_artist_when_the_full_credit_fails(
+    monkeypatch,
+):
+    """MusicBrainz files the release under one artist, not the whole credit.
+
+    "Drake, Lil Uzi Vert" matches nothing in the ``artist:`` field, so the
+    lookup has to ask again for "Drake".
+    """
+    payload = {
+        "recordings": [{
+            "title": "At The Gates",
+            "score": 100,
+            "artist-credit": [{"name": "Drake"}],
+            "releases": [{
+                "id": "rel-gates",
+                "title": "Care Package 2",
+                "date": "",
+                "status": "official",
+                "release-group": {"primary-type": "album"},
+                "media": [{"track-offset": 3}],
+            }],
+        }]
+    }
+    queries = []
+
+    def fake_get(url, params=None, **kwargs):
+        query = (params or {}).get("query", "")
+        queries.append(query)
+        if 'artist:"Drake"' in query:
+            return FakeResponse(payload)
+        return FakeResponse({"recordings": []})
+
+    monkeypatch.setattr(metadata_lookup.requests, "get", fake_get)
+    monkeypatch.setattr(metadata_lookup, "_wait_for_turn", lambda: None)
+
+    found = lookup("Drake, Lil Uzi Vert", "At The Gates")
+
+    assert found is not None
+    assert found.album == "Care Package 2"
+    assert any('artist:"Drake"' in query for query in queries)
+    # The full credit was tried first, before narrowing.
+    assert queries[0].endswith('artist:"Drake, Lil Uzi Vert"')
+
+
+def test_lookup_retries_a_busy_catalogue(monkeypatch):
+    """A 503 is "try again", not "this song is not in the catalogue"."""
+    payload = {
+        "recordings": [{
+            "title": "Same Song",
+            "score": 100,
+            "artist-credit": [{"name": "The Band"}],
+            "releases": [{
+                "id": "rel-1", "title": "Great Album", "date": "2004",
+                "status": "official",
+                "release-group": {"primary-type": "album"},
+                "media": [{"track-offset": 0}],
+            }],
+        }]
+    }
+    answers = [FakeResponse({"error": "busy"}, status=503), FakeResponse(payload)]
+
+    def fake_get(*args, **kwargs):
+        return answers.pop(0)
+
+    monkeypatch.setattr(metadata_lookup.requests, "get", fake_get)
+    monkeypatch.setattr(metadata_lookup, "_wait_for_turn", lambda: None)
+    monkeypatch.setattr(metadata_lookup.time, "sleep", lambda _seconds: None)
+
+    found = lookup("The Band", "Same Song")
+    assert found is not None
+    assert found.album == "Great Album"
+
+
+# ---------------------------------------------- repairing what a song knows
+
+
+class FakeYtDlp:
+    def __init__(self, extracted) -> None:
+        self.extracted = extracted
+        self.calls: list[str] = []
+
+    def extract(self, url, cancel_event=None):
+        self.calls.append(url)
+        return self.extracted
+
+
+def test_a_missing_thumbnail_and_length_are_read_back_from_the_link(tmp_path):
+    from types import SimpleNamespace
+
+    from musicdlp.services.library import LibraryService
+
+    db = Database(tmp_path / "library.db")
+    track_id = db.upsert_track(
+        platform="twitter", media_id="1",
+        url="https://x.com/user/status/1", title="A song",
+        uploader="Poster",
+    )
+    found = SimpleNamespace(
+        tracks=[SimpleNamespace(
+            thumbnail_url="https://pbs.twimg.com/thumb.jpg",
+            duration=140,
+            description="",
+        )]
+    )
+    ytdlp = FakeYtDlp(found)
+    library = LibraryService(
+        db, Settings(output_dir=str(tmp_path / "out"),
+                     spotify_dir=str(tmp_path / "spotify")),
+        ytdlp,
+    )
+
+    track = library.ensure_thumbnail(track_id)
+
+    assert track.thumbnail_url == "https://pbs.twimg.com/thumb.jpg"
+    assert track.duration == 140
+    assert ytdlp.calls == ["https://x.com/user/status/1"]
+    db.close()
+
+
+def test_a_song_that_already_knows_its_picture_is_not_read_again(tmp_path):
+    from types import SimpleNamespace
+
+    from musicdlp.services.library import LibraryService
+
+    db = Database(tmp_path / "library.db")
+    track_id = db.upsert_track(
+        platform="youtube", media_id="abc",
+        url="https://www.youtube.com/watch?v=abc", title="A song",
+        uploader="Channel", duration=200,
+        thumbnail_url="https://img/thumb.jpg",
+    )
+    ytdlp = FakeYtDlp(SimpleNamespace(tracks=[]))
+    library = LibraryService(
+        db, Settings(output_dir=str(tmp_path / "out"),
+                     spotify_dir=str(tmp_path / "spotify")),
+        ytdlp,
+    )
+
+    library.ensure_thumbnail(track_id)
+    assert ytdlp.calls == []
+    db.close()
+
+
+def test_a_chosen_picture_keeps_its_full_resolution(tmp_path):
+    """Choosing a 1400 px picture left a 640 px cover in the file."""
+    from PIL import Image
+
+    from musicdlp.services.library import LibraryService
+
+    db = Database(tmp_path / "library.db")
+    track_id = db.upsert_track(
+        platform="youtube", media_id="abc",
+        url="https://www.youtube.com/watch?v=abc", title="A song",
+        uploader="Channel", duration=200,
+    )
+    db.update_track(track_id, status="converted",
+                    mp3_path=str(tmp_path / "song.mp3"))
+    library = LibraryService(
+        db, Settings(output_dir=str(tmp_path / "out"),
+                     spotify_dir=str(tmp_path / "spotify")),
+        None,
+    )
+
+    big = tmp_path / "big.png"
+    Image.new("RGB", (2000, 2000), (10, 20, 30)).save(big)
+    stored = library.set_cover(track_id, big)
+    with Image.open(stored) as image:
+        assert image.size == (1400, 1400)
+
+    small = tmp_path / "small.png"
+    Image.new("RGB", (640, 640), (30, 20, 10)).save(small)
+    stored = library.set_cover(track_id, small)
+    with Image.open(stored) as image:
+        assert image.size == (640, 640)
+    db.close()
+
+
 # ---------------------------------------------------------------------- undo
 
 
@@ -970,6 +1201,36 @@ def test_find_it_leaves_auto_detection_on(qapp, window, tmp_path, monkeypatch):
 
 
 # ------------------------------------------------- a settings save can fail safely
+
+def test_saving_settings_keeps_the_bridge_token(qapp, window, monkeypatch):
+    """Saving Settings must not reset the panel's token and port.
+
+    These fields are not shown in the dialog. They used to be left at
+    their defaults, which cleared the token every time settings were
+    saved and made the panel inside Spotify fail its check.
+    """
+    from musicdlp.ui.dialogs import settings as settings_module
+
+    main, _db, _data = window
+    main.settings.bridge_token = "a-real-token"
+    main.settings.bridge_port = 9317
+    main.settings.spotify_dlp_folder = "My DLP"
+    monkeypatch.setattr(
+        QMessageBox, "warning", staticmethod(lambda *args, **kwargs: None)
+    )
+
+    dialog = settings_module.SettingsDialog(
+        main.settings, main.ctx.ffmpeg, main.ctx.ytdlp, main.ctx.spotify, main
+    )
+    dialog._save_now()
+
+    saved = dialog.result_settings
+    assert saved is not None
+    assert saved.bridge_token == "a-real-token"
+    assert saved.bridge_port == 9317
+    assert saved.spotify_dlp_folder == "My DLP"
+    dialog.close()
+
 
 def test_saving_settings_survives_an_unsaveable_value(
     qapp, window, monkeypatch

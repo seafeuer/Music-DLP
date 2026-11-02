@@ -317,14 +317,22 @@ class Pipeline(QObject):
                 continue
             title = track.display_title
 
-            if (
-                not force
-                and track.raw_path
-                and Path(track.raw_path).exists()
-            ):
-                summary["skipped"] += 1
-                tracker.complete_unit("download", title, track.id)
-                continue
+            # A kept download is never fetched again just because the
+            # stage was forced: "force" means rewrite the converted file,
+            # not download the audio a second time. This matters for
+            # Update files, where one song may need a fresh download while
+            # the rest already have theirs. A zero-length file is treated
+            # as an interrupted download and fetched again.
+            if track.raw_path:
+                raw_file = Path(track.raw_path)
+                try:
+                    usable = raw_file.is_file() and raw_file.stat().st_size > 0
+                except OSError:
+                    usable = False
+                if usable:
+                    summary["skipped"] += 1
+                    tracker.complete_unit("download", title, track.id)
+                    continue
 
             self.db.update_track(track.id, status=QUEUED, error=None)
             self.track_changed.emit(track.id)
@@ -557,14 +565,28 @@ class Pipeline(QObject):
                         if cover:
                             self.db.update_track(track.id, cover_path=str(cover))
 
-                    embed_tags(
+                    # Nothing new could be found — the site is offline, the
+                    # post's picture is gone, or the catalogue has no match.
+                    # Falling back to the picture already stored keeps a
+                    # re-convert from stripping the cover it used to have.
+                    if cover is None and track.cover_path:
+                        stored = Path(track.cover_path)
+                        if stored.exists():
+                            cover = stored
+
+                    if not embed_tags(
                         output,
                         title=track.display_title,
                         artist=track.display_artist or "Unknown",
                         album=album,
                         track=track_no,
                         cover_path=cover,
-                    )
+                    ):
+                        errors.append(
+                            f"Could not write the song details into "
+                            f"{output.name}."
+                        )
+                        continue
 
                     if fmt == "mp3":
                         self.db.update_track(track.id, mp3_path=str(output))
