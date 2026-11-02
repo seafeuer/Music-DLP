@@ -9,7 +9,7 @@ track number per song before converting.
 
 ## Status
 
-**Version 2.8.2 — working.** The base app is verified end to end against a
+**Version 2.9.0 — working.** The base app is verified end to end against a
 real library: adding and re-adding links, download, convert, Spotify delivery,
 the detail editor, album art, translation, AI naming, catalogue lookup,
 duplicates, folders, undo, and editing every part of a song after it has
@@ -17,15 +17,24 @@ already been sent to Spotify.
 
 Last verified on 2026-11-02:
 
-- Full test suite passes (449 tests, offscreen Qt included).
-- Editing title, artist, album, track number, and cover rewrites the file,
-  replaces the Spotify copy, and removes the stale one.
+- Full test suite passes (504 tests, offscreen Qt included).
+- Editing title, artist, album, track number, and cover rewrites the tags and
+  the file name, replaces the Spotify copy, and removes the stale one. The
+  audio is not decoded or re-encoded: its stream is byte-for-byte the same
+  before and after, which was checked on a real download.
 - A chosen picture is stored at full resolution (up to 1400 px) and survives
   later conversions; the audio stream is not re-encoded.
 - Cover lookup never uses another song's artwork, and keeps the existing
   picture when a lookup finds nothing.
 - Catalogue lookup only offers a release credited to the song's own main
   artist.
+- A post with no video is refused when it is added, rather than becoming an
+  entry that can never download.
+- Removing a song or a link really removes it, keeps the files if asked, and
+  can be undone in one step.
+- Both themes come from one palette, and contrast is checked in tests: body
+  text, hints, error and success text, and every status label meet WCAG AA in
+  dark and light.
 - The translator and AI naming require a model chosen in **Settings → AI**.
   A small local model (0.5B) connects but is too weak to name or translate
   songs usefully; use a 7B-class or hosted model.
@@ -257,14 +266,34 @@ the same for one song.
 - **Edit → Number ticked songs as an album…** gives every ticked song one
   album name and consecutive track numbers, so Spotify shows them as one
   album instead of loose singles.
-- **Edit → Update files for ticked songs** (Ctrl+Shift+R) rewrites every file
-  whose details changed, and sends it to Spotify again if it was there.
+- **Edit → Update files for ticked songs** (Ctrl+Shift+R) rewrites the details
+  and the file name of every ticked song whose details changed, and sends it
+  to Spotify again if it was there. The audio is not re-encoded, so the sound
+  is unchanged and nothing is downloaded again.
+
+### Keyboard
+
+**Help → Keyboard shortcuts** (Ctrl+/) lists them all. The ones worth knowing:
+
+| Key | Does |
+|---|---|
+| Ctrl+N | Put the cursor in the link box |
+| Enter | Add the link in the box (or run a dialog's main action) |
+| F5 | Read the selected link again |
+| Ctrl+F | Search every song in the library |
+| Escape | Clear a search box, or close a dialog |
+| Space | Tick or untick the highlighted song |
+| F2 / Enter | Edit the highlighted song's details |
+| Delete | Remove the highlighted songs, after one confirmation |
+| Ctrl+A / Ctrl+Shift+A | Tick everything shown / everything in the library |
+| Ctrl+Z | Undo the last rename, move, or removal |
+| Ctrl+T | Translate the ticked songs |
 
 ### Finding and fixing
 
 - **Search all songs** (Ctrl+F, or the box in the top bar) searches the whole
   library, whichever link is open. Clearing the box returns to the link you
-  came from.
+  came from. The box above the library list filters links and folders only.
 - **Edit → Find duplicate songs…** groups songs that look like the same
   recording added twice, keeps the copy that is furthest along, and lets you
   remove the rest.
