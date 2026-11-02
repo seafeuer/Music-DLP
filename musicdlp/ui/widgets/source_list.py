@@ -453,6 +453,7 @@ class SourceListWidget(QWidget):
         self.proxy = SourceFilterProxy(self)
         self.proxy.setSourceModel(self.model)
         self._last_source_id: Optional[int] = None
+        self._busy = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -499,12 +500,12 @@ class SourceListWidget(QWidget):
         layout.addLayout(footer)
 
     def set_busy(self, busy: bool) -> None:
-        enabled = not busy
+        self._busy = bool(busy)
+        enabled = not self._busy
         self.add_button.setEnabled(enabled)
         self.folder_button.setEnabled(enabled)
-        self.remove_button.setEnabled(enabled)
-        self.refresh_button.setEnabled(enabled)
-        # Re-apply the per-row rules: a folder has nothing to refresh.
+        # Re-apply the per-row rules as well: a folder has nothing to
+        # refresh, and nothing may be changed while a job is running.
         self._update_buttons()
 
     def set_sources(
@@ -565,10 +566,16 @@ class SourceListWidget(QWidget):
             row = self.model.row_for_id(source_id)
             if row is not None:
                 is_folder = self.model.rows[row][1].is_folder
-        self.refresh_button.setEnabled(not is_all and not is_folder)
-        self.remove_button.setEnabled(not is_all)
+        busy = getattr(self, "_busy", False)
+        self.refresh_button.setEnabled(not busy and not is_all and not is_folder)
+        self.remove_button.setEnabled(not busy and not is_all)
 
     def _context_menu(self, position) -> None:
+        # A job is already reading or writing this library. Changing links
+        # underneath it would leave the pipeline working on rows that no
+        # longer exist, so the menu is simply not offered.
+        if getattr(self, "_busy", False):
+            return
         index = self.view.indexAt(position)
         if not index.isValid():
             return

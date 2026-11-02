@@ -284,6 +284,44 @@ def test_cancelling_a_refresh_is_not_a_problem(window):
     assert main.status.status_label.text() == "Cancelled."
 
 
+def test_library_buttons_stay_disabled_while_a_job_runs(window):
+    """Regression: per-row rules used to re-enable Refresh and Remove."""
+    main, db, _ids = window
+    source_id = db.get_sources()[0].id
+    main.sidebar.select_source(source_id)
+    assert main.sidebar.refresh_button.isEnabled()
+    assert main.sidebar.remove_button.isEnabled()
+
+    main.sidebar.set_busy(True)
+
+    assert not main.sidebar.refresh_button.isEnabled()
+    assert not main.sidebar.remove_button.isEnabled()
+    assert not main.sidebar.add_button.isEnabled()
+    assert not main.sidebar.folder_button.isEnabled()
+
+    main.sidebar.set_busy(False)
+    assert main.sidebar.refresh_button.isEnabled()
+    assert main.sidebar.remove_button.isEnabled()
+
+
+def test_removing_a_song_is_refused_while_a_job_runs(window, monkeypatch):
+    """A pipeline holds rows in memory; deleting one would strand it."""
+    from PySide6.QtWidgets import QMessageBox
+
+    main, db, ids = window
+    asked = []
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        staticmethod(lambda *args, **kwargs: asked.append(args) or QMessageBox.Yes),
+    )
+    monkeypatch.setattr(main, "_is_busy", lambda: True)
+
+    main._remove_track(ids[0])
+
+    assert asked == []
+    assert db.get_track(ids[0]) is not None
+
+
 def test_refreshing_a_folder_does_not_treat_it_as_a_link(window, monkeypatch):
     """F5 on a folder used to try to read folder:// as a web link."""
     main, db, _ids = window

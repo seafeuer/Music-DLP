@@ -907,6 +907,8 @@ class MainWindow(QMainWindow):
             self.db.restore_track_links(track.id, links)
 
     def _rename_folder(self, folder_id: int) -> None:
+        if self._blocked_by_job():
+            return
         folder = self.db.get_source(folder_id)
         if folder is None:
             return
@@ -933,6 +935,8 @@ class MainWindow(QMainWindow):
         """
         folder = self.db.get_source(folder_id)
         if folder is None:
+            return
+        if self._blocked_by_job():
             return
 
         current = folder.filename_template or self.settings.filename_template
@@ -971,6 +975,8 @@ class MainWindow(QMainWindow):
 
     def _tracks_dropped(self, folder_id: int, track_ids: list) -> None:
         """Songs dragged onto a folder move into it."""
+        if self._blocked_by_job():
+            return
         folder = self.db.get_source(folder_id)
         if folder is None:
             return
@@ -1039,6 +1045,8 @@ class MainWindow(QMainWindow):
 
     def _source_dropped(self, source_id: int, folder_id: int) -> None:
         """A whole link dragged onto a folder is filed there."""
+        if self._blocked_by_job():
+            return
         folder = self.db.get_source(folder_id)
         source = self.db.get_source(source_id)
         if folder is None or source is None or source.is_folder:
@@ -1048,6 +1056,8 @@ class MainWindow(QMainWindow):
         self.status.set_idle(f"Moved “{source.title}” into “{folder.title}”.")
 
     def _new_folder(self) -> None:
+        if self._blocked_by_job():
+            return
         name, ok = QInputDialog.getText(
             self, "New folder", "Name for the folder:"
         )
@@ -1071,6 +1081,8 @@ class MainWindow(QMainWindow):
 
     def _move_to_folder(self, source_id: int) -> None:
         """Put a link in a library folder, creating the folder if needed."""
+        if self._blocked_by_job():
+            return
         source = self.db.get_source(source_id)
         if source is None:
             return
@@ -1461,6 +1473,20 @@ class MainWindow(QMainWindow):
             or getattr(self, "_covers_running", False)
             or self.ctx.pipeline.is_running
         )
+
+    def _blocked_by_job(self) -> bool:
+        """True when a running job makes a library change unsafe.
+
+        Removal, folder changes, and imports rewrite links and rows while
+        the pipeline holds its own view of them. Refusing with a plain
+        message is better than a row disappearing mid-job.
+        """
+        if self._is_busy():
+            self.status.set_idle(
+                "Wait for the current job to finish before changing the library."
+            )
+            return True
+        return False
 
     def _start_easy(self) -> None:
         rows = self._checked_rows()
@@ -2331,6 +2357,8 @@ class MainWindow(QMainWindow):
 
     def _send_to_gdrive(self) -> None:
         """Copy the ticked songs into the Google Drive folder."""
+        if self._blocked_by_job():
+            return
         rows = self._checked_rows()
         if not rows:
             self.status.set_idle("Tick the songs you want on your phone.")
@@ -2418,6 +2446,8 @@ class MainWindow(QMainWindow):
         self._start_pipeline([row], stages, force=True)
 
     def _remove_track(self, track_id: int) -> None:
+        if self._blocked_by_job():
+            return
         reply = QMessageBox.question(
             self,
             "Remove track",
@@ -2441,6 +2471,8 @@ class MainWindow(QMainWindow):
         self._refresh_sources(self._current_source_id)
 
     def _remove_source(self, source_id: int) -> None:
+        if self._blocked_by_job():
+            return
         source = self.db.get_source(source_id)
         if source is None:
             return
@@ -2668,6 +2700,8 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------------- legacy
 
     def _import_legacy(self) -> None:
+        if self._blocked_by_job():
+            return
         path = find_legacy_db()
         if path is None:
             filename, _ = QFileDialog.getOpenFileName(
