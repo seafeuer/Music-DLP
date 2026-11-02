@@ -30,6 +30,7 @@ from musicdlp import __version__
 from musicdlp.core.config import Settings
 from musicdlp.core.db import Database
 from musicdlp.core.models import BatchItem, TrackRow
+from musicdlp.core.paths import is_isolated
 from musicdlp.services.spotify_sync import (
     LocalTrack,
     build_plan,
@@ -124,7 +125,18 @@ def sync_panel_config(
 
     Returns the files that were updated. Missing files are skipped: the
     panel simply is not installed, which is not an error.
+
+    An isolated run (``MUSICDLP_HOME``) never does this: its config is a
+    copy or a fresh one, so its token is not the token the installed panel
+    should carry, and writing it would leave the user's Spotify panel
+    unable to reach the real app. A caller that names a folder explicitly
+    is writing somewhere it chose, which is how the tests aim it at a
+    temporary directory.
     """
+    if appdata is None and is_isolated():
+        logger.debug("Isolated run: the installed panel is left untouched")
+        return []
+
     root = Path(appdata) if appdata else Path(os.environ.get("APPDATA") or "")
     if not str(root) or not root.exists():
         return []

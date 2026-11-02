@@ -399,3 +399,29 @@ def test_panel_config_sync_leaves_an_already_correct_file_alone(tmp_path):
 
     assert updated == []
     assert path.stat().st_mtime_ns == before
+
+
+def test_an_isolated_run_never_rewrites_the_installed_panel(tmp_path, monkeypatch):
+    """A test home's token must not reach the user's Spotify panel.
+
+    Production code never names a folder, so it resolves the real
+    ``%APPDATA%``. That is the call this guards.
+    """
+    import os
+
+    from musicdlp.services import bridge as bridge_module
+
+    real = tmp_path / "real_appdata"
+    source = _write_panel(
+        real,
+        ("spicetify", "CustomApps", "musicdlp", "index.js"),
+        '{"port":8317,"token":"the-real-token","dlpFolder":"Music DLP"}',
+    )
+    before = source.read_text(encoding="utf-8")
+    monkeypatch.setenv("APPDATA", str(real))
+    monkeypatch.setattr(bridge_module, "is_isolated", lambda: True)
+
+    updated = sync_panel_config(8317, "a-test-token", "Music DLP")
+
+    assert updated == []
+    assert source.read_text(encoding="utf-8") == before
