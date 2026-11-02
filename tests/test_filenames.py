@@ -95,3 +95,18 @@ def test_render_template_accepts_media_id_as_a_placeholder():
     assert render_template(
         "{media_id} - {title}", title="Song", media_id="abc123"
     ) == "abc123 - Song"
+
+
+def test_choose_template_prefers_link_then_folder_then_global():
+    from musicdlp.services.filenames import choose_template
+
+    assert choose_template(
+        "{title}", source_template="{artist} - {title}",
+        folder_template="{track:02d} - {title}",
+    ) == "{artist} - {title}"
+    assert choose_template(
+        "{title}", source_template="  ",
+        folder_template="{track:02d} - {title}",
+    ) == "{track:02d} - {title}"
+    assert choose_template("{title}") == "{title}"
+    assert choose_template("", folder_template=" ") == "{title}"

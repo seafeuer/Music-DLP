@@ -15,6 +15,26 @@ RESERVED_NAMES = {
 DEFAULT_TEMPLATE = "{title}"
 
 
+def choose_template(
+    global_template: str,
+    *,
+    source_template: Optional[str] = None,
+    folder_template: Optional[str] = None,
+) -> str:
+    """The pattern that applies to a song, most specific first.
+
+    A link can carry its own pattern, and the folder that link is filed in
+    can carry one too. The global setting is the fallback. Keeping the
+    rule here means the preview in Edit details and the name written by a
+    conversion can never disagree.
+    """
+    for candidate in (source_template, folder_template):
+        text = (candidate or "").strip()
+        if text:
+            return text
+    return (global_template or "").strip() or DEFAULT_TEMPLATE
+
+
 def sanitize_filename(name: str, max_length: int = 140) -> str:
     """Make a name safe on Windows while keeping Unicode letters."""
     text = name or ""

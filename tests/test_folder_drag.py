@@ -268,3 +268,32 @@ def test_dropping_a_link_onto_a_folder_files_it(window):
     main._source_dropped(data["playlist"], folder_id)
 
     assert db.get_source(data["playlist"]).folder == "Shiurim"
+
+
+def test_details_preview_uses_the_folder_file_name_pattern(window, monkeypatch):
+    """The preview must show the name the conversion will really write."""
+    from PySide6.QtWidgets import QDialog
+
+    from musicdlp.ui import main_window as main_window_module
+
+    main, db, data = window
+    folder_id = db.add_folder("Shiurim")
+    db.update_source(folder_id, filename_template="{track:02d} - {title}")
+    db.set_source_folder(data["playlist"], "Shiurim")
+    main._load_source(data["playlist"])
+
+    captured = {}
+
+    class FakeDetails:
+        def __init__(self, track, **kwargs):
+            captured.update(kwargs)
+
+        def exec(self):
+            return QDialog.Rejected
+
+    monkeypatch.setattr(
+        main_window_module, "TrackDetailsDialog", FakeDetails
+    )
+    main._open_details(data["playlist_tracks"][0])
+
+    assert captured["filename_template"] == "{track:02d} - {title}"

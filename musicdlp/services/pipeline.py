@@ -38,7 +38,9 @@ from musicdlp.core.models import (
 )
 from musicdlp.core.paths import art_cache_dir
 from musicdlp.services.artwork import cover_cache_path, find_cover
-from musicdlp.services.filenames import render_template, unique_path
+from musicdlp.services.filenames import (
+    choose_template, render_template, unique_path,
+)
 from musicdlp.services.ffmpeg import FFmpegService
 from musicdlp.services.spotify import SpotifyService
 from musicdlp.services.tagging import embed_tags
@@ -412,17 +414,20 @@ class Pipeline(QObject):
         if source is None:
             return settings.filename_template
         own = getattr(source, "filename_template", None)
-        if own:
-            return own
+        folder_template = None
         folder_name = (getattr(source, "folder", "") or "").strip()
         if folder_name:
             try:
                 folder = self.db.get_folder_by_name(folder_name)
             except Exception:  # noqa: BLE001 - naming must never break a run
                 folder = None
-            if folder is not None and folder.filename_template:
-                return folder.filename_template
-        return settings.filename_template
+            if folder is not None:
+                folder_template = folder.filename_template
+        return choose_template(
+            settings.filename_template,
+            source_template=own,
+            folder_template=folder_template,
+        )
 
     def _stage_convert(
         self,

@@ -29,7 +29,7 @@ from musicdlp.core.models import (
 )
 from musicdlp.core.paths import art_cache_dir, is_writable
 from musicdlp.services.ffmpeg import FFmpegService
-from musicdlp.services.filenames import render_template
+from musicdlp.services.filenames import choose_template, render_template
 from musicdlp.services.ai import AISettings
 from musicdlp.services.legacy_import import (
     ImportSummary, find_legacy_db, import_legacy,
@@ -2142,6 +2142,26 @@ class MainWindow(QMainWindow):
         if row is not None:
             self._open_details(row.track.id)
 
+    def _filename_template_for(self, source) -> str:
+        """The naming pattern a song in this link will actually use.
+
+        The folder a link is filed in can carry its own pattern, and the
+        details dialog's live preview has to show that pattern rather than
+        the global one, or the preview promises a name the conversion will
+        not write.
+        """
+        if source is None:
+            return self.settings.filename_template
+        folder = None
+        folder_name = (getattr(source, "folder", "") or "").strip()
+        if folder_name:
+            folder = self.db.get_folder_by_name(folder_name)
+        return choose_template(
+            self.settings.filename_template,
+            source_template=getattr(source, "filename_template", None),
+            folder_template=folder.filename_template if folder else None,
+        )
+
     def _open_details(self, track_id: int) -> None:
         """Edit one song's title, artist, album, track number, and picture."""
         if self._is_busy():
@@ -2179,7 +2199,7 @@ class MainWindow(QMainWindow):
             row.track,
             album_default=album_default,
             track_default=row.position,
-            filename_template=self.settings.filename_template,
+            filename_template=self._filename_template_for(row.source),
             parent=self,
             translate_callback=self._translate_one,
         )
