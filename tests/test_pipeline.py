@@ -487,7 +487,15 @@ def test_a_chosen_picture_survives_a_fresh_download(env, monkeypatch):
 # ------------------------------------------------- retag instead of re-encode
 
 
-def test_editing_details_rewrites_tags_without_re_encoding(env, monkeypatch):
+@pytest.fixture()
+def no_lookups(monkeypatch):
+    """A retag must never reach the network for a song that has a cover."""
+    monkeypatch.setattr(pipeline_module, "find_cover", lambda *a, **k: None)
+
+
+def test_editing_details_rewrites_tags_without_re_encoding(
+    env, monkeypatch, no_lookups
+):
     """The audio must survive a metadata edit bit-for-bit."""
     calls = []
 
@@ -526,7 +534,7 @@ def test_editing_details_rewrites_tags_without_re_encoding(env, monkeypatch):
     assert calls and calls[-1][1]["title"] == "Renamed"
 
 
-def test_retag_keeps_the_chosen_cover(env, monkeypatch):
+def test_retag_keeps_the_chosen_cover(env, monkeypatch, no_lookups):
     seen = {}
 
     def fake_embed(path, **kwargs):
@@ -556,7 +564,7 @@ def test_retag_keeps_the_chosen_cover(env, monkeypatch):
     assert Path(seen["cover_path"]) == cover
 
 
-def test_retag_sends_the_song_to_spotify_again(env, monkeypatch):
+def test_retag_sends_the_song_to_spotify_again(env, monkeypatch, no_lookups):
     monkeypatch.setattr(
         pipeline_module, "embed_tags", lambda *args, **kwargs: True
     )
@@ -584,14 +592,18 @@ def test_retag_sends_the_song_to_spotify_again(env, monkeypatch):
     env["pipeline"].wait(10)
 
     track = env["db"].get_track(track_id)
-    assert Path(track.mp3_path).name == "New.mp3"
+    assert Path(track.mp3_path).name == "New.mp3", (
+        track.status, track.error, track.sync_error, sorted(x.name for x in out.iterdir())
+    )
     assert (spotify_dir / "New.mp3").exists()
     assert not (spotify_dir / "Old.mp3").exists()
     assert track.status == "synced"
     assert track.needs_update is False
 
 
-def test_a_song_with_no_file_still_converts_normally(env, monkeypatch):
+def test_a_song_with_no_file_still_converts_normally(
+    env, monkeypatch, no_lookups
+):
     """Retag is only possible when there is something to retag."""
     monkeypatch.setattr(
         pipeline_module, "embed_tags", lambda *args, **kwargs: True
@@ -610,3 +622,34 @@ def test_a_song_with_no_file_still_converts_normally(env, monkeypatch):
     assert env["ytdlp"].calls == [track_id]
     assert env["ffmpeg"].calls == ["mp3"]
     assert env["db"].get_track(track_id).status == "converted"
+
+
+def test_a_retag_does_not_look_the_cover_up_again(env, monkeypatch):
+    """An edit that leaves the artwork alone must not wait on lookups."""
+    calls = []
+    monkeypatch.setattr(
+        pipeline_module, "find_cover",
+        lambda *args, **kwargs: calls.append(args) or None,
+    )
+    monkeypatch.setattr(
+        pipeline_module, "embed_tags", lambda *args, **kwargs: True
+    )
+    out = Path(env["settings"].output_dir) / "MP3"
+    out.mkdir(parents=True, exist_ok=True)
+    song = out / "Song 1.mp3"
+    song.write_bytes(b"audio")
+    cover = env["tmp"] / "cover.jpg"
+    cover.write_bytes(b"picture")
+    track_id = env["track_ids"][0]
+    env["db"].update_track(
+        track_id, status="converted", mp3_path=str(song),
+        cover_path=str(cover),
+    )
+    item = BatchItem(
+        source=env["source"], track=env["db"].get_track(track_id), position=1
+    )
+
+    env["pipeline"].start([item], ["convert"], force=True, retag=True)
+    env["pipeline"].wait(10)
+
+    assert calls == []

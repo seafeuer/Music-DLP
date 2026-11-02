@@ -558,7 +558,10 @@ class Pipeline(QObject):
             video = self._video_cover(track)
             if video is not None:
                 return video
-        elif cover_source is None and settings.ai_find_artwork:
+        elif cover is None and cover_source is None and settings.ai_find_artwork:
+            # Only ask the catalogues when the song has no usable picture
+            # yet. An edit that leaves the artwork alone should be instant,
+            # not a dozen network lookups behind a "saving" message.
             album_art = find_cover(
                 track.display_artist,
                 track.display_title,

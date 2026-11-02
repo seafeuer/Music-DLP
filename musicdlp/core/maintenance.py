@@ -21,7 +21,9 @@ from typing import Optional
 from musicdlp.core.config import Settings
 from musicdlp.core.db import Database
 from musicdlp.core.models import DOWNLOADED
-from musicdlp.core.paths import default_output_dir, default_spotify_dir
+from musicdlp.core.paths import (
+    default_output_dir, default_spotify_dir, is_isolated,
+)
 
 logger = logging.getLogger("musicdlp.maintenance")
 
@@ -38,30 +40,47 @@ def is_temporary(path: Path) -> bool:
 def repair_library(db: Database, settings: Settings) -> list[str]:
     """Fix stale folders and missing outputs. Returns human-readable notes."""
     notes: list[str] = []
-    notes.extend(_repair_folders(db, settings))
+    # An isolated run exists to be safe. Moving its folders, even into its
+    # own home, would silently change what the run is testing, so the
+    # repair only reports.
+    notes.extend(_repair_folders(db, settings, move=not is_isolated()))
     notes.extend(_repair_track_files(db, settings))
     return notes
 
 
-def _repair_folders(db: Database, settings: Settings) -> list[str]:
+def _repair_folders(
+    db: Database, settings: Settings, *, move: bool = True
+) -> list[str]:
     notes: list[str] = []
     changed = False
 
     output = settings.output_path
     if is_temporary(output):
-        target = default_output_dir()
-        _move_tree(output, target)
-        settings.output_dir = str(target)
-        changed = True
-        notes.append(f"Moved your songs out of a temporary folder into {target}")
+        if not move:
+            notes.append(
+                f"Your songs folder is inside a temporary folder: {output}"
+            )
+        else:
+            target = default_output_dir()
+            _move_tree(output, target)
+            settings.output_dir = str(target)
+            changed = True
+            notes.append(f"Moved your songs out of a temporary folder into {target}")
 
     spotify = settings.spotify_path
     if is_temporary(spotify):
-        target = default_spotify_dir()
-        _move_tree(spotify, target)
-        settings.spotify_dir = str(target)
-        changed = True
-        notes.append(f"Moved the Spotify folder to {target}")
+        if not move:
+            if str(spotify) not in " ".join(notes):
+                notes.append(
+                    f"Your Spotify folder is inside a temporary folder: "
+                    f"{spotify}"
+                )
+        else:
+            target = default_spotify_dir()
+            _move_tree(spotify, target)
+            settings.spotify_dir = str(target)
+            changed = True
+            notes.append(f"Moved the Spotify folder to {target}")
 
     if changed:
         try:

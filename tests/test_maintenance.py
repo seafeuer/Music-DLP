@@ -59,6 +59,11 @@ def test_moves_output_out_of_temp(tmp_path, monkeypatch):
     temp_root = tmp_path / "Temp"
     temp_root.mkdir()
     monkeypatch.setattr(tempfile, "tempdir", str(temp_root))
+    # This test is about a normal run; the test suite itself is isolated,
+    # and an isolated run deliberately never moves a folder.
+    monkeypatch.setattr(
+        "musicdlp.core.maintenance.is_isolated", lambda: False
+    )
 
     old_out = temp_root / "build" / "out"
     (old_out / "MP3").mkdir(parents=True)

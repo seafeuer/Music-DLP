@@ -24,6 +24,15 @@ def _home_override() -> Path | None:
     return Path(value).expanduser() if value else None
 
 
+def is_isolated() -> bool:
+    """True when the app is running on an isolated home.
+
+    Used by the startup repair, which must never move a folder in a run
+    that exists precisely to be self-contained.
+    """
+    return _home_override() is not None
+
+
 def is_frozen() -> bool:
     """True when running from a PyInstaller build."""
     return bool(getattr(sys, "frozen", False))
@@ -89,7 +98,15 @@ def default_output_dir() -> Path:
     Kept outside the user's Music and Downloads folders on purpose:
     Spotify scans both of those by default, and mixing these songs in with
     everything else there makes Local Files confusing.
+
+    Under ``MUSICDLP_HOME`` the default lives inside that home. Without
+    this, an isolated run still pointed its default output at the real
+    ``~/MusicDLP``, and the startup repair could move a test's files into
+    the user's real library.
     """
+    override = _home_override()
+    if override is not None:
+        return override / "Music"
     return Path.home() / "MusicDLP"
 
 
