@@ -55,6 +55,7 @@ from musicdlp.ui.dialogs.translate import TranslationDialog
 from musicdlp.ui.theme import apply_theme
 from musicdlp.ui.widgets.inspector import Inspector
 from musicdlp.ui.widgets.log_drawer import LogDrawer
+from musicdlp.ui.widgets.search_box import SearchBox
 from musicdlp.ui.widgets.setup_banner import SetupBanner
 from musicdlp.ui.widgets.source_list import SourceListWidget
 from musicdlp.ui.widgets.status_bar import StatusBarWidget
@@ -400,9 +401,7 @@ class MainWindow(QMainWindow):
         work_row.addWidget(self.theme_button)
         self._update_theme_button()
 
-        self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("Search every song…")
-        self.search_edit.setClearButtonEnabled(True)
+        self.search_edit = SearchBox("Search every song…")
         self.search_edit.setMinimumWidth(180)
         self.search_edit.setMaximumWidth(420)
         self.search_edit.setToolTip(
@@ -605,6 +604,11 @@ class MainWindow(QMainWindow):
         spotify_action.triggered.connect(self._open_spotify)
         help_menu.addAction(spotify_action)
 
+        shortcuts_action = QAction("Keyboard shortcuts…", self)
+        shortcuts_action.setShortcut("Ctrl+/")
+        shortcuts_action.triggered.connect(self._show_shortcuts)
+        help_menu.addAction(shortcuts_action)
+
         about_action = QAction("About Music DLP", self)
         about_action.triggered.connect(self._about)
         help_menu.addAction(about_action)
@@ -643,6 +647,7 @@ class MainWindow(QMainWindow):
         self.track_table.retry_requested.connect(self._retry_track)
         self.track_table.reconvert_requested.connect(self._reconvert_track)
         self.track_table.remove_requested.connect(self._remove_track)
+        self.track_table.remove_selected_requested.connect(self._remove_tracks)
         self.track_table.open_source_requested.connect(self._open_url)
         self.track_table.table.selectionModel().selectionChanged.connect(
             self._on_selection_changed
@@ -2631,6 +2636,50 @@ class MainWindow(QMainWindow):
             + (" Its files were deleted." if delete_files else " Its files were kept.")
         )
 
+    def _remove_tracks(self, track_ids: list) -> None:
+        """Remove the highlighted songs, with one confirmation.
+
+        Delete on a multi-row selection asks once rather than per song;
+        the same three choices as a single removal apply to all of them.
+        """
+        if self._blocked_by_job():
+            return
+        ids = [int(value) for value in track_ids]
+        if not ids:
+            return
+        if len(ids) == 1:
+            self._remove_track(ids[0])
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Remove songs",
+            f"Remove {len(ids)} songs from the library?\n\n"
+            "Yes — also delete their downloaded and converted files.\n"
+            "No — keep the files on disk.\n"
+            "Cancel — do nothing.",
+            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        )
+        if reply == QMessageBox.Cancel:
+            return
+        delete_files = reply == QMessageBox.Yes
+        if not delete_files:
+            snapshot, doomed = self._snapshot_removal(ids)
+            self._push_undo(
+                "Removing songs",
+                lambda: self._restore_removal(snapshot, doomed),
+            )
+        for track_id in ids:
+            self.ctx.library.delete_track(
+                track_id, delete_files=delete_files, forget=True
+            )
+        self._refresh_sources(self._current_source_id)
+        self.status.set_idle(
+            f"Removed {len(ids)} songs from the library."
+            + (" Their files were deleted." if delete_files else " Their files were kept.")
+        )
+
     def _remove_source(self, source_id: int) -> None:
         if self._blocked_by_job():
             return
@@ -2940,17 +2989,33 @@ class MainWindow(QMainWindow):
         self._tray = tray
         QTimer.singleShot(8000, tray.hide)
 
+    def _show_shortcuts(self) -> None:
+        from musicdlp.ui.dialogs.shortcuts import ShortcutsDialog
+
+        ShortcutsDialog(self).exec()
+
     def _about(self) -> None:
         from musicdlp import __version__
-        QMessageBox.about(
-            self,
-            "About Music DLP",
-            f"Music DLP {__version__}\n\n"
-            "Downloads audio from YouTube, X/Twitter, and other yt-dlp sites, "
-            "converts it to tagged MP3/M4A, and delivers it to Spotify Local "
-            "Files.\n\n"
-            f"yt-dlp {self.ctx.ytdlp.version()}",
+
+        box = QMessageBox(self)
+        box.setWindowTitle("About Music DLP")
+        box.setIconPixmap(
+            self.style().standardIcon(QStyle.SP_MediaVolume).pixmap(48, 48)
         )
+        box.setTextFormat(Qt.RichText)
+        box.setText(
+            f"<div style='font-size:16px; font-weight:700'>"
+            f"Music DLP {__version__}</div><br>"
+            "Downloads audio from YouTube, X, and other sites, converts it "
+            "to tagged MP3/M4A files, and puts them where Spotify can find "
+            "them.<br><br>"
+            "<span style='color:palette(placeholder-text)'>"
+            f"yt-dlp {self.ctx.ytdlp.version()} · "
+            f"FFmpeg {'ready' if self.ctx.ffmpeg.available else 'not found'}"
+            "</span>"
+        )
+        box.addButton(QMessageBox.Close)
+        box.exec()
 
     # ----------------------------------------------------------- window state
 

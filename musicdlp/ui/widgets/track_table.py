@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 
 from musicdlp.core.models import ERROR, NEW, Source, Track, TrackRow
 from musicdlp.ui.delegates import ProgressDelegate, StatusDelegate
+from musicdlp.ui.widgets.search_box import SearchBox
 from musicdlp.ui.models.track_model import (
     COL_ARTIST, COL_CHECK, COL_DURATION, COL_FORMAT, COL_POSITION,
     COL_PROGRESS, COL_STATUS, COL_TITLE, ROW_ROLE, TrackFilterProxy,
@@ -23,6 +24,34 @@ from musicdlp.ui.models.track_model import (
 
 class TrackTableView(QTableView):
     """Table view that lets selected rows be dragged into a library folder."""
+
+    remove_pressed = Signal()
+    toggle_pressed = Signal(int)
+
+    def keyPressEvent(self, event) -> None:
+        """Keyboard behaviour a list of songs is expected to have.
+
+        Delete removes the highlighted songs, and Space ticks or unticks
+        them — the two things a user reaches for without looking for a
+        button. Enter is left to the table, which opens the details dialog
+        through doubleClicked/activated handling in the parent widget.
+        """
+        key = event.key()
+        if key in (Qt.Key_Delete, Qt.Key_Backspace):
+            if self.selected_track_ids():
+                self.remove_pressed.emit()
+                event.accept()
+                return
+        if key == Qt.Key_Space:
+            index = self.currentIndex()
+            if index.isValid():
+                model = self.model()
+                source_index = model.mapToSource(index)
+                row = model.sourceModel().rows[source_index.row()]
+                self.toggle_pressed.emit(row.track.id)
+                event.accept()
+                return
+        super().keyPressEvent(event)
 
     def selected_track_ids(self) -> list[int]:
         model = self.model()
@@ -75,6 +104,7 @@ class TrackTableWidget(QWidget):
     retry_requested = Signal(int)
     reconvert_requested = Signal(int)
     remove_requested = Signal(int)
+    remove_selected_requested = Signal(list)
     open_source_requested = Signal(str)
 
     def __init__(self, parent=None) -> None:
@@ -120,9 +150,7 @@ class TrackTableWidget(QWidget):
         self.filter_combo.currentIndexChanged.connect(self._on_filter_changed)
         filter_row.addWidget(self.filter_combo)
 
-        self.search = QLineEdit()
-        self.search.setPlaceholderText("Filter these songs…")
-        self.search.setClearButtonEnabled(True)
+        self.search = SearchBox("Filter these songs…")
         self.search.setMinimumWidth(150)
         self.search.setToolTip("Hide every song whose title or artist does not match")
         self.search.textChanged.connect(self._on_search_changed)
@@ -212,8 +240,11 @@ class TrackTableWidget(QWidget):
         self.table.setItemDelegateForColumn(COL_STATUS, StatusDelegate(self.table))
         self.table.setItemDelegateForColumn(COL_PROGRESS, ProgressDelegate(self.table))
         self.table.doubleClicked.connect(self._on_double_click)
+        self.table.remove_pressed.connect(self._remove_selected)
+        self.table.toggle_pressed.connect(self._toggle_one)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._context_menu)
+        self.table.setAccessibleName("Songs")
 
         header = self.table.horizontalHeader()
         header.setStretchLastSection(False)
@@ -485,6 +516,16 @@ class TrackTableWidget(QWidget):
         if row is not None:
             self.edit_details_requested.emit(row.track.id)
 
+    def _toggle_one(self, track_id: int) -> None:
+        checked = track_id in self.model.checked
+        self.model.toggle_check(track_id, not checked)
+
+    def _remove_selected(self) -> None:
+        """Remove every highlighted song, after one confirmation upstream."""
+        ids = self.table.selected_track_ids()
+        if ids:
+            self.remove_selected_requested.emit(ids)
+
     def suggestion_rows(self) -> list[TrackRow]:
         return [row for row in self.model.rows if row.track.has_suggestion]
 
@@ -515,10 +556,17 @@ class TrackTableWidget(QWidget):
             lambda: self.reconvert_requested.emit(track.id),
         )
         menu.addSeparator()
-        menu.addAction(
-            "Remove from library…",
-            lambda: self.remove_requested.emit(track.id),
-        )
+        selected = self.table.selected_track_ids()
+        if len(selected) > 1:
+            menu.addAction(
+                f"Remove {len(selected)} songs from the library…",
+                self._remove_selected,
+            )
+        else:
+            menu.addAction(
+                "Remove from library…",
+                lambda: self.remove_requested.emit(track.id),
+            )
         menu.exec(self.table.viewport().mapToGlobal(position))
 
 

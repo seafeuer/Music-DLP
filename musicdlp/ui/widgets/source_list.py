@@ -19,6 +19,7 @@ from musicdlp.core.models import (
     ALL_SONGS_ID, CONVERTED, DOWNLOADED, ERROR, SYNCED, Source,
 )
 from musicdlp.ui.theme import ACCENT, tone
+from musicdlp.ui.widgets.search_box import SearchBox
 
 COUNT_ROLE = Qt.UserRole + 1
 INDENT_ROLE = Qt.UserRole + 2
@@ -483,9 +484,7 @@ class SourceListWidget(QWidget):
         header.setObjectName("sectionTitle")
         layout.addWidget(header)
 
-        self.search = QLineEdit()
-        self.search.setPlaceholderText("Filter links…")
-        self.search.setClearButtonEnabled(True)
+        self.search = SearchBox("Filter links…")
         self.search.setToolTip(
             "Show only links and folders whose name matches. To search the "
             "songs themselves, use the box at the top of the window."
