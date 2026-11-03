@@ -399,14 +399,21 @@ class TrackTableWidget(QWidget):
         show_format = mode == "pro" and width >= 560
         show_progress = self._has_progress() and width >= 430
         show_artist = width >= 580
+        # The fixed columns can add up to more than a narrow pane. The
+        # position and length matter less than the song's name, so they
+        # step aside before the Title column is squeezed to nothing.
+        show_position = width >= 380
+        show_duration = width >= 420
 
         self.table.setColumnHidden(COL_FORMAT, not show_format)
         self.table.setColumnHidden(COL_PROGRESS, not show_progress)
         self.table.setColumnHidden(COL_ARTIST, not show_artist)
+        self.table.setColumnHidden(COL_POSITION, not show_position)
+        self.table.setColumnHidden(COL_DURATION, not show_duration)
 
         # Below this width the buttons clip, so the same actions move into
         # one menu rather than being cut off mid-word.
-        compact = self.width() < 900
+        compact = self.width() < 660
         for widget in (self.edit_button, self.titles_button,
                        self.select_button):
             widget.setVisible(not compact)

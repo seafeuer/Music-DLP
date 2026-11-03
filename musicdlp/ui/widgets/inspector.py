@@ -286,7 +286,7 @@ class Inspector(QWidget):
             # actions. Say so where the user is looking, not only in the
             # step strip at the top of the window.
             self.hint_label.setText(
-                "Not in the next run. Tick “Include in the next run” above "
+                "Not in the next run. Tick “Include in the next run” below "
                 "to download this song."
             )
         else:
