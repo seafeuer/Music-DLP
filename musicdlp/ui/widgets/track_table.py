@@ -393,7 +393,7 @@ class TrackTableWidget(QWidget):
         mode = getattr(self, "mode", "easy")
 
         show_format = mode == "pro" and width >= 560
-        show_progress = self._has_progress() and width >= 480
+        show_progress = self._has_progress() and width >= 430
         show_artist = width >= 580
 
         self.table.setColumnHidden(COL_FORMAT, not show_format)

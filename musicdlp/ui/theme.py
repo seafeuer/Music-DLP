@@ -53,6 +53,10 @@ DARK = {
     "panel": "#2b2d31",
     "panel_alt": "#26282b",
     "border": "#3a3d42",
+    # A boundary a user has to see to find an input or a button. The
+    # decorative border above is too faint for that (1.3:1); this one is
+    # 3.5:1 against the panel, which WCAG 1.4.11 asks of a control.
+    "control_border": "#7a828c",
     "text": "#e6e6e6",
     "muted": "#9aa0a6",
     "accent": ACCENT,
@@ -74,6 +78,7 @@ LIGHT = {
     "panel": "#ffffff",
     "panel_alt": "#eef1f5",
     "border": "#d7dbe0",
+    "control_border": "#7d848c",
     "text": "#1f2328",
     "muted": "#5f6670",
     "accent": ACCENT,
@@ -170,7 +175,6 @@ def build_palette(theme: str) -> QPalette:
 def build_stylesheet(theme: str) -> str:
     c = tokens(theme)
     return f"""
-    QWidget {{ font-size: 13px; }}
     QMainWindow, QDialog {{ background: {c['window']}; }}
     QToolBar {{ border: none; spacing: 6px; }}
 
@@ -193,14 +197,14 @@ def build_stylesheet(theme: str) -> str:
     QLabel#brand {{ font-weight: 700; font-size: 17px; }}
 
     QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QTextEdit {{
-        background: {c['panel']}; border: 1px solid {c['border']};
+        background: {c['panel']}; border: 1px solid {c['control_border']};
         border-radius: 6px; padding: 5px 8px; min-height: 20px;
         selection-background-color: {c['accent']};
         selection-color: {c['on_accent']};
     }}
     QLineEdit:focus, QComboBox:focus, QSpinBox:focus,
     QDoubleSpinBox:focus, QPlainTextEdit:focus {{
-        border: 1px solid {c['accent']};
+        border: 1px solid {c['link']};
     }}
     QComboBox::drop-down {{ border: none; width: 22px; }}
     QComboBox QAbstractItemView {{
@@ -210,12 +214,12 @@ def build_stylesheet(theme: str) -> str:
     }}
 
     QPushButton, QToolButton {{
-        background: {c['panel']}; border: 1px solid {c['border']};
+        background: {c['panel']}; border: 1px solid {c['control_border']};
         border-radius: 6px; padding: 6px 12px;
     }}
     QPushButton:hover, QToolButton:hover {{ background: {c['hover']}; }}
     QPushButton:focus, QToolButton:focus {{
-        border: 1px solid {c['accent']};
+        border: 1px solid {c['link']};
     }}
     QPushButton:disabled, QToolButton:disabled {{ color: {c['muted']}; }}
     QPushButton#primary:disabled {{
@@ -246,7 +250,7 @@ def build_stylesheet(theme: str) -> str:
 
     QTableView {{
         background: {c['panel']}; alternate-background-color: {c['panel_alt']};
-        border: 1px solid {c['border']}; border-radius: 8px;
+        border: 1px solid {c['control_border']}; border-radius: 8px;
         selection-background-color: {c['accent']};
         selection-color: {c['on_accent']};
         gridline-color: {c['border']};
@@ -259,7 +263,7 @@ def build_stylesheet(theme: str) -> str:
     }}
     QHeaderView::section:hover {{ background: {c['hover']}; }}
     QListView {{
-        background: {c['panel']}; border: 1px solid {c['border']};
+        background: {c['panel']}; border: 1px solid {c['control_border']};
         border-radius: 8px; outline: none;
     }}
     QListView::item {{ border-radius: 6px; }}
@@ -276,7 +280,7 @@ def build_stylesheet(theme: str) -> str:
         border-bottom: 2px solid {c['accent']};
         font-weight: 600;
     }}
-    QTabBar::tab:hover {{ color: {c['accent']}; }}
+    QTabBar::tab:hover {{ color: {c['link']}; }}
 
     QSplitter::handle {{ background: transparent; }}
     QSplitter::handle:horizontal {{ width: 8px; }}

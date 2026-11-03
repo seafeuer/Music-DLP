@@ -107,3 +107,37 @@ def test_the_shortcuts_dialog_lists_what_is_actually_bound(window):
     text = " ".join(keys for keys, _description in SHORTCUTS)
     for bound in ("F2", "Ctrl+Z", "Ctrl+F", "Ctrl+T", "Ctrl+Shift+A"):
         assert bound in text
+
+
+def test_return_on_a_row_opens_the_details_dialog(window, monkeypatch, qtbot):
+    from PySide6.QtCore import QModelIndex
+
+    main, _db, data = window
+    main._load_source(data["source"])
+    main.track_table._select_by_track_id(data["tracks"][0])
+    opened = []
+    monkeypatch.setattr(main, "_open_details", opened.append)
+
+    qtbot.keyClick(main.track_table.table, Qt.Key_Return)
+
+    assert opened == [data["tracks"][0]]
+
+
+def test_escape_clears_the_library_search(window):
+    main, _db, _data = window
+    main.search_edit.setText("drake")
+    assert main.search_edit.text() == "drake"
+
+    main._on_escape()
+
+    assert main.search_edit.text() == ""
+
+
+def test_escape_closes_the_log_drawer(window):
+    main, _db, _data = window
+    main.logs_action.setChecked(True)
+    assert main.log_drawer.isVisible()
+
+    main._on_escape()
+
+    assert not main.log_drawer.isVisible()

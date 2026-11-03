@@ -105,3 +105,19 @@ def test_links_are_readable_on_the_window(theme):
     colors = tokens(theme)
     assert contrast(colors["link"], colors["window"]) >= AA_BODY
     assert contrast(colors["link"], colors["panel"]) >= AA_BODY
+
+
+@pytest.mark.parametrize("theme", ["dark", "light"])
+def test_control_boundaries_are_visible(theme):
+    """WCAG 1.4.11: a control's boundary needs 3:1 against its surface."""
+    colors = tokens(theme)
+    assert contrast(colors["control_border"], colors["panel"]) >= 3.0
+    assert contrast(colors["control_border"], colors["window"]) >= 3.0
+
+
+def test_body_text_is_not_pinned_to_a_pixel_size():
+    """The user's own Windows text-size preference must win."""
+    from musicdlp.ui.theme import build_stylesheet
+
+    stylesheet = build_stylesheet("dark")
+    assert "QWidget { font-size" not in stylesheet

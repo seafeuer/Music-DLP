@@ -69,11 +69,15 @@ class StatusBarWidget(QWidget):
 
         self.status_label = QLabel("Ready")
         self.status_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.status_label.setMinimumWidth(120)
+        # Enough room for "Download: <song> — 42%" before the ETA gives up
+        # its space. The ETA used to keep its full width and squeeze this
+        # line to "Download…".
+        self.status_label.setMinimumWidth(220)
         layout.addWidget(self.status_label, 1)
 
         self.detail_label = QLabel("")
         self.detail_label.setObjectName("muted")
+        self.detail_label.setMaximumWidth(320)
         self.detail_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         layout.addWidget(self.detail_label)
 
@@ -103,6 +107,14 @@ class StatusBarWidget(QWidget):
 
     # ------------------------------------------------------------- progress
 
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        # At a narrow window the location shortcuts leave the status line
+        # no room. Settings and the menu still open both.
+        narrow = self.width() < 900
+        self.output_button.setVisible(not narrow)
+        self.spotify_button.setVisible(not narrow)
+
     def set_progress(self, data: dict) -> None:
         percent = float(data.get("percent") or 0)
         self.progress.show()
@@ -111,20 +123,30 @@ class StatusBarWidget(QWidget):
         stage = (data.get("stage") or "").title()
         title = data.get("title") or ""
         item = float(data.get("item_percent") or 0)
-        if title and stage:
+        narrow = self.width() < 900
+        if title and stage and not narrow:
             self.status_label.setText(f"{stage}: {title} — {item:.0f}%")
+        elif title:
+            self.status_label.setText(f"{title} — {item:.0f}%")
         elif stage:
             self.status_label.setText(stage)
         else:
             self.status_label.setText(title)
 
-        details = [f"{percent:.0f}% overall"]
-        speed = _format_speed(data.get("speed"))
-        if speed:
-            details.insert(0, speed)
         eta = _format_eta(data.get("eta"))
-        if eta:
-            details.append(f"{eta} left")
+        speed = _format_speed(data.get("speed"))
+        if narrow:
+            # Keep the two numbers that answer "how long?" and drop the
+            # throughput, which needs the width this line does not have.
+            details = [f"{percent:.0f}%"]
+            if eta:
+                details.append(f"{eta} left")
+        else:
+            details = [f"{percent:.0f}% overall"]
+            if speed:
+                details.insert(0, speed)
+            if eta:
+                details.append(f"{eta} left")
         self.detail_label.setText(" · ".join(details))
         self.cancel_button.show()
 

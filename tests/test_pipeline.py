@@ -653,3 +653,34 @@ def test_a_retag_does_not_look_the_cover_up_again(env, monkeypatch):
     env["pipeline"].wait(10)
 
     assert calls == []
+
+
+def test_a_retag_rebuilds_a_format_whose_file_is_missing(env, monkeypatch):
+    """A configured format that was deleted is encoded again, from the raw
+    download — the formats that exist keep their audio untouched."""
+    monkeypatch.setattr(
+        pipeline_module, "embed_tags", lambda *args, **kwargs: True
+    )
+    monkeypatch.setattr(pipeline_module, "find_cover", lambda *a, **k: None)
+    env["settings"].formats = ["mp3", "m4a"]
+    raw = env["tmp"] / "raw.webm"
+    raw.write_bytes(b"raw")
+    out = Path(env["settings"].output_dir) / "MP3"
+    out.mkdir(parents=True, exist_ok=True)
+    song = out / "Song 1.mp3"
+    song.write_bytes(b"audio")
+    track_id = env["track_ids"][0]
+    env["db"].update_track(
+        track_id, status="converted", mp3_path=str(song), raw_path=str(raw),
+    )
+
+    item = BatchItem(
+        source=env["source"], track=env["db"].get_track(track_id), position=1
+    )
+    env["pipeline"].start([item], ["convert"], force=True, retag=True)
+    env["pipeline"].wait(20)
+
+    track = env["db"].get_track(track_id)
+    assert env["ffmpeg"].calls == ["m4a"]      # only the missing format
+    assert Path(track.m4a_path).exists()
+    assert Path(track.mp3_path).read_bytes() == b"audio"

@@ -472,6 +472,16 @@ class Pipeline(QObject):
         if not existing:
             return False
 
+        # A format the user configured but whose file was deleted is built
+        # from the kept download. Only that format is encoded; the ones
+        # that already exist are not touched beyond their tags.
+        missing = [
+            fmt for fmt in settings.formats
+            if fmt not in {item_fmt for item_fmt, _path in existing}
+        ]
+        raw = Path(track.raw_path) if track.raw_path else None
+        fill_missing = bool(missing and raw and raw.exists())
+
         cover = self._cover_for_write(track, settings)
 
         for fmt, old_path in existing:
@@ -534,6 +544,14 @@ class Pipeline(QObject):
             if cover is not None and str(cover) != (track.cover_path or ""):
                 self.db.update_track(track.id, cover_path=str(cover))
 
+        if fill_missing:
+            self._fill_missing_formats(
+                track, settings, missing, raw, cover, album, track_no,
+                template, item, summary,
+            )
+            if track.id in summary.get("_failed_ids", set()):
+                return True
+
         self.db.update_track(
             track.id,
             status=CONVERTED,
@@ -542,6 +560,87 @@ class Pipeline(QObject):
             needs_update=0,
         )
         return True
+
+    def _fill_missing_formats(
+        self,
+        track: Track,
+        settings: Settings,
+        formats: list[str],
+        raw: Path,
+        cover: Optional[Path],
+        album: str,
+        track_no: int,
+        template: str,
+        item: BatchItem,
+        summary: dict,
+    ) -> None:
+        """Encode a configured format whose file is gone, from the download.
+
+        Re-tagging must not lose a format the user asked for. These files
+        did not exist, so encoding them is not a quality loss; the formats
+        that did exist were left alone above.
+        """
+        for fmt in formats:
+            if self._cancel.is_set():
+                raise Cancelled()
+            stem = render_template(
+                template,
+                title=track.display_title,
+                artist=track.display_artist,
+                album=album,
+                track=track_no,
+                media_id=track.media_id,
+                source=item.source.title,
+            )
+            out_dir = settings.output_path / fmt.upper()
+            out_dir.mkdir(parents=True, exist_ok=True)
+            output = unique_path(
+                out_dir, stem, f".{fmt}", fallback_id=track.media_id
+            )
+            try:
+                self.ffmpeg.convert(
+                    raw,
+                    output,
+                    fmt=fmt,
+                    bitrate=(
+                        settings.mp3_bitrate if fmt == "mp3"
+                        else settings.m4a_bitrate
+                    ),
+                    normalize=settings.normalize,
+                    cancel_event=self._cancel,
+                )
+                if not embed_tags(
+                    output,
+                    title=track.display_title,
+                    artist=track.display_artist or "Unknown",
+                    album=album,
+                    track=track_no,
+                    cover_path=cover,
+                ):
+                    raise AppError(
+                        f"Could not write the song details into "
+                        f"{output.name}."
+                    )
+            except Cancelled:
+                raise
+            except Exception as exc:  # noqa: BLE001 - reported, not fatal
+                logger.warning(
+                    "Could not rebuild the %s file for %s: %s",
+                    fmt, track.display_title, exc,
+                )
+                _record_failure(
+                    summary, track.id,
+                    f"{track.display_title}: could not rebuild the {fmt} file",
+                )
+                self.db.update_track(
+                    track.id, status=ERROR, error=str(exc)
+                )
+                continue
+            self.db.update_track(
+                track.id,
+                **({"mp3_path": str(output)} if fmt == "mp3"
+                   else {"m4a_path": str(output)}),
+            )
 
     def _cover_for_write(self, track: Track, settings: Settings) -> Optional[Path]:
         """The picture to embed in a file that is being written again.

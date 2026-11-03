@@ -4,6 +4,7 @@ import logging
 
 import pytest
 from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication
 
 from musicdlp.core.config import Settings
 from musicdlp.core.db import Database
@@ -99,6 +100,10 @@ def test_pro_mode_and_inspector(window):
 
 def test_progress_filter_and_search(window):
     main, _db, ids = window
+    # The speed is shown when the status line has room for it; the
+    # headless screen is only 800 px wide, so size the window as a user's.
+    main.resize(1280, 800)
+    QApplication.processEvents()
     main._on_progress({
         "stage": "download",
         "percent": 50,
@@ -493,3 +498,36 @@ def test_a_failed_batch_opens_the_activity_log(window):
     })
     assert main.logs_action.isChecked()
     assert main.log_drawer.isVisible()
+
+
+def test_the_status_line_keeps_its_song_at_a_narrow_width(qapp):
+    from musicdlp.ui.widgets.status_bar import StatusBarWidget
+
+    bar = StatusBarWidget()
+    bar.resize(820, 40)
+    bar.set_progress({
+        "stage": "download", "percent": 40, "item_percent": 42,
+        "title": "At The Gates", "speed": 3_200_000, "eta": 19,
+    })
+    assert "At The Gates" in bar.status_label.text()
+    assert "MB/s" not in bar.detail_label.text()
+    assert "19" in bar.detail_label.text()
+
+
+def test_the_window_minimum_fits_the_screen(qapp, qtbot, tmp_path, monkeypatch):
+    from musicdlp.core.config import Settings
+    from musicdlp.core.db import Database
+    from musicdlp.ui.main_window import MainWindow, build_context
+
+    monkeypatch.setattr(Settings, "save", lambda self, path=None: None)
+    settings = Settings(
+        output_dir=str(tmp_path / "out"), spotify_dir=str(tmp_path / "sp"),
+        first_run_done=True, notifications=False,
+    )
+    db = Database(tmp_path / "lib.db")
+    win = MainWindow(build_context(settings, db, __import__("logging").getLogger("t")))
+    qtbot.addWidget(win)
+    screen = qapp.primaryScreen().availableGeometry()
+    assert win.minimumWidth() <= max(720, screen.width())
+    assert win.minimumHeight() <= max(440, screen.height())
+    db.close()

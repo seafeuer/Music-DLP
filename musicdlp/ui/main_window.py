@@ -221,7 +221,6 @@ class MainWindow(QMainWindow):
         self.logger = ctx.logger
 
         self.setWindowTitle(f"Music DLP {__version__}")
-        self.setMinimumSize(1000, 620)
         self._resize_to_screen()
         self._restore_geometry()
 
@@ -249,6 +248,7 @@ class MainWindow(QMainWindow):
         self._build_menus()
         self._connect_signals()
         self._install_log_handler()
+        self._install_escape()
 
         self.setAcceptDrops(True)
         self._apply_mode()
@@ -594,6 +594,22 @@ class MainWindow(QMainWindow):
         )
         view_menu.addAction(self.inspector_action)
 
+        self.view_theme_action = QAction("Switch theme", self)
+        self.view_theme_action.triggered.connect(self._toggle_theme)
+        view_menu.addAction(self.view_theme_action)
+
+        mode_menu = view_menu.addMenu("Mode")
+        self.easy_mode_action = QAction("Easy — one button does everything", self)
+        self.easy_mode_action.triggered.connect(
+            lambda: self._choose_mode("easy")
+        )
+        self.pro_mode_action = QAction("Pro — run the three steps yourself", self)
+        self.pro_mode_action.triggered.connect(
+            lambda: self._choose_mode("pro")
+        )
+        mode_menu.addAction(self.easy_mode_action)
+        mode_menu.addAction(self.pro_mode_action)
+
         view_menu.addSeparator()
         find_action = QAction("Search every song", self)
         find_action.setShortcut("Ctrl+F")
@@ -659,6 +675,9 @@ class MainWindow(QMainWindow):
         self.track_table.open_source_requested.connect(self._open_url)
         self.track_table.table.selectionModel().selectionChanged.connect(
             self._on_selection_changed
+        )
+        self.track_table.table.activated.connect(
+            lambda _index: self._edit_highlighted()
         )
 
         self.inspector.edit_details_requested.connect(self._open_details)
@@ -823,6 +842,25 @@ class MainWindow(QMainWindow):
             self.search_edit.clear()
         else:
             self._reload_current_source()
+
+    def _install_escape(self) -> None:
+        from PySide6.QtGui import QKeySequence, QShortcut
+
+        self._escape = QShortcut(QKeySequence(Qt.Key_Escape), self)
+        self._escape.setContext(Qt.WindowShortcut)
+        self._escape.activated.connect(self._on_escape)
+
+    def _on_escape(self) -> None:
+        """Escape clears whatever search is active, then closes the log."""
+        if self.search_edit.text():
+            self.search_edit.clear()
+            return
+        if self.track_table.search.text():
+            self.track_table.search.clear()
+            self._reload_current_source()
+            return
+        if self.log_drawer.isVisible():
+            self.logs_action.setChecked(False)
 
     def _focus_search(self) -> None:
         self.search_edit.setFocus()
@@ -2843,15 +2881,22 @@ class MainWindow(QMainWindow):
         dark = self.settings.theme == "dark"
         # The icon is the action: sun to go light, moon to go dark. The
         # full word is kept when there is room for it.
-        compact = self.width() < 1180
-        if compact:
-            self.theme_button.setText("☀" if dark else "☾")
-        else:
-            self.theme_button.setText("Light" if dark else "Dark")
+        width = self.width()
+        # The word needs about 80 px, which the action buttons need more
+        # on a narrow window. The View menu and Settings both switch the
+        # theme there.
+        self.theme_button.setVisible(width >= 1180)
+        self.theme_button.setText("Light" if dark else "Dark")
         self.theme_button.setToolTip(
             "Switch to the light theme" if dark else "Switch to the dark theme"
         )
         self.theme_button.setAccessibleName("Switch theme")
+        action = getattr(self, "view_theme_action", None)
+        if action is not None:
+            action.setText(
+                "Switch to the light theme" if dark
+                else "Switch to the dark theme"
+            )
 
     def _toggle_theme(self) -> None:
         self.settings.theme = "light" if self.settings.theme == "dark" else "dark"
@@ -2960,6 +3005,11 @@ class MainWindow(QMainWindow):
             self.mode_combo.blockSignals(True)
             self.mode_combo.setCurrentIndex(index)
             self.mode_combo.blockSignals(False)
+
+    def _choose_mode(self, mode: str) -> None:
+        index = self.mode_combo.findData(mode)
+        if index >= 0:
+            self.mode_combo.setCurrentIndex(index)
 
     def _on_mode_changed(self, _index: int) -> None:
         mode = self.mode_combo.currentData()
@@ -3102,14 +3152,25 @@ class MainWindow(QMainWindow):
     # ----------------------------------------------------------- window state
 
     def _resize_to_screen(self) -> None:
-        """Choose a default size that fits the screen, including 768p laptops."""
+        """Choose a size and a minimum that fit the screen.
+
+        1000x620 is the designed minimum, but a 1280x800 laptop at 125%
+        scaling only has about 1024x602 logical pixels: a hard 620 px
+        minimum put the bottom of the window under the taskbar. The
+        minimum follows the screen instead, so the window can always be
+        resized small enough to be used.
+        """
         screen = QApplication.primaryScreen()
         if screen is None:
             self.resize(1280, 800)
+            self.setMinimumSize(760, 480)
             return
         available = screen.availableGeometry()
-        width = min(1280, max(1000, available.width() - 40))
-        height = min(820, max(620, available.height() - 60))
+        min_width = max(720, min(1000, available.width() - 24))
+        min_height = max(440, min(620, available.height() - 24))
+        self.setMinimumSize(min_width, min_height)
+        width = min(1280, max(min_width, available.width() - 40))
+        height = min(820, max(min_height, available.height() - 60))
         self.resize(width, height)
 
     def _restore_geometry(self) -> None:
@@ -3172,9 +3233,12 @@ class MainWindow(QMainWindow):
         until the user drags the splitter themselves.
         """
         width = self.width()
-        compact = width < 1180
-        if compact != getattr(self, "_compact", None):
-            self._compact = compact
+        state = (width < 1180, width < 940)
+        if state != getattr(self, "_toolbar_state", None):
+            self._toolbar_state = state
+            compact, tiny = state
+            self.mode_combo.setItemText(0, "Easy" if compact else "Easy mode")
+            self.mode_combo.setItemText(1, "Pro" if compact else "Pro mode")
             self._update_theme_button()
             self._update_actions()
         if getattr(self, "_splitter_touched", False):
@@ -3221,6 +3285,14 @@ class MainWindow(QMainWindow):
             self._cancel()
             self.ctx.pipeline.wait(10)
             self._add_cancel.set()
+            # A link read or a cover fix runs on the shared thread pool.
+            # Closing the database under one of those workers is how a
+            # shutdown turns into a "Database is closed" traceback, so
+            # give them a bounded moment to stop.
+            if not QThreadPool.globalInstance().waitForDone(8000):
+                self.logger.warning(
+                    "A background task was still running at exit"
+                )
 
         self._save_window_state()
         self.logger.removeHandler(self.log_handler)
