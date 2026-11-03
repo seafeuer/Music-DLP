@@ -141,6 +141,7 @@ class TrackTableWidget(QWidget):
         filter_row.setSpacing(6)
 
         self.filter_combo = QComboBox()
+        self.filter_combo.setAccessibleName("Show only songs in a particular state")
         self.filter_combo.setToolTip("Show only songs in a particular state")
         for label, value in [
             ("All songs", "all"),
@@ -183,9 +184,11 @@ class TrackTableWidget(QWidget):
         self.select_button.setPopupMode(QToolButton.InstantPopup)
         self.select_button.setToolTip("Tick songs by their state")
         select_menu = QMenu(self.select_button)
-        select_menu.addAction("All songs", self.model.check_all)
-        select_menu.addAction("Not downloaded", lambda: self.model.check_status(NEW))
-        select_menu.addAction("Needs attention", self.model.check_problems)
+        select_menu.addAction("All songs", self.check_all_visible)
+        select_menu.addAction(
+            "Not downloaded", lambda: self.check_status_visible(NEW)
+        )
+        select_menu.addAction("Needs attention", self.check_problems_visible)
         select_menu.addSeparator()
         select_menu.addAction("Clear selection", self.model.clear_checks)
         self.select_button.setMenu(select_menu)
@@ -208,12 +211,12 @@ class TrackTableWidget(QWidget):
             "Suggested titles…", self.suggestions_requested.emit
         )
         actions_menu.addSeparator()
-        actions_menu.addAction("Select all", self.model.check_all)
+        actions_menu.addAction("Select all", self.check_all_visible)
         actions_menu.addAction(
-            "Select not downloaded", lambda: self.model.check_status(NEW)
+            "Select not downloaded", lambda: self.check_status_visible(NEW)
         )
         actions_menu.addAction(
-            "Select needs attention", self.model.check_problems
+            "Select needs attention", self.check_problems_visible
         )
         actions_menu.addAction("Clear selection", self.model.clear_checks)
         self.actions_button.setMenu(actions_menu)
@@ -380,6 +383,46 @@ class TrackTableWidget(QWidget):
         if 0 <= row < len(self.model.rows):
             return self.model.rows[row]
         return None
+
+    # ---------------------------------------------------------- selecting
+    #
+    # "Select all" means the songs on screen. Calling the model directly
+    # ticked rows the filter was hiding, so a user who filtered to one
+    # song and pressed Ctrl+A downloaded the whole source.
+
+    def visible_track_ids(self) -> list[int]:
+        ids: list[int] = []
+        for proxy_row in range(self.proxy.rowCount()):
+            source_index = self.proxy.mapToSource(
+                self.proxy.index(proxy_row, 0)
+            )
+            row = source_index.row()
+            if 0 <= row < len(self.model.rows):
+                ids.append(self.model.rows[row].track.id)
+        return ids
+
+    def check_all_visible(self) -> None:
+        self.model.set_checked(self.visible_track_ids())
+
+    def check_status_visible(self, status: str) -> None:
+        shown = set(self.visible_track_ids())
+        self.model.set_checked(
+            row.track.id for row in self.model.rows
+            if row.track.id in shown and row.track.status == status
+        )
+
+    def check_problems_visible(self) -> None:
+        shown = set(self.visible_track_ids())
+        self.model.set_checked(
+            row.track.id for row in self.model.rows
+            if row.track.id in shown
+            and (
+                row.file_missing
+                or row.track.status == ERROR
+                or row.track.sync_error
+                or row.track.needs_update
+            )
+        )
 
     def set_mode(self, mode: str) -> None:
         self.mode = mode

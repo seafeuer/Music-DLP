@@ -121,3 +121,11 @@ def test_body_text_is_not_pinned_to_a_pixel_size():
 
     stylesheet = build_stylesheet("dark")
     assert "QWidget { font-size" not in stylesheet
+
+
+@pytest.mark.parametrize("theme", ["dark", "light"])
+def test_scrollbar_handle_is_visible_on_both_surfaces(theme):
+    """WCAG 1.4.11 asks 3:1 of a control boundary, thumb included."""
+    colors = tokens(theme)
+    for surface in ("window", "panel"):
+        assert contrast(colors["control_border"], colors[surface]) >= 3.0

@@ -259,6 +259,16 @@ class SourceDelegate(QStyledItemDelegate):
             painter.setPen(Qt.NoPen)
             painter.drawRoundedRect(rect, 7, 7)
 
+        # Selection stays painted when focus moves to the song table, so
+        # it cannot also mean "this list has the keyboard". A ring says
+        # that explicitly, which is what WCAG 2.4.7 asks for.
+        focused = bool(option.state & QStyle.State_HasFocus)
+        if focused:
+            painter.setBrush(Qt.NoBrush)
+            painter.setPen(QPen(QColor(ACCENT), 2))
+            painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 6, 6)
+            painter.setPen(Qt.NoPen)
+
         text_rect = rect.adjusted(14, 7, -30, -7)
         if source.is_folder:
             # A native folder icon says "container" without the chevron,
@@ -493,6 +503,7 @@ class SourceListWidget(QWidget):
         layout.addWidget(self.search)
 
         self.view = SourceListView()
+        self.view.setAccessibleName("Links and folders")
         self.view.setModel(self.proxy)
         self.view.setItemDelegate(SourceDelegate(self.view))
         self.view.setSelectionMode(QListView.SingleSelection)
@@ -635,8 +646,13 @@ class SourceListWidget(QWidget):
             if row is not None:
                 is_folder = self.model.rows[row][1].is_folder
         busy = getattr(self, "_busy", False)
-        self.refresh_button.setEnabled(not busy and not is_all and not is_folder)
-        self.remove_button.setEnabled(not busy and not is_all)
+        has_selection = source_id is not None
+        self.refresh_button.setEnabled(
+            not busy and has_selection and not is_all and not is_folder
+        )
+        self.remove_button.setEnabled(
+            not busy and has_selection and not is_all
+        )
 
     def _context_menu(self, position) -> None:
         # A job is already reading or writing this library. Changing links

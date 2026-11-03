@@ -181,10 +181,12 @@ class StatusBarWidget(QWidget):
         self.output_button.setToolTip(f"Open {path}")
 
     def set_spotify_state(self, text: str, tooltip: str = "") -> None:
-        # The button stays short; what was found is in the tooltip and in
-        # the setup banner, so the bar never grows to fit a sentence.
+        # A missing Spotify used to look identical to a working one until
+        # the user hovered. The button stays short, but it now says the
+        # part that changes between the two states.
         self.spotify_button.setToolTip(tooltip or text)
-        self.spotify_button.setText("Spotify")
+        missing = "not found" in (text or "").lower()
+        self.spotify_button.setText("Spotify not found" if missing else "Spotify")
 
 
 def _short_url(url: str) -> str:

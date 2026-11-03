@@ -299,10 +299,11 @@ def build_stylesheet(theme: str) -> str:
     }}
 
     QScrollBar:vertical {{
-        background: transparent; width: 10px; margin: 2px;
+        background: transparent; width: 12px; margin: 2px;
     }}
     QScrollBar::handle:vertical {{
-        background: {c['border']}; border-radius: 4px; min-height: 24px;
+        background: {c['control_border']}; border-radius: 5px;
+        min-height: 28px;
     }}
     QScrollBar::handle:vertical:hover {{ background: {c['muted']}; }}
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
@@ -312,10 +313,11 @@ def build_stylesheet(theme: str) -> str:
         background: transparent;
     }}
     QScrollBar:horizontal {{
-        background: transparent; height: 10px; margin: 2px;
+        background: transparent; height: 12px; margin: 2px;
     }}
     QScrollBar::handle:horizontal {{
-        background: {c['border']}; border-radius: 4px; min-width: 24px;
+        background: {c['control_border']}; border-radius: 5px;
+        min-width: 28px;
     }}
     QScrollBar::handle:horizontal:hover {{ background: {c['muted']}; }}
     QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{

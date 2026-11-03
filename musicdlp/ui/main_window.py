@@ -355,6 +355,7 @@ class MainWindow(QMainWindow):
             "Paste a YouTube, X, or other link, then press Add"
         )
         self.link_edit.setClearButtonEnabled(True)
+        self.link_edit.setAccessibleName("Link to add")
         self.link_edit.setMinimumWidth(220)
         self.link_edit.setToolTip(
             "A playlist, a video, or a post. You can paste several at once, "
@@ -386,6 +387,7 @@ class MainWindow(QMainWindow):
 
         self.mode_combo = QComboBox()
         self.mode_combo.setMinimumWidth(108)
+        self.mode_combo.setAccessibleName("Mode")
         self.mode_combo.setMaximumWidth(140)
         self.mode_combo.addItem("Easy mode", "easy")
         self.mode_combo.addItem("Pro mode", "pro")
@@ -414,13 +416,17 @@ class MainWindow(QMainWindow):
         )
         self.search_edit.textChanged.connect(self._on_global_search)
         work_row.addWidget(self.search_edit, 1)
+        # The search box stops growing at 420 px. Without this stretch the
+        # spare width went into the action area, which then left the
+        # primary button floating far from the right edge on a big screen.
+        work_row.addStretch(1)
 
         self.action_area = QWidget()
         self.action_layout = QHBoxLayout(self.action_area)
         self.action_layout.setContentsMargins(0, 0, 0, 0)
         self.action_layout.setSpacing(6)
         self.action_area.setSizePolicy(
-            QSizePolicy.Minimum, QSizePolicy.Fixed
+            QSizePolicy.Fixed, QSizePolicy.Fixed
         )
         work_row.addWidget(self.action_area)
 
@@ -473,7 +479,7 @@ class MainWindow(QMainWindow):
         edit_menu = self.menuBar().addMenu("&Edit")
         select_visible = QAction("Select songs shown", self)
         select_visible.setShortcut("Ctrl+A")
-        select_visible.triggered.connect(self.track_table.model.check_all)
+        select_visible.triggered.connect(self.track_table.check_all_visible)
         edit_menu.addAction(select_visible)
 
         select_everything = QAction("Select every song in the library", self)
@@ -895,6 +901,12 @@ class MainWindow(QMainWindow):
         text = (text or "").strip()
 
         if not text:
+            # The table's own filter holds the library-wide query while
+            # the top box is in use. Clear it too, or the list stays
+            # narrowed with an empty search box (which happened when the
+            # search started from All Songs, where there was no source
+            # to reload).
+            self.track_table.search.clear()
             self.track_table.search.show()
             previous = self._search_from
             self._search_from = None
@@ -1092,6 +1104,25 @@ class MainWindow(QMainWindow):
             return
 
         new_name = name.strip()
+        # Two folders with the same name made the sidebar list the same
+        # link twice and made "which folder is this?" impossible to answer.
+        clash = next(
+            (
+                source for source in self.db.get_sources()
+                if source.is_folder
+                and source.id != folder_id
+                and source.title.casefold() == new_name.casefold()
+            ),
+            None,
+        )
+        if clash is not None:
+            QMessageBox.warning(
+                self,
+                "Folder already exists",
+                f"A folder called “{clash.title}” already exists. "
+                "Choose another name.",
+            )
+            return
         self.db.update_source(folder_id, title=new_name)
         # Links grouped under the old name follow the rename.
         for source in self.db.get_sources():

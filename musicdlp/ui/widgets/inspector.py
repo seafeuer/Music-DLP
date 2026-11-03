@@ -72,7 +72,7 @@ class Inspector(QWidget):
         layout.addWidget(heading)
 
         self.artwork = QLabel("No picture")
-        self.artwork.setFixedSize(140, 140)
+        self.artwork.setFixedSize(120, 120)
         self.artwork.setAlignment(Qt.AlignCenter)
         self.artwork.setObjectName("muted")
         self.artwork.setStyleSheet(
@@ -160,7 +160,11 @@ class Inspector(QWidget):
         link_row.addWidget(self.reveal_button)
         actions_layout.addLayout(link_row)
 
-        layout.addWidget(actions)
+        # Actions sit directly under the status, above the hint and the
+        # error text: at 620 px a long title plus an error pushed them
+        # below the fold, so the controls needed to fix a failed song were
+        # the part that could not be reached without scrolling.
+        layout.insertWidget(layout.indexOf(self.status_label) + 1, actions)
 
         self.paths_label = QLabel("")
         self.paths_label.setWordWrap(True)
@@ -257,7 +261,7 @@ class Inspector(QWidget):
             return
         self.artwork.setText("")
         self.artwork.setPixmap(
-            pixmap.scaled(140, 140, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            pixmap.scaled(120, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         )
 
     def _on_artwork(self, track_id: int, path: str) -> None:

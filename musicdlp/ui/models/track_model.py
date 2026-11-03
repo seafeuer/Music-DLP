@@ -406,7 +406,10 @@ class TrackFilterProxy(QSortFilterProxyModel):
         if self.status_filter == "converted" and not is_converted(status):
             return False
         if self.status_filter == "errors" and not (
-            status == ERROR or track.sync_error
+            row.file_missing
+            or status == ERROR
+            or track.sync_error
+            or track.needs_update
         ):
             return False
         if self.status_filter == "needs_update" and not (

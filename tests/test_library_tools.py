@@ -1,6 +1,7 @@
 """Duplicates, catalogue lookup, undo, album numbering, search, templates."""
 
 import logging
+import threading
 
 import pytest
 from PySide6.QtCore import Qt
@@ -8,9 +9,16 @@ from PySide6.QtWidgets import QDialog, QInputDialog, QMessageBox
 
 from musicdlp.core.config import Settings
 from musicdlp.core.db import Database, _match_key
+from musicdlp.core.errors import Cancelled
 from musicdlp.core.models import Source
 from musicdlp.services import metadata_lookup
+from musicdlp.services.ffmpeg import FFmpegService
+from musicdlp.services.library import LibraryService
+from musicdlp.services.spotify import SpotifyService
 from musicdlp.services.metadata_lookup import Lookup, lookup
+from musicdlp.services.ytdlp import (
+    ExtractedSource, ExtractedTrack, YtDlpService,
+)
 from musicdlp.ui.dialogs.duplicates import DuplicateDialog
 from musicdlp.ui.dialogs.settings import SettingsDialog
 from musicdlp.ui.main_window import ALL_SONGS_ID, MainWindow, build_context
@@ -386,8 +394,6 @@ class FakeYtDlp:
 def test_a_missing_thumbnail_and_length_are_read_back_from_the_link(tmp_path):
     from types import SimpleNamespace
 
-    from musicdlp.services.library import LibraryService
-
     db = Database(tmp_path / "library.db")
     track_id = db.upsert_track(
         platform="twitter", media_id="1",
@@ -419,7 +425,6 @@ def test_a_missing_thumbnail_and_length_are_read_back_from_the_link(tmp_path):
 def test_a_song_that_already_knows_its_picture_is_not_read_again(tmp_path):
     from types import SimpleNamespace
 
-    from musicdlp.services.library import LibraryService
 
     db = Database(tmp_path / "library.db")
     track_id = db.upsert_track(
@@ -444,7 +449,6 @@ def test_a_chosen_picture_keeps_its_full_resolution(tmp_path):
     """Choosing a 1400 px picture left a 640 px cover in the file."""
     from PIL import Image
 
-    from musicdlp.services.library import LibraryService
 
     db = Database(tmp_path / "library.db")
     track_id = db.upsert_track(
@@ -598,6 +602,20 @@ def test_typing_in_the_search_box_switches_to_all_songs(window, qtbot):
 
     assert main._current_source_id == 0  # the all-songs view
     assert main.track_table.search.text() == "playlist song 1"
+
+
+def test_clearing_a_search_started_in_all_songs_clears_the_table(window, qtbot):
+    main, _db, data = window
+    main._load_source(ALL_SONGS_ID)
+    main.search_edit.setText("playlist song 1")
+    qtbot.wait(30)
+    assert main.track_table.search.text() == "playlist song 1"
+
+    main.search_edit.clear()
+    qtbot.wait(30)
+
+    assert main.track_table.search.text() == ""
+    assert main.track_table.proxy.rowCount() == main.track_table.model.rowCount()
 
 
 def test_clearing_the_search_returns_to_the_previous_link(window, qtbot):
@@ -761,7 +779,6 @@ def test_a_reload_keeps_the_library_search_applied(window, qtbot):
 
 
 def test_removing_a_duplicate_forgets_the_row(library):
-    from musicdlp.services.library import LibraryService
 
     db, data = library
     service = LibraryService(db, Settings(), ytdlp=None)
@@ -835,7 +852,6 @@ def test_removing_a_link_with_kept_files_removes_its_songs_and_undo_restores(
 
 
 def test_deleting_a_link_keeps_songs_another_link_still_holds(library):
-    from musicdlp.services.library import LibraryService
 
     db, data = library
     service = LibraryService(db, Settings(), ytdlp=None)
@@ -1360,7 +1376,6 @@ def test_the_list_filter_is_hidden_while_the_library_search_is_active(
 
 
 def test_deleting_a_song_files_also_removes_its_spotify_copy(tmp_path):
-    from musicdlp.services.library import LibraryService
 
     settings = Settings(
         output_dir=str(tmp_path / "out"), spotify_dir=str(tmp_path / "out" / "Spotify"),
@@ -1436,3 +1451,120 @@ def test_undo_after_a_duplicate_removal_brings_its_link_back(
     assert db.get_track(dup) is not None
     assert db.get_source(single) is not None
     assert db.track_links(dup) == [(single, 1)]
+
+
+# ----------------------------------------------------------------- adding
+
+
+class _CancellingExtractor:
+    """Returns a result only after the user pressed Cancel."""
+
+    def __init__(self, event) -> None:
+        self.event = event
+
+    def extract(self, url, cancel_event=None):
+        self.event.set()
+        return ExtractedSource(
+            url=url,
+            kind="playlist",
+            platform="youtube",
+            external_id="PLcancel",
+            title="A list",
+            uploader="Channel",
+            thumbnail_url="",
+            tracks=[
+                ExtractedTrack(
+                    platform="youtube",
+                    media_id="cancel1",
+                    url="https://www.youtube.com/watch?v=cancel1",
+                    title="A song",
+                )
+            ],
+        )
+
+
+def test_cancel_while_reading_a_link_does_not_add_it(tmp_path):
+    db = Database(tmp_path / "library.db")
+    settings = Settings(
+        output_dir=str(tmp_path / "out"),
+        spotify_dir=str(tmp_path / "spotify"),
+    )
+    event = threading.Event()
+    service = LibraryService(db, settings, _CancellingExtractor(event))
+
+    with pytest.raises(Cancelled):
+        service.add_links(
+            ["https://www.youtube.com/watch?v=cancel1"],
+            cancel_event=event,
+        )
+
+    assert db.get_sources() == []
+    db.close()
+
+
+# -------------------------------------------------------------- validation
+
+
+def test_settings_refuse_an_output_folder_that_is_a_file(
+    qapp, tmp_path, monkeypatch
+):
+    blocker = tmp_path / "blocker"
+    blocker.write_text("I am a file", encoding="utf-8")
+    settings = Settings(
+        output_dir=str(tmp_path / "out"),
+        spotify_dir=str(tmp_path / "spotify"),
+    )
+    dialog = SettingsDialog(
+        settings,
+        FFmpegService(""),
+        YtDlpService(settings),
+        SpotifyService(),
+    )
+    dialog.output_edit.setText(str(blocker))
+    messages = []
+    monkeypatch.setattr(
+        QMessageBox, "critical",
+        staticmethod(lambda *args, **kwargs: messages.append(args[2])),
+    )
+
+    dialog._save_now()
+
+    assert messages
+    assert dialog.result_settings is None
+
+
+def test_renaming_a_folder_to_an_existing_name_is_refused(window, monkeypatch):
+    main, db, data = window
+    alpha = db.add_folder("Alpha")
+    db.add_folder("Beta")
+    monkeypatch.setattr(
+        QInputDialog, "getText",
+        staticmethod(lambda *args, **kwargs: ("Beta", True)),
+    )
+    warnings = []
+    monkeypatch.setattr(
+        QMessageBox, "warning",
+        staticmethod(lambda *args, **kwargs: warnings.append(args[2])),
+    )
+
+    main._rename_folder(alpha)
+
+    assert db.get_source(alpha).title == "Alpha"
+    assert warnings
+    assert "already exists" in warnings[0].lower()
+
+
+def test_settings_fields_have_accessible_names(qapp, tmp_path):
+    settings = Settings(
+        output_dir=str(tmp_path / "out"),
+        spotify_dir=str(tmp_path / "spotify"),
+    )
+    dialog = SettingsDialog(
+        settings,
+        FFmpegService(""),
+        YtDlpService(settings),
+        SpotifyService(),
+    )
+    assert dialog.output_edit.accessibleName()
+    assert dialog.spotify_edit.accessibleName()
+    assert dialog.ai_key_edit.accessibleName()

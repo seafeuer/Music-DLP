@@ -588,3 +588,102 @@ def test_dismissed_banner_stays_gone(window, monkeypatch):
     # bring back the prompt the user just closed.
     main._refresh_setup_banner()
     assert main.setup_banner.kind is None
+
+
+def test_select_all_ticks_only_the_songs_shown(window, qtbot):
+    main, _db, ids = window
+    main.track_table.search.setText("Song 1")
+    qtbot.wait(30)
+    assert main.track_table.proxy.rowCount() == 1
+
+    main.track_table.check_all_visible()
+
+    assert main.track_table.model.checked == {ids[0]}
+
+
+def test_main_controls_have_accessible_names(window):
+    main, _db, _ids = window
+    for widget in (
+        main.link_edit,
+        main.mode_combo,
+        main.search_edit,
+        main.track_table.search,
+        main.track_table.filter_combo,
+        main.sidebar.view,
+    ):
+        assert widget.accessibleName().strip(), widget.objectName() or widget
+
+
+def test_inspector_actions_stay_visible_at_minimum_height(window, qtbot):
+    from PySide6.QtCore import QPoint
+
+    main, db, ids = window
+    db.update_track(
+        ids[0],
+        title="A very long song title " * 5,
+        error="The Spotify copy failed: " + "a long explanation " * 10,
+    )
+    source = db.get_sources()[0]
+    main._load_source(source.id)
+    main.resize(1000, 620)
+    qtbot.wait(50)
+
+    row = db.get_tracks_for_source(source.id)[0]
+    main.inspector.set_row(row, True)
+    qtbot.wait(30)
+
+    button = main.inspector.edit_button
+    point = button.mapTo(main.inspector_scroll.viewport(), QPoint(0, 0))
+    assert point.y() >= 0
+    assert point.y() + button.height() <= main.inspector_scroll.viewport().height()
+
+
+def test_missing_spotify_is_visible_without_a_tooltip(window):
+    main, _db, _ids = window
+    main.status.set_spotify_state(
+        "Spotify: not found", "Spotify was not found."
+    )
+    assert "not found" in main.status.spotify_button.text().lower()
+
+
+def test_problems_filter_finds_missing_and_needs_update(window, qtbot):
+    main, db, ids = window
+    source = db.get_sources()[0]
+    db.update_track(ids[0], status="converted", needs_update=1)
+    db.update_track(
+        ids[1], status="converted", mp3_path=str(main.settings.output_path / "gone.mp3")
+    )
+    main._load_source(source.id)
+
+    index = main.track_table.filter_combo.findData("errors")
+    main.track_table.filter_combo.setCurrentIndex(index)
+    qtbot.wait(30)
+
+    assert main.track_table.proxy.rowCount() == 2
+
+
+def test_primary_action_sits_next_to_the_more_button(window):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QPushButton
+
+    main, _db, _ids = window
+    primary = next(
+        button for button in main.action_area.findChildren(QPushButton)
+        if button.objectName() == "primary"
+    )
+    primary_right = primary.mapTo(main, primary.rect().bottomRight()).x()
+    more_left = main.more_button.mapTo(main, QPoint(0, 0)).x()
+
+    assert 0 <= more_left - primary_right <= 20
+
+
+def test_sidebar_buttons_do_nothing_without_a_selection(window):
+    from PySide6.QtCore import QModelIndex
+
+    main, _db, _ids = window
+    main.sidebar.view.clearSelection()
+    main.sidebar.view.setCurrentIndex(QModelIndex())
+    main.sidebar._update_buttons()
+
+    assert not main.sidebar.refresh_button.isEnabled()
+    assert not main.sidebar.remove_button.isEnabled()

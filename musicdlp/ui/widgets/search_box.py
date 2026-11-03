@@ -17,6 +17,9 @@ class SearchBox(QLineEdit):
         super().__init__(parent)
         self.setClearButtonEnabled(True)
         self.setPlaceholderText(placeholder)
+        # A placeholder is drawn inside the field but is not an accessible
+        # name; screen readers announce these boxes as unnamed otherwise.
+        self.setAccessibleName(placeholder.rstrip("…").strip())
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() == Qt.Key_Escape and self.text():
