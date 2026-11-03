@@ -6,12 +6,12 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, QUrl, Qt, Signal
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QDialog, QFileDialog, QFrame,
-    QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QVBoxLayout,
-    QWidget,
+    QHBoxLayout, QLabel, QLineEdit, QPushButton, QStackedWidget,
+    QVBoxLayout, QWidget,
 )
 
 from musicdlp.ui.dialogs.footer import DialogFooter
@@ -61,7 +61,7 @@ class SetupDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Set up Music DLP")
-        fit_dialog(self, 720, 680)
+        fit_dialog(self, 720, 500)
         self.settings = settings
         self.ffmpeg = ffmpeg
         self.spotify = spotify
@@ -82,18 +82,20 @@ class SetupDialog(QDialog):
         subtitle.setWordWrap(True)
         outer.addWidget(subtitle)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        inner = QWidget()
-        self.content = QVBoxLayout(inner)
-        self.content.setSpacing(12)
-        scroll.setWidget(inner)
-        outer.addWidget(scroll, 1)
+        # One step per page. Scrolling a tall list put the five Local
+        # Files instructions, which are the point of the wizard, below the
+        # fold with no hint that anything followed.
+        self.step_label = QLabel("")
+        self.step_label.setObjectName("muted")
+        outer.addWidget(self.step_label)
+
+        self.stack = QStackedWidget()
+        outer.addWidget(self.stack, 1)
+        self.cards: list[tuple[str, QWidget]] = []
 
         # Step 1: FFmpeg ------------------------------------------------
         self.ffmpeg_card, ffmpeg_layout = self._card(
-            "1. A helper called FFmpeg",
+            "A helper called FFmpeg",
             "Music DLP uses FFmpeg to turn a video into an MP3 file. "
             "Without it, songs can be downloaded but not converted.",
         )
@@ -126,7 +128,7 @@ class SetupDialog(QDialog):
 
         # Step 2: Spotify installed -------------------------------------
         self.spotify_card, spotify_layout = self._card(
-            "2. The Spotify desktop app",
+            "The Spotify desktop app",
             "Songs are shown in Spotify on this computer. The Spotify web "
             "player in a browser cannot see local files, so you need the "
             "Spotify app installed.",
@@ -148,7 +150,7 @@ class SetupDialog(QDialog):
 
         # Step 3: Folder -------------------------------------------------
         self.folder_card, folder_layout = self._card(
-            "3. Where your songs are kept",
+            "Where your songs are kept",
             "A folder is simply a place on your computer that holds files, "
             "like a drawer. Music DLP saves your songs in this drawer and "
             "Spotify will read them from here.",
@@ -175,7 +177,7 @@ class SetupDialog(QDialog):
 
         # Step 4: Tell Spotify -------------------------------------------
         self.tell_card, tell_layout = self._card(
-            "4. Show the folder to Spotify (one time)",
+            "Show the folder to Spotify (one time)",
             "Spotify does not let other apps add songs for it, so this part "
             "is done by you in Spotify. It takes about a minute.",
         )
@@ -187,7 +189,7 @@ class SetupDialog(QDialog):
             "3.  Scroll down to “Local files” and switch on “Show local "
             "files”.\n"
             "4.  Click “Add a source”. A folder picker opens. Go to the "
-            "folder shown in step 3 above and click Select Folder. "
+            "folder from step 3 and click Select Folder. "
             "(Use “Copy folder path” if you would rather paste it.)\n"
             "5.  Come back here and click “Restart Spotify” so it reads the "
             "songs."
@@ -208,13 +210,23 @@ class SetupDialog(QDialog):
         tell_buttons.addStretch(1)
         tell_layout.addLayout(tell_buttons)
 
-        # Songs that appear without their picture ---------------------------------
+        # Step 5: done. The picture fix lives here because it is the one
+        # thing people hit after setup, and it needs somewhere to live.
         self.tags_card, tags_layout = self._card(
-            "Songs appear in Spotify without their picture?",
-            "Music DLP embeds the cover picture inside each song. If Spotify "
-            "shows a plain icon instead, it is using an old cached list. "
-            "These two buttons fix that; they do not re-download anything.",
+            "You're all set",
+            "Close this window, then paste a link into Music DLP to download "
+            "your first song. New songs appear in Spotify under “Your Library "
+            "→ Local Files”.",
         )
+
+        picture_help = QLabel(
+            "Songs appearing without their picture? Spotify is showing an old "
+            "cached list. These two buttons fix that; they do not re-download "
+            "anything."
+        )
+        picture_help.setObjectName("muted")
+        picture_help.setWordWrap(True)
+        tags_layout.addWidget(picture_help)
 
         tags_buttons = QHBoxLayout()
         rewrite = QPushButton("Update song details and pictures")
@@ -246,11 +258,17 @@ class SetupDialog(QDialog):
         note.setWordWrap(True)
         tell_layout.addWidget(note)
 
-        self.content.addStretch(1)
+        # Push each step's content to the top so short steps do not float
+        # in the middle of a tall page.
+        for _title, card in self.cards:
+            card.layout().addStretch(1)
 
         self.footer = DialogFooter(self, cancel_text="Close")
+        self.back_button = self.footer.add_action("Back", self._back)
+        self.next_button = self.footer.add_action("Next", self._next)
         self.footer.set_primary("Save and close", self._save)
         outer.addWidget(self.footer)
+        self._show_step(0)
 
         self.refresh()
 
@@ -258,7 +276,11 @@ class SetupDialog(QDialog):
 
     def _card(self, title: str, body: str) -> tuple[QFrame, QVBoxLayout]:
         card = QFrame()
-        card.setObjectName("panel")
+        # Pages are not boxed: the dialog keeps one height for all steps,
+        # and a bordered card around a short page looked like missing
+        # content. On the dialog background the empty space reads as
+        # breathing room.
+        card.setObjectName("plainPage")
         layout = QVBoxLayout(card)
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(8)
@@ -272,7 +294,10 @@ class SetupDialog(QDialog):
         text.setWordWrap(True)
         layout.addWidget(text)
 
-        self.content.addWidget(card)
+        self.cards.append((title, card))
+        self.stack.addWidget(card)
+        # The caller adds the rest of this step; the trailing stretch is
+        # added once everything is in place (see __init__).
         return card, layout
 
     def _mark(self, label: QLabel, ok: bool, text: str) -> None:
@@ -322,7 +347,7 @@ class SetupDialog(QDialog):
             self._mark(
                 self.tell_status, False,
                 "Spotify does not seem to have this folder yet. Follow steps "
-                "1–5 above, then click “Check again”.",
+                "1–5 on this page, then click “Check again”.",
             )
         else:
             self.tell_status.setText(
@@ -332,6 +357,35 @@ class SetupDialog(QDialog):
             self.tell_status.setObjectName("muted")
         if not quiet:
             self.tell_status.setVisible(True)
+
+    # ----------------------------------------------------------------- steps
+
+    def _show_step(self, index: int) -> None:
+        index = max(0, min(index, len(self.cards) - 1))
+        self.stack.setCurrentIndex(index)
+        self._step_index = index
+        # The card heading already names the step, so this line only has
+        # to say where the user is.
+        self.step_label.setText(f"Step {index + 1} of {len(self.cards)}")
+        self.back_button.setEnabled(index > 0)
+        last = index == len(self.cards) - 1
+        # On the last page the primary button is the finish line. Showing
+        # both "Finish" and "Save and close" gave the page two ways out
+        # that did the same thing.
+        self.next_button.setVisible(not last)
+        self.footer.set_primary(
+            "Finish" if last else "Save and close", self._save
+        )
+
+    def _back(self) -> None:
+        self._show_step(getattr(self, "_step_index", 0) - 1)
+
+    def _next(self) -> None:
+        index = getattr(self, "_step_index", 0)
+        if index >= len(self.cards) - 1:
+            self._save()
+            return
+        self._show_step(index + 1)
 
     # ------------------------------------------------------------- actions
 
