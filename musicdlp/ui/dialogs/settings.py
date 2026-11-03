@@ -55,6 +55,8 @@ from musicdlp.services import gdrive
 from musicdlp.services.spotify import SpotifyService
 from musicdlp.services.ytdlp import YtDlpService
 from musicdlp.ui.dialogs.footer import DialogFooter
+from musicdlp.ui.dialogs.sizing import fit_dialog
+from musicdlp.ui.plural import counted
 from musicdlp.ui.theme import set_tone
 
 
@@ -70,7 +72,7 @@ class SettingsDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.resize(760, 660)
+        fit_dialog(self, 760, 660)
         self.result_settings: Optional[Settings] = None
         self._ffmpeg = ffmpeg
         self._ytdlp = ytdlp
@@ -706,7 +708,7 @@ class SettingsDialog(QDialog):
             self.ai_model_combo.addItems(list(models))
             if current:
                 self.ai_model_combo.setCurrentText(current)
-            self.ai_status.setText(f"Found {len(models)} model(s).")
+            self.ai_status.setText(f"Found {counted(len(models), 'model')}.")
 
         self._run_ai_task(
             lambda: list_models(settings),

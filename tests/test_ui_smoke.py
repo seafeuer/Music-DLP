@@ -460,3 +460,36 @@ def test_switching_mode_leaves_no_stale_action_buttons(window):
     # The Pro buttons must be hidden at once, not merely queued for deletion.
     for button in first:
         assert button.isHidden()
+
+
+def test_a_highlighted_but_unticked_song_says_it_is_not_included(window):
+    """Highlighting a row and ticking it are different; say so."""
+    main, db, ids = window
+    source_id = db.get_sources()[0].id
+    main._load_source(source_id)
+    main.track_table.model.clear_checks()
+    main.track_table._select_by_track_id(ids[0])
+
+    assert "Not in the next run" in main.inspector.hint_label.text()
+    main.track_table.model.toggle_check(ids[0], True)
+    assert "Not in the next run" not in main.inspector.hint_label.text()
+
+
+def test_status_messages_are_pluralised(window, monkeypatch):
+    from musicdlp.services.library import AddResult
+
+    main, _db, _ids = window
+    result = AddResult(sources=[1], tracks_total=1, tracks_new=1)
+    main._on_add_finished(result)
+    assert "Added 1 link, 1 song" in main.status.status_label.text()
+
+
+def test_a_failed_batch_opens_the_activity_log(window):
+    main, _db, _ids = window
+    main.logs_action.setChecked(False)
+    main._on_pipeline_finished({
+        "downloaded": 1, "converted": 0, "synced": 0, "failed": 2,
+        "skipped": 0, "errors": [], "cancelled": False, "stages": ["download"],
+    })
+    assert main.logs_action.isChecked()
+    assert main.log_drawer.isVisible()

@@ -58,6 +58,10 @@ DARK = {
     "accent": ACCENT,
     "accent_hover": ACCENT_HOVER,
     "on_accent": "#ffffff",
+    # Anchors (rich-text links) sit on the window, not on the accent
+    # button, so they need their own lighter tone in dark mode: the
+    # button blue is only 3.2:1 there.
+    "link": "#60a5fa",
     "danger": "#f87171",
     "warning": "#fbbf24",
     "success": "#4ade80",
@@ -75,6 +79,7 @@ LIGHT = {
     "accent": ACCENT,
     "accent_hover": ACCENT_HOVER,
     "on_accent": "#ffffff",
+    "link": "#1d4ed8",
     "danger": "#b91c1c",
     "warning": "#92400e",
     "success": "#15803d",
@@ -142,7 +147,7 @@ def build_palette(theme: str) -> QPalette:
     palette.setColor(QPalette.Button, QColor(colors["panel"]))
     palette.setColor(QPalette.ButtonText, QColor(colors["text"]))
     palette.setColor(QPalette.BrightText, QColor("#ffffff"))
-    palette.setColor(QPalette.Link, QColor(colors["accent"]))
+    palette.setColor(QPalette.Link, QColor(colors["link"]))
     palette.setColor(QPalette.Highlight, QColor(colors["accent"]))
     palette.setColor(QPalette.HighlightedText, QColor(colors["on_accent"]))
     palette.setColor(QPalette.PlaceholderText, QColor(colors["muted"]))

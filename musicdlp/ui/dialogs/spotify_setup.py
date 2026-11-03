@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from musicdlp.ui.dialogs.footer import DialogFooter
+from musicdlp.ui.dialogs.sizing import fit_dialog
 
 from musicdlp.core.paths import is_writable, start_directory
 from musicdlp.services.spotify import SpotifyService
@@ -26,7 +27,7 @@ class SpotifyDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Spotify Local Files")
-        self.resize(640, 480)
+        fit_dialog(self, 640, 480)
         self.spotify = spotify
         self.selected_dir: Optional[str] = None
 

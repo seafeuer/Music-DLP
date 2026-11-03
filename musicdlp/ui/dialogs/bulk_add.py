@@ -5,6 +5,7 @@ from __future__ import annotations
 from PySide6.QtWidgets import QDialog, QLabel, QPlainTextEdit, QVBoxLayout
 
 from musicdlp.ui.dialogs.footer import DialogFooter
+from musicdlp.ui.dialogs.sizing import fit_dialog
 
 from musicdlp.services.urls import split_links
 from musicdlp.ui.theme import set_tone
@@ -14,7 +15,7 @@ class BulkAddDialog(QDialog):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Add multiple links")
-        self.resize(620, 360)
+        fit_dialog(self, 620, 360)
         self.links: list[str] = []
 
         layout = QVBoxLayout(self)

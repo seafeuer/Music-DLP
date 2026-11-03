@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from musicdlp.ui.dialogs.footer import DialogFooter
+from musicdlp.ui.dialogs.sizing import fit_dialog
 
 from musicdlp.core.models import TrackRow, status_label
 
@@ -40,7 +41,7 @@ class DuplicateDialog(QDialog):
     def __init__(self, groups: Iterable[list[TrackRow]], parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Duplicate songs")
-        self.resize(980, 600)
+        fit_dialog(self, 980, 600)
         self.groups = [list(group) for group in groups]
         self.remove_ids: list[int] = []
 

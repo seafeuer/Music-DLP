@@ -97,3 +97,11 @@ def test_widgets_do_not_paint_one_theme_colour_literally():
         "Use theme.tone()/set_tone() instead of a literal colour: "
         + ", ".join(offenders)
     )
+
+
+@pytest.mark.parametrize("theme", ["dark", "light"])
+def test_links_are_readable_on_the_window(theme):
+    """Rich-text links sit on the window, not on the accent button."""
+    colors = tokens(theme)
+    assert contrast(colors["link"], colors["window"]) >= AA_BODY
+    assert contrast(colors["link"], colors["panel"]) >= AA_BODY

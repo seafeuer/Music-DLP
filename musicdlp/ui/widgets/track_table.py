@@ -107,6 +107,7 @@ class TrackTableWidget(QWidget):
     remove_requested = Signal(int)
     remove_selected_requested = Signal(list)
     open_source_requested = Signal(str)
+    clear_search_requested = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -443,6 +444,12 @@ class TrackTableWidget(QWidget):
 
     def _update_counts(self) -> None:
         if self.source is None:
+            # Nothing is selected, so the actions that need a song must
+            # not look available.
+            self.titles_button.setEnabled(False)
+            self._suggestions_action.setEnabled(False)
+            self.edit_button.setEnabled(False)
+            self._edit_action.setEnabled(False)
             return
         total = len(self.model.rows)
         checked = len(self.model.checked)
@@ -512,6 +519,11 @@ class TrackTableWidget(QWidget):
         if link == "clear":
             self.search.clear()
             self.filter_combo.setCurrentIndex(0)
+            # The visible query may live in the window's library search
+            # box rather than in this list's own filter. Ask for both to
+            # be cleared, or the screen shows every song under a query
+            # that matches none.
+            self.clear_search_requested.emit()
 
     def _on_double_click(self, index: QModelIndex) -> None:
         source_index = self.proxy.mapToSource(index)

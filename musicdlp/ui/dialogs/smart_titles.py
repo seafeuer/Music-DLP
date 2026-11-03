@@ -18,6 +18,8 @@ from PySide6.QtWidgets import (
 )
 
 from musicdlp.ui.dialogs.footer import DialogFooter
+from musicdlp.ui.dialogs.sizing import fit_dialog
+from musicdlp.ui.plural import counted
 
 from musicdlp.core.models import TrackRow
 from musicdlp.services.ai import AIError, AISettings, friendly_error, suggest_names
@@ -59,7 +61,7 @@ class SmartTitlesDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Suggested titles")
-        self.resize(1040, 620)
+        fit_dialog(self, 1040, 620)
         self.rows = list(rows)
         self.ai_settings = ai_settings
         self.on_setup_ai = on_setup_ai
@@ -225,7 +227,9 @@ class SmartTitlesDialog(QDialog):
         self._named_count = 0
         self.error_label.hide()
         self.ai_button.setEnabled(False)
-        self.status.setText(f"Asking the AI about {len(targets)} song(s)…")
+        self.status.setText(
+                f"Asking the AI about {counted(len(targets), 'song')}…"
+            )
 
         settings = self.ai_settings
         results = self._results

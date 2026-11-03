@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
 )
 
 from musicdlp.ui.dialogs.footer import DialogFooter
+from musicdlp.ui.dialogs.sizing import fit_dialog
 
 from musicdlp.services.ai_export import ImportedName, parse_reply
 from musicdlp.ui.theme import set_tone
@@ -18,7 +19,7 @@ class AIImportDialog(QDialog):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Import AI reply")
-        self.resize(680, 480)
+        fit_dialog(self, 680, 480)
         self.results: list[ImportedName] = []
 
         layout = QVBoxLayout(self)

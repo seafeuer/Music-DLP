@@ -19,6 +19,8 @@ from PySide6.QtWidgets import (
 )
 
 from musicdlp.ui.dialogs.footer import DialogFooter
+from musicdlp.ui.dialogs.sizing import fit_dialog
+from musicdlp.ui.plural import counted
 
 from musicdlp.core.models import TrackRow
 from musicdlp.services.ai import AIError, AISettings, friendly_error
@@ -54,7 +56,7 @@ class TranslationDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Translate titles")
-        self.resize(1080, 620)
+        fit_dialog(self, 1080, 620)
 
         self.rows = list(rows)
         self.ai_settings = ai_settings
@@ -87,6 +89,7 @@ class TranslationDialog(QDialog):
         layout.addWidget(self._build_options())
 
         self.table = QTableWidget(len(self.rows), 6)
+        self.table.setMinimumWidth(360)
         self.table.setHorizontalHeaderLabels(
             ["Use", "Current title", "Current artist", "New title",
              "New artist", "Note"]
@@ -104,7 +107,7 @@ class TranslationDialog(QDialog):
                        COL_TITLE, COL_ARTIST):
             header.setSectionResizeMode(column, QHeaderView.Stretch)
         header.setSectionResizeMode(COL_NOTE, QHeaderView.ResizeToContents)
-        header.setMinimumSectionSize(60)
+        header.setMinimumSectionSize(40)
         self.table.setColumnWidth(COL_USE, 44)
         # Ticking a row by hand must enable Apply as well.
         self.table.itemChanged.connect(lambda _item: self._update_apply_state())
@@ -157,7 +160,11 @@ class TranslationDialog(QDialog):
         self.language_combo.setEditable(True)
         self.language_combo.addItems(list(LANGUAGES))
         self.language_combo.setCurrentText("Japanese")
-        self.language_combo.setMinimumWidth(170)
+        self.language_combo.setMinimumWidth(130)
+        self.language_combo.setMinimumContentsLength(8)
+        self.language_combo.setSizeAdjustPolicy(
+            QComboBox.AdjustToMinimumContentsLengthWithIcon
+        )
         self.language_combo.setToolTip(
             "Pick a language, or type any language name"
         )
@@ -167,6 +174,10 @@ class TranslationDialog(QDialog):
         self.style_combo = QComboBox()
         for value in (STYLE_BOTH, STYLE_TRANSLATED, STYLE_TRANSLITERATED):
             self.style_combo.addItem(STYLE_LABELS[value], value)
+        self.style_combo.setMinimumContentsLength(8)
+        self.style_combo.setSizeAdjustPolicy(
+            QComboBox.AdjustToMinimumContentsLengthWithIcon
+        )
         self.style_combo.setToolTip(
             "Japanese, Hebrew, and similar languages have two useful forms: "
             "the native script (夜に駆ける), the same sounds in Latin letters "
@@ -174,7 +185,7 @@ class TranslationDialog(QDialog):
         )
         row.addWidget(self.style_combo, 1)
 
-        self.artist_check = QCheckBox("Translate artist names too")
+        self.artist_check = QCheckBox("Artists too")
         self.artist_check.setChecked(True)
         self.artist_check.setToolTip(
             "Leave this off to keep artist names exactly as they are"
@@ -311,7 +322,9 @@ class TranslationDialog(QDialog):
         self._translated_count = 0
         self.error_label.hide()
         self.go_button.setEnabled(False)
-        self.status.setText(f"Translating {len(items)} song(s)…")
+        self.status.setText(
+            f"Translating {counted(len(items), 'song')}…"
+        )
 
         settings = self.ai_settings
         language = self._language()

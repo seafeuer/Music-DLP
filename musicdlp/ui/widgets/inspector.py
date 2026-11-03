@@ -212,24 +212,7 @@ class Inspector(QWidget):
 
         status = display_status(track, row.file_missing)
         self.status_label.setText(status_label(status))
-        if row.file_missing:
-            self.hint_label.setText(
-                "The audio file is missing from your computer. Press Retry to "
-                "download it again."
-            )
-        elif track.needs_update:
-            self.hint_label.setText(
-                "The details were changed but the file still has the old "
-                "ones. Open “Edit details” and tick “Update the audio file "
-                "now”, or press Re-convert."
-            )
-        elif status == "error" and track.sync_error:
-            self.hint_label.setText(
-                "The file is fine; only the Spotify copy failed. Press Retry."
-            )
-        else:
-            self.hint_label.clear()
-        self.hint_label.setVisible(bool(self.hint_label.text()))
+        self._update_hint(track, row, checked, status)
 
         message = track.error or ""
         self.error_label.setText(message)
@@ -281,11 +264,46 @@ class Inspector(QWidget):
         if self.current_row and self.current_row.track.id == track_id:
             self._set_pixmap(path)
 
+    def _update_hint(self, track, row, checked: bool, status: str) -> None:
+        """One explanation at a time, the most urgent first."""
+        if row.file_missing:
+            self.hint_label.setText(
+                "The audio file is missing from your computer. Press Retry to "
+                "download it again."
+            )
+        elif track.needs_update:
+            self.hint_label.setText(
+                "The details were changed but the file still has the old "
+                "ones. Open “Edit details” and tick “Write these details "
+                "into the audio file now”, or press Re-convert."
+            )
+        elif status == "error" and track.sync_error:
+            self.hint_label.setText(
+                "The file is fine; only the Spotify copy failed. Press Retry."
+            )
+        elif not checked:
+            # Highlighting a row and including it are two different
+            # actions. Say so where the user is looking, not only in the
+            # step strip at the top of the window.
+            self.hint_label.setText(
+                "Not in the next run. Tick “Include in the next run” above "
+                "to download this song."
+            )
+        else:
+            self.hint_label.clear()
+        self.hint_label.setVisible(bool(self.hint_label.text()))
+
     def set_checked(self, checked: bool) -> None:
         """Reflect the list's checkbox without emitting a change back."""
         self._updating_include = True
         self.include_check.setChecked(checked)
         self._updating_include = False
+        if self.current_row is not None:
+            track = self.current_row.track
+            self._update_hint(
+                track, self.current_row, bool(checked),
+                display_status(track, self.current_row.file_missing),
+            )
 
     def _include_toggled(self, checked: bool) -> None:
         if getattr(self, "_updating_include", False) or not self.current_row:

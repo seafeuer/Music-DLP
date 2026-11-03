@@ -18,6 +18,8 @@ from PySide6.QtWidgets import (
 )
 
 from musicdlp.ui.dialogs.footer import DialogFooter
+from musicdlp.ui.dialogs.sizing import fit_dialog
+from musicdlp.ui.plural import counted
 
 from musicdlp.core.models import TrackRow
 from musicdlp.services.metadata_lookup import Lookup, lookup
@@ -38,7 +40,7 @@ class LookupDialog(QDialog):
     def __init__(self, rows: Iterable[TrackRow], parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Look up details online")
-        self.resize(1060, 620)
+        fit_dialog(self, 1060, 620)
 
         self.rows = list(rows)
         self.accepted_values: list[tuple[int, str, str, Optional[int]]] = []
@@ -148,7 +150,9 @@ class LookupDialog(QDialog):
         self._found_count = 0
         self.error_label.hide()
         self.go_button.setEnabled(False)
-        self.status.setText(f"Looking up {len(self.rows)} song(s)…")
+        self.status.setText(
+            f"Looking up {counted(len(self.rows), 'song')}…"
+        )
 
         items = [
             (row.track.id, row.track.display_title,

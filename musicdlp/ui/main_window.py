@@ -53,6 +53,7 @@ from musicdlp.ui.dialogs.smart_titles import SmartTitlesDialog
 from musicdlp.ui.dialogs.spotify_setup import SpotifyDialog
 from musicdlp.ui.dialogs.track_details import TrackDetailsDialog
 from musicdlp.ui.dialogs.translate import TranslationDialog
+from musicdlp.ui.plural import counted
 from musicdlp.ui.theme import apply_theme
 from musicdlp.ui.widgets.inspector import Inspector
 from musicdlp.ui.widgets.log_drawer import LogDrawer
@@ -403,7 +404,7 @@ class MainWindow(QMainWindow):
         self._update_theme_button()
 
         self.search_edit = SearchBox("Search every song…")
-        self.search_edit.setMinimumWidth(180)
+        self.search_edit.setMinimumWidth(120)
         self.search_edit.setMaximumWidth(420)
         self.search_edit.setToolTip(
             "Search every song in the library, whichever link it came from "
@@ -652,6 +653,9 @@ class MainWindow(QMainWindow):
         self.track_table.reconvert_requested.connect(self._reconvert_track)
         self.track_table.remove_requested.connect(self._remove_track)
         self.track_table.remove_selected_requested.connect(self._remove_tracks)
+        self.track_table.clear_search_requested.connect(
+            self._clear_every_search
+        )
         self.track_table.open_source_requested.connect(self._open_url)
         self.track_table.table.selectionModel().selectionChanged.connect(
             self._on_selection_changed
@@ -812,6 +816,13 @@ class MainWindow(QMainWindow):
             self.search_edit.clear()
             self._search_guard = False
             self._search_from = None
+
+    def _clear_every_search(self) -> None:
+        """Clear the library search as well as the list's own filter."""
+        if self.search_edit.text():
+            self.search_edit.clear()
+        else:
+            self._reload_current_source()
 
     def _focus_search(self) -> None:
         self.search_edit.setFocus()
@@ -1279,7 +1290,7 @@ class MainWindow(QMainWindow):
         self._add_running = True
         self._add_cancel = threading.Event()
         self._add_started = time.monotonic()
-        self._add_label = f"Reading {len(links)} link(s)…"
+        self._add_label = f"Reading {counted(len(links), 'link')}…"
         self._set_controls_enabled(False)
         self.status.set_busy(self._add_label)
         self._start_add_ticker()
@@ -1342,19 +1353,22 @@ class MainWindow(QMainWindow):
             )
             self._refresh_sources(target)
             summary = (
-                f"Added {len(result.sources)} link(s), "
-                f"{result.tracks_total} song(s)"
+                f"Added {counted(len(result.sources), 'link')}, "
+                f"{counted(result.tracks_total, 'song')}"
             )
             if result.tracks_new:
                 summary += f", {result.tracks_new} new"
             if result.tracks_owned:
                 summary += f", {result.tracks_owned} already downloaded"
             if result.titles_fixed:
-                summary += f", {result.titles_fixed} name(s) tidied"
+                summary += f", {counted(result.titles_fixed, 'name')} tidied"
             if len(result.sources) > 1:
                 summary += " · all new songs ticked"
             if result.errors:
-                summary += f" · {len(result.errors)} link(s) failed (see Logs)"
+                summary += (
+                    f" · {counted(len(result.errors), 'link')} "
+                    "failed (see Logs)"
+                )
             self.status.set_idle(summary)
             self.logger.info(summary)
         else:
@@ -1418,7 +1432,8 @@ class MainWindow(QMainWindow):
         self._refresh_sources(result.sources[0] if result.sources else None)
         if result.errors:
             self.status.set_idle(
-                f"Refresh finished with {len(result.errors)} problem(s) — see Logs."
+                f"Refresh finished with {counted(len(result.errors), 'problem')} "
+                "— see Logs."
             )
             for error in result.errors:
                 self.logger.warning(error)
@@ -1452,12 +1467,24 @@ class MainWindow(QMainWindow):
         ffmpeg_ok = self.ctx.ffmpeg.available
         suffix = f" ({count})" if count else ""
 
+        def size_to_text(button: QPushButton) -> QPushButton:
+            """Keep a button as wide as its label, not the window.
+
+            Without this a stretch in the row let the primary button grow
+            into a bar hundreds of pixels wide on a large monitor, which
+            reads as a banner rather than a button.
+            """
+            button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            hint = button.sizeHint()
+            button.setMinimumWidth(hint.width())
+            return button
+
         if self.settings.mode == "easy":
             label = (
                 f"Download to Spotify{suffix}" if ffmpeg_ok
                 else f"Download audio{suffix}"
             )
-            button = QPushButton(label)
+            button = size_to_text(QPushButton(label))
             button.setObjectName("primary")
             button.setEnabled(count > 0 and not busy)
             button.setToolTip(
@@ -1469,13 +1496,14 @@ class MainWindow(QMainWindow):
             button.clicked.connect(self._start_easy)
             self.action_layout.addWidget(button)
         else:
-            download = QPushButton(f"Download{suffix}")
+            compact = self.width() < 1180
+            download = size_to_text(QPushButton(f"Download{suffix}"))
             download.setToolTip("Only fetch the audio for the ticked songs")
             download.setEnabled(count > 0 and not busy)
             download.clicked.connect(lambda: self._start_stage("download"))
             self.action_layout.addWidget(download)
 
-            convert = QPushButton(f"Convert{suffix}")
+            convert = size_to_text(QPushButton(f"Convert{suffix}"))
             convert.setToolTip(
                 "Turn the downloads into tagged files"
                 if ffmpeg_ok else "FFmpeg is required for conversion."
@@ -1484,7 +1512,12 @@ class MainWindow(QMainWindow):
             convert.clicked.connect(lambda: self._start_stage("convert"))
             self.action_layout.addWidget(convert)
 
-            sync = QPushButton(f"Send to Spotify{suffix}")
+            sync = size_to_text(
+                QPushButton(
+                    f"Spotify{suffix}" if compact
+                    else f"Send to Spotify{suffix}"
+                )
+            )
             sync.setToolTip(
                 "Copy the converted files into your Spotify folder"
             )
@@ -1793,6 +1826,9 @@ class MainWindow(QMainWindow):
             parts.append(f"{summary['failed']} failed")
         message = ", ".join(parts) if parts else "Finished."
 
+        if summary.get("failed"):
+            # The Modes table promises the log drawer opens on error.
+            self.logs_action.setChecked(True)
         if summary.get("cancelled"):
             self.status.set_idle("Job cancelled.")
         elif summary.get("failed"):
@@ -1811,7 +1847,7 @@ class MainWindow(QMainWindow):
         if summary.get("synced"):
             self._notify(
                 "Sent to Spotify",
-                f"{summary['synced']} track(s) copied. If they are not in "
+                f"{counted(summary['synced'], 'track')} copied. If they are not in "
                 "Spotify yet, restart it from the Spotify button.",
             )
         elif not summary.get("cancelled") and not summary.get("failed"):
@@ -1872,11 +1908,13 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "Ready to paste",
-            f"Saved {len(songs)} song(s) to:\n{filename}\n\n"
+            f"Saved {counted(len(songs), 'song')} to:\n{filename}\n\n"
             "Open that file, paste the whole thing into a chatbot, then use "
             "AI → Import a chatbot's reply.",
         )
-        self.status.set_idle(f"Exported {len(songs)} song(s) for a chatbot.")
+        self.status.set_idle(
+            f"Exported {counted(len(songs), 'song')} for a chatbot."
+        )
 
     def _import_from_ai(self) -> None:
         dialog = AIImportDialog(self)
@@ -2497,7 +2535,9 @@ class MainWindow(QMainWindow):
 
         self._covers_running = True
         self._set_controls_enabled(False)
-        self.status.set_busy(f"Fixing covers for {len(track_ids)} song(s)…")
+        self.status.set_busy(
+            f"Fixing covers for {counted(len(track_ids), 'song')}…"
+        )
 
         signals = FixCoversSignals()
         signals.progress.connect(
@@ -2536,7 +2576,7 @@ class MainWindow(QMainWindow):
         if failed:
             QMessageBox.warning(
                 self, "Some covers were not fixed",
-                f"{failed} file(s) could not be updated. The log has the "
+                f"{counted(failed, 'file')} could not be updated. The log has the "
                 "details.",
             )
 
@@ -2801,10 +2841,17 @@ class MainWindow(QMainWindow):
 
     def _update_theme_button(self) -> None:
         dark = self.settings.theme == "dark"
-        self.theme_button.setText("Light" if dark else "Dark")
+        # The icon is the action: sun to go light, moon to go dark. The
+        # full word is kept when there is room for it.
+        compact = self.width() < 1180
+        if compact:
+            self.theme_button.setText("☀" if dark else "☾")
+        else:
+            self.theme_button.setText("Light" if dark else "Dark")
         self.theme_button.setToolTip(
             "Switch to the light theme" if dark else "Switch to the dark theme"
         )
+        self.theme_button.setAccessibleName("Switch theme")
 
     def _toggle_theme(self) -> None:
         self.settings.theme = "light" if self.settings.theme == "dark" else "dark"
@@ -2990,11 +3037,13 @@ class MainWindow(QMainWindow):
 
         self._refresh_sources()
         message = (
-            f"Imported {summary.tracks} track(s) in "
-            f"{summary.sources} source(s)."
+            f"Imported {counted(summary.tracks, 'track')} in "
+            f"{counted(summary.sources, 'link')}."
         )
         if summary.errors:
-            message += f"\n{len(summary.errors)} row(s) could not be imported."
+            message += (
+                f"\n{counted(len(summary.errors), 'row')} could not be imported."
+            )
         QMessageBox.information(self, "Import complete", message)
 
     # ------------------------------------------------------------------ misc
@@ -3122,9 +3171,14 @@ class MainWindow(QMainWindow):
         stretching three columns apart. The defaults are only applied
         until the user drags the splitter themselves.
         """
+        width = self.width()
+        compact = width < 1180
+        if compact != getattr(self, "_compact", None):
+            self._compact = compact
+            self._update_theme_button()
+            self._update_actions()
         if getattr(self, "_splitter_touched", False):
             return
-        width = self.width()
         if width < 1200:
             self.splitter.setSizes([200, max(300, width - 200 - 290), 290])
         elif width < 1600:

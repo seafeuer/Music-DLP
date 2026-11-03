@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from musicdlp.ui.dialogs.footer import DialogFooter
+from musicdlp.ui.dialogs.sizing import fit_dialog
 
 from musicdlp.core.config import Settings
 from musicdlp.core.paths import is_writable, start_directory
@@ -60,7 +61,7 @@ class SetupDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Set up Music DLP")
-        self.resize(720, 680)
+        fit_dialog(self, 720, 680)
         self.settings = settings
         self.ffmpeg = ffmpeg
         self.spotify = spotify

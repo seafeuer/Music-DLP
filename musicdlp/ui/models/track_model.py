@@ -26,7 +26,7 @@ from musicdlp.core.models import (
 ROW_ROLE = Qt.UserRole + 1
 PROGRESS_ROLE = Qt.UserRole + 2
 
-COLUMNS = ["", "#", "Title", "Artist", "Length", "Format", "Status", "Progress"]
+COLUMNS = ["✓", "#", "Title", "Artist", "Length", "Format", "Status", "Progress"]
 COL_CHECK = 0
 COL_POSITION = 1
 COL_TITLE = 2
@@ -93,10 +93,17 @@ class TrackTableModel(QAbstractTableModel):
         return 0 if parent.isValid() else len(COLUMNS)
 
     def headerData(self, section, orientation, role=Qt.DisplayRole):
-        if role != Qt.DisplayRole:
+        if orientation != Qt.Horizontal or not (0 <= section < len(COLUMNS)):
             return None
-        if orientation == Qt.Horizontal and 0 <= section < len(COLUMNS):
+        if role == Qt.DisplayRole:
             return COLUMNS[section]
+        if role == Qt.ToolTipRole:
+            if section == COL_CHECK:
+                return (
+                    "Tick a song to include it in the next download. "
+                    "Highlighting a row does not include it."
+                )
+            return None
         return None
 
     def data(self, index: QModelIndex, role=Qt.DisplayRole):
