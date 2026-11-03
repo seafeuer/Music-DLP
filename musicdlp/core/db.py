@@ -10,9 +10,11 @@ other.
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
 import threading
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
@@ -156,6 +158,39 @@ def _same_recording(left: TrackRow, right: TrackRow) -> bool:
     return False
 
 
+def quarantine_database(path: str | Path) -> Optional[Path]:
+    """Move a library file SQLite cannot read out of the way.
+
+    The owner of a damaged database has no obvious way to know they
+    should delete it, so a file that stops every launch is set aside with
+    a timestamp and kept. Returns the new path, or None if it could not
+    be moved (a locked file, or no permission).
+    """
+    path = Path(path)
+    if not path.exists():
+        return None
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup = path.with_name(f"{path.name}.damaged-{stamp}")
+    counter = 2
+    while backup.exists():
+        backup = path.with_name(f"{path.name}.damaged-{stamp}-{counter}")
+        counter += 1
+    try:
+        os.replace(path, backup)
+    except OSError as exc:
+        logger.error("Could not move the damaged library aside: %s", exc)
+        return None
+    # WAL leaves two sidecars; they belong with the file they describe.
+    for suffix in ("-wal", "-shm"):
+        sidecar = Path(str(path) + suffix)
+        if sidecar.exists():
+            try:
+                os.replace(sidecar, Path(str(backup) + suffix))
+            except OSError:
+                pass
+    return backup
+
+
 class Database:
     """Small repository layer over SQLite."""
 
@@ -164,7 +199,13 @@ class Database:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
         self._closed = False
-        self._init_schema()
+        try:
+            self._init_schema()
+        except Exception:
+            # The failed connection still holds the file on Windows, which
+            # would stop startup recovery from moving it aside.
+            self.close_current_thread()
+            raise
 
     # ------------------------------------------------------------ connection
 
@@ -178,6 +219,10 @@ class Database:
                 timeout=5.0,
                 check_same_thread=True,
             )
+            # Keep the connection where close_current_thread() can find it:
+            # one of the PRAGMAs below can fail on a damaged file, and the
+            # open handle would then block recovery from moving it aside.
+            self._local.conn = conn
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")

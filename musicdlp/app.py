@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 import sys
 import threading
 from typing import Optional
@@ -13,7 +14,7 @@ from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QStyle
 
 from musicdlp import APP_NAME, __version__
 from musicdlp.core.config import Settings
-from musicdlp.core.db import Database
+from musicdlp.core.db import Database, quarantine_database
 from musicdlp.core.logging import setup_logging
 from musicdlp.core.maintenance import repair_library
 from musicdlp.core.paths import db_path, ensure_app_dirs, log_dir
@@ -92,6 +93,40 @@ def _install_excepthook(logger: logging.Logger) -> None:
     threading.excepthook = thread_hook
 
 
+def _open_database(logger: logging.Logger) -> Database:
+    """Open the library, moving a damaged file aside instead of dying.
+
+    A corrupt library.db used to stop every launch: the exception was
+    shown once and the same file failed again next time, with no hint
+    about which file to remove. The damaged file is kept next to the new
+    one so a support question can still look at it.
+    """
+    path = db_path()
+    try:
+        return Database(path)
+    except sqlite3.DatabaseError as exc:
+        logger.exception("Library database could not be opened: %s", path)
+        backup = quarantine_database(path)
+        if backup is None:
+            QMessageBox.critical(
+                None,
+                "Library cannot be opened",
+                f"Music DLP could not open its library:\n{path}\n\n{exc}\n\n"
+                "Close Music DLP and move or delete that file, then start "
+                "again.",
+            )
+            raise
+        QMessageBox.warning(
+            None,
+            "Library was damaged",
+            f"The library file could not be read:\n{path}\n\n"
+            f"It was moved to:\n{backup}\n\n"
+            "Music DLP will start with an empty library. The damaged file "
+            "has been kept.",
+        )
+        return Database(path)
+
+
 def main() -> int:
     ensure_app_dirs()
 
@@ -104,13 +139,22 @@ def main() -> int:
     if _try_existing_instance():
         return 0
 
-    settings = Settings.load()
-    logger = setup_logging(log_dir(), settings.log_level)
-    logger.info("Starting Music DLP %s", __version__)
+    # Logging and the crash dialog come first: a damaged config file must
+    # not take the app down before there is anywhere to report it.
+    logger = setup_logging(log_dir(), "INFO")
     _install_excepthook(logger)
+    try:
+        settings = Settings.load()
+    except Exception:
+        logger.exception("Could not read the settings; using defaults")
+        settings = Settings()
+    logger.setLevel(
+        getattr(logging, settings.log_level.upper(), logging.INFO)
+    )
+    logger.info("Starting Music DLP %s", __version__)
     apply_theme(app, settings.theme)
 
-    db = Database(db_path())
+    db = _open_database(logger)
     ctx = build_context(settings, db, logger)
 
     # Recover files that were left in an old or temporary folder.

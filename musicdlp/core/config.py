@@ -26,6 +26,48 @@ BROWSERS = ("chrome", "edge", "firefox", "brave", "opera", "vivaldi", "chromium"
 AI_PROVIDERS = ("auto", "ollama", "openai", "anthropic")
 TRANSLATE_STYLES = ("translated", "transliterated", "both")
 
+# A JSON file can hold any type in any field. A hand-edited or
+# half-written config is not hypothetical, so every value is coerced to
+# the type the field expects before it is used.
+_STRING_FIELDS = (
+    "theme", "mode", "spotify_format",
+    "spotify_copy_mode", "mp3_bitrate", "m4a_bitrate",
+    "filename_template", "cookies_mode", "cookies_browser",
+    "cookies_file", "ai_provider", "ai_base_url", "ai_model",
+    "ai_api_key", "ai_custom_prompt", "gdrive_dir", "translate_language",
+    "translate_style", "spotify_dlp_folder", "log_level", "ffmpeg_path",
+    "window_geometry", "bridge_token",
+)
+_BOOL_FIELDS = (
+    "spotify_auto_restart", "normalize", "keep_raw", "notifications",
+    "smart_titles", "ai_find_artwork", "translate_artist",
+    "bridge_enabled", "first_run_done",
+)
+
+
+def _as_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return False
+
+
+def _as_int(value, default):
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
+def _as_float(value, default):
+    try:
+        return float(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+
 
 def _writable_text(value):
     """A string that can always be saved as UTF-8.
@@ -146,7 +188,11 @@ class Settings:
         # converting, and that default was written into every config file.
         # Keeping the download is the default now, and an old False was
         # never a deliberate choice — there was nothing else to leave it as.
-        if int(raw.get("settings_version") or 1) < 2:
+        try:
+            stored_version = int(raw.get("settings_version") or 1)
+        except (TypeError, ValueError, OverflowError):
+            stored_version = 1
+        if stored_version < 2:
             values["keep_raw"] = True
             values["settings_version"] = 2
 
@@ -181,8 +227,51 @@ class Settings:
 
     # -------------------------------------------------------------- validate
 
+    def _coerce_types(self) -> None:
+        """Make every field the type its code expects.
+
+        Anything that cannot be coerced falls back to the dataclass
+        default, so a damaged config starts the app with defaults rather
+        than crashing before there is a window to explain what happened.
+        """
+        for name in ("output_dir", "spotify_dir"):
+            if not isinstance(getattr(self, name), str):
+                setattr(self, name, "")
+        for name in _STRING_FIELDS:
+            value = getattr(self, name)
+            if isinstance(value, str):
+                continue
+            if isinstance(value, (int, float)):
+                setattr(self, name, str(value))
+            else:
+                setattr(self, name, "")
+        for name in _BOOL_FIELDS:
+            setattr(self, name, _as_bool(getattr(self, name)))
+
+        if not isinstance(self.formats, (list, tuple)):
+            self.formats = []
+        else:
+            self.formats = list(self.formats)
+
+        self.settings_version = _as_int(self.settings_version, 2)
+        self.max_retries = _as_int(self.max_retries, 3)
+        self.bridge_port = _as_int(self.bridge_port, 8317)
+        if self.last_source_id is not None:
+            self.last_source_id = _as_int(self.last_source_id, None)
+        self.sleep_min = _as_float(self.sleep_min, 1.0)
+        self.sleep_max = _as_float(self.sleep_max, 3.0)
+
+        # A missing or unusable library folder is recovered, not kept as
+        # the relative path "123" or an empty string.
+        if not self.output_dir.strip():
+            self.output_dir = str(default_output_dir())
+        if not self.spotify_dir.strip():
+            self.spotify_dir = str(default_spotify_dir())
+
     def validate(self) -> None:
         """Coerce values into supported ranges instead of failing."""
+        self._coerce_types()
+
         if self.theme not in THEMES:
             self.theme = "dark"
         if self.mode not in MODES:
