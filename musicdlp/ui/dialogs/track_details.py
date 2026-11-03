@@ -30,6 +30,7 @@ class TrackDetailsDialog(QDialog):
         album_default: str,
         track_default: int,
         filename_template: str,
+        file_format: str = "mp3",
         parent=None,
         translate_callback=None,
     ) -> None:
@@ -38,6 +39,7 @@ class TrackDetailsDialog(QDialog):
         self.setMinimumWidth(620)
         self.track = track
         self.filename_template = filename_template
+        self.file_format = (file_format or "mp3").lower().lstrip(".")
         self.translate_callback = translate_callback
 
         self.cover_path: Optional[str] = track.cover_path
@@ -48,7 +50,8 @@ class TrackDetailsDialog(QDialog):
         layout.setSpacing(12)
 
         intro = QLabel(
-            "These details are written into the MP3 file and shown in Spotify."
+            "These details are written into the audio file and shown in "
+            "Spotify."
         )
         intro.setObjectName("muted")
         intro.setWordWrap(True)
@@ -351,7 +354,7 @@ class TrackDetailsDialog(QDialog):
             media_id=self.track.media_id,
             source="",
         )
-        self.preview.setText(f"{stem}.mp3")
+        self.preview.setText(f"{stem}.{self.file_format}")
 
     # ---------------------------------------------------------------- save
 

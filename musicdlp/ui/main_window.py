@@ -798,8 +798,13 @@ class MainWindow(QMainWindow):
 
         current = self.track_table.current_row()
         keep_selected = current.track.id if current is not None else None
-        if self._current_source_id != source_id:
+        same_source = self._current_source_id == source_id
+        if not same_source:
             keep_selected = None
+        # Reloading the view a job just changed must not throw away the
+        # filter and search the user was watching failures through.
+        previous_filter = self.track_table.filter_combo.currentIndex()
+        previous_search = self.track_table.search.text()
 
         # Newly added songs start ticked, once per link.
         if source_id != ALL_SONGS_ID and source_id not in self._auto_checked:
@@ -826,6 +831,11 @@ class MainWindow(QMainWindow):
         searching = bool(query) and source_id == ALL_SONGS_ID
         if searching:
             self.track_table.search.setText(query)
+        elif same_source:
+            if previous_filter:
+                self.track_table.filter_combo.setCurrentIndex(previous_filter)
+            if previous_search:
+                self.track_table.search.setText(previous_search)
         # While the library-wide search is showing, its own box above is
         # the place to type; a second box holding the same words is only
         # something else to wonder about.
@@ -2307,21 +2317,17 @@ class MainWindow(QMainWindow):
             return
 
         delete_files = reply == QMessageBox.Yes
-        snapshot = []
         if not delete_files:
-            # With the files kept, the songs can be put back.
-            for track_id in dialog.remove_ids:
-                track = self.db.get_track(track_id)
-                if track is not None:
-                    snapshot.append((track, self.db.track_links(track_id)))
+            # With the files kept, the whole removal can be put back,
+            # including a one-song link that disappears with its song.
+            snapshot, doomed = self._snapshot_removal(dialog.remove_ids)
+            self._push_undo(
+                "Removing duplicate songs",
+                lambda: self._restore_removal(snapshot, doomed),
+            )
         for track_id in dialog.remove_ids:
             self.ctx.library.delete_track(
                 track_id, delete_files=delete_files, forget=True
-            )
-        if snapshot:
-            self._push_undo(
-                "Removing duplicate songs",
-                lambda: self._restore_tracks(snapshot),
             )
 
         self._refresh_sources(self._current_source_id)
@@ -2355,6 +2361,14 @@ class MainWindow(QMainWindow):
             source_template=getattr(source, "filename_template", None),
             folder_template=folder.filename_template if folder else None,
         )
+
+    def _file_format_for(self, track) -> str:
+        """The format this song is written in, for the dialog's preview."""
+        if track.mp3_path:
+            return "mp3"
+        if track.m4a_path:
+            return "m4a"
+        return (self.settings.formats or ["mp3"])[0]
 
     def _open_details(self, track_id: int) -> None:
         """Edit one song's title, artist, album, track number, and picture."""
@@ -2394,6 +2408,7 @@ class MainWindow(QMainWindow):
             album_default=album_default,
             track_default=row.position,
             filename_template=self._filename_template_for(row.source),
+            file_format=self._file_format_for(row.track),
             parent=self,
             translate_callback=self._translate_one,
         )

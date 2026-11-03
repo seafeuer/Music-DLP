@@ -531,3 +531,41 @@ def test_the_window_minimum_fits_the_screen(qapp, qtbot, tmp_path, monkeypatch):
     assert win.minimumWidth() <= max(720, screen.width())
     assert win.minimumHeight() <= max(440, screen.height())
     db.close()
+
+
+def test_the_details_preview_uses_the_song_s_own_format(qapp, tmp_path):
+    from musicdlp.ui.dialogs.track_details import TrackDetailsDialog
+
+    db = Database(tmp_path / "fmt.db")
+    tid = db.upsert_track(
+        platform="youtube", media_id="m1", url="u", title="A Song",
+        uploader="C", duration=100,
+    )
+    song = tmp_path / "A Song.m4a"
+    song.write_bytes(b"x")
+    db.update_track(tid, status="converted", m4a_path=str(song))
+    dialog = TrackDetailsDialog(
+        db.get_track(tid), album_default="Singles", track_default=1,
+        filename_template="{title}", file_format="m4a",
+    )
+    assert dialog.preview.text() == "A Song.m4a"
+    db.close()
+
+
+
+def test_a_job_finish_keeps_the_songs_filter_and_search(window, qtbot):
+    """A reload after a job must not reset what the user was looking at."""
+    main, db, ids = window
+    source_id = db.get_sources()[0].id
+    main._load_source(source_id)
+    main.track_table.filter_combo.setCurrentIndex(4)  # Problems
+    main.track_table.search.setText("song")
+    qtbot.wait(20)
+
+    main._on_pipeline_finished({
+        "downloaded": 0, "converted": 0, "synced": 0, "failed": 0,
+        "skipped": 0, "errors": [], "cancelled": False, "stages": [],
+    })
+
+    assert main.track_table.filter_combo.currentIndex() == 4
+    assert main.track_table.search.text() == "song"

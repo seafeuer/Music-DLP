@@ -1357,3 +1357,82 @@ def test_the_list_filter_is_hidden_while_the_library_search_is_active(
     main.search_edit.clear()
     qtbot.wait(30)
     assert main.track_table.search.isVisible()
+
+
+def test_deleting_a_song_files_also_removes_its_spotify_copy(tmp_path):
+    from musicdlp.services.library import LibraryService
+
+    settings = Settings(
+        output_dir=str(tmp_path / "out"), spotify_dir=str(tmp_path / "out" / "Spotify"),
+        first_run_done=True,
+    )
+    db = Database(tmp_path / "lib.db")
+    source = db.add_source(
+        url="https://www.youtube.com/watch?v=x", kind="item", platform="youtube",
+        external_id="x", title="A song", uploader="U", item_count=1,
+        thumbnail_url=None,
+    )
+    out = tmp_path / "out" / "MP3"
+    spotify = tmp_path / "out" / "Spotify"
+    out.mkdir(parents=True)
+    spotify.mkdir(parents=True)
+    song = out / "A song.mp3"
+    song.write_bytes(b"audio")
+    copy = spotify / "A song.mp3"
+    copy.write_bytes(b"audio")
+    tid = db.upsert_track("youtube", "x", "u", "A song", "U", 100)
+    db.update_track(tid, status="synced", mp3_path=str(song))
+    db.set_source_tracks(source, [(tid, 1)])
+
+    LibraryService(db, settings, None).delete_track(
+        tid, delete_files=True, forget=True
+    )
+
+    assert not song.exists()
+    assert not copy.exists()
+    db.close()
+
+
+def test_undo_after_a_duplicate_removal_brings_its_link_back(
+    window, monkeypatch
+):
+    """The removed duplicate's one-song link must return with it."""
+    main, db, data = window
+    single = db.add_source(
+        url="https://www.youtube.com/watch?v=dupx", kind="item",
+        platform="youtube", external_id="dupx", title="A single",
+        uploader="Channel", item_count=1, thumbnail_url=None,
+    )
+    dup = db.upsert_track(
+        platform="youtube", media_id="dupx",
+        url="https://www.youtube.com/watch?v=dupx",
+        title="Playlist song 1", uploader="Channel", duration=100,
+    )
+    db.set_source_tracks(single, [(dup, 1)])
+
+    class FakeDuplicates:
+        remove_ids = [dup]
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def exec(self):
+            return QDialog.Accepted
+
+    monkeypatch.setattr(
+        "musicdlp.ui.main_window.DuplicateDialog", FakeDuplicates
+    )
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        staticmethod(lambda *args, **kwargs: QMessageBox.No),
+    )
+
+    main._find_duplicates()
+    assert db.get_track(dup) is None
+    assert db.get_source(single) is None
+
+    main._undo_last()
+
+    assert db.get_track(dup) is not None
+    assert db.get_source(single) is not None
+    assert db.track_links(dup) == [(single, 1)]

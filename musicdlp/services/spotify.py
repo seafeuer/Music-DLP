@@ -28,6 +28,11 @@ class SyncResult:
     skipped: int = 0
     failed: int = 0
     errors: list[str] = field(default_factory=list)
+    # Names of the files that really are in the Spotify folder now: copied
+    # in this run, or already there unchanged. The caller must not infer
+    # success from "a file with that name exists" — a stale, unplayable
+    # copy with the same name would look like success forever.
+    done: list[str] = field(default_factory=list)
 
     @property
     def total(self) -> int:
@@ -181,12 +186,14 @@ class SpotifyService:
             try:
                 if target.exists() and self._same_file(source, target):
                     result.skipped += 1
+                    result.done.append(target.name)
                     continue
                 if mode == "move":
                     shutil.move(str(source), str(target))
                 else:
                     shutil.copy2(source, target)
                 result.copied += 1
+                result.done.append(target.name)
             except OSError as exc:
                 result.failed += 1
                 result.errors.append(f"{source.name}: {exc}")

@@ -481,6 +481,16 @@ class Pipeline(QObject):
         ]
         raw = Path(track.raw_path) if track.raw_path else None
         fill_missing = bool(missing and raw and raw.exists())
+        if missing and not fill_missing:
+            # The file is gone and there is nothing to rebuild it from.
+            # Drop the dead path so the Format column and the missing-file
+            # check stop claiming that format is still there.
+            for fmt in missing:
+                path = track.mp3_path if fmt == "mp3" else track.m4a_path
+                if path:
+                    self.db.update_track(
+                        track.id, **({f"{fmt}_path": None})
+                    )
 
         cover = self._cover_for_write(track, settings)
 
@@ -633,7 +643,8 @@ class Pipeline(QObject):
                     f"{track.display_title}: could not rebuild the {fmt} file",
                 )
                 self.db.update_track(
-                    track.id, status=ERROR, error=str(exc)
+                    track.id, status=ERROR, error=str(exc),
+                    **({f"{fmt}_path": None}),
                 )
                 continue
             self.db.update_track(
@@ -968,9 +979,10 @@ class Pipeline(QObject):
             if result.errors:
                 summary["errors"].extend(result.errors)
 
+            delivered = set(result.done)
             for _item, track, path in pending:
                 target = settings.spotify_path / path.name
-                if target.exists():
+                if path.name in delivered:
                     update = {
                         "status": SYNCED,
                         "synced_at": _now(),
@@ -984,6 +996,9 @@ class Pipeline(QObject):
                     self.db.update_track(track.id, **update)
                     summary["synced"] += 1
                 else:
+                    # A file with this name being present is not success:
+                    # it may be the stale copy the new one failed to
+                    # replace. The copy result is the only evidence.
                     self.db.update_track(
                         track.id,
                         sync_error="Copying to the Spotify folder failed.",

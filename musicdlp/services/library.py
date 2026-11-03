@@ -243,11 +243,27 @@ class LibraryService:
             self.db.delete_track(track_id)
 
     def _delete_files(self, track) -> None:
+        """Remove every file this song owns, including its Spotify copy.
+
+        The copy in the Spotify folder is the same audio under the same
+        name. Leaving it behind kept the song in Spotify's Local Files
+        with no library row to manage it, which is exactly what deleting
+        the files is supposed to prevent.
+        """
+        candidates: list[Path] = []
         for path in (track.raw_path, track.mp3_path, track.m4a_path,
                      track.cover_path):
+            if path:
+                candidates.append(Path(path))
+
+        for path in (track.mp3_path, track.m4a_path):
             if not path:
                 continue
-            candidate = Path(path)
+            copy = self.settings.spotify_path / Path(path).name
+            if copy not in candidates:
+                candidates.append(copy)
+
+        for candidate in candidates:
             try:
                 if candidate.is_file():
                     candidate.unlink()

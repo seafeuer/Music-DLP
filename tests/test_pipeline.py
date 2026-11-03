@@ -64,9 +64,11 @@ class FakeSpotify:
             target = destination / Path(source).name
             if target.exists():
                 result.skipped += 1
+                result.done.append(target.name)
             else:
                 target.write_bytes(Path(source).read_bytes())
                 result.copied += 1
+                result.done.append(target.name)
                 self.files.append(target)
         return result
 
@@ -684,3 +686,65 @@ def test_a_retag_rebuilds_a_format_whose_file_is_missing(env, monkeypatch):
     assert env["ffmpeg"].calls == ["m4a"]      # only the missing format
     assert Path(track.m4a_path).exists()
     assert Path(track.mp3_path).read_bytes() == b"audio"
+
+
+def test_a_failed_copy_is_not_reported_as_synced(env):
+    """A stale file with the target's name is not proof the copy worked."""
+    out = Path(env["settings"].output_dir) / "MP3"
+    out.mkdir(parents=True, exist_ok=True)
+    song = out / "Song 1.mp3"
+    song.write_bytes(b"new-audio")
+    spotify_dir = Path(env["settings"].spotify_dir)
+    spotify_dir.mkdir(parents=True, exist_ok=True)
+    # A different, unplayable copy already has the name the sync wants.
+    (spotify_dir / "Song 1.mp3").write_bytes(b"stale")
+    track_id = env["track_ids"][0]
+    env["db"].update_track(
+        track_id, status="converted", mp3_path=str(song)
+    )
+
+    class BrokenCopy(FakeSpotify):
+        def sync(self, files, destination, mode="copy"):
+            result = SyncResult()
+            result.failed = len(list(files))
+            result.errors = ["permission denied"]
+            return result
+
+    env["pipeline"].spotify = BrokenCopy()
+    item = BatchItem(
+        source=env["source"], track=env["db"].get_track(track_id), position=1
+    )
+    env["pipeline"].start([item], ["sync"])
+    env["pipeline"].wait(10)
+
+    track = env["db"].get_track(track_id)
+    assert track.status == "converted"
+    assert track.sync_error
+
+
+def test_a_missing_format_that_cannot_be_rebuilt_stops_claiming_to_exist(
+    env, monkeypatch
+):
+    """With no raw download left, the dead path must be cleared."""
+    monkeypatch.setattr(
+        pipeline_module, "embed_tags", lambda *args, **kwargs: True
+    )
+    monkeypatch.setattr(pipeline_module, "find_cover", lambda *a, **k: None)
+    env["settings"].formats = ["mp3", "m4a"]
+    out = Path(env["settings"].output_dir) / "MP3"
+    out.mkdir(parents=True, exist_ok=True)
+    song = out / "Song 1.mp3"
+    song.write_bytes(b"audio")
+    track_id = env["track_ids"][0]
+    env["db"].update_track(
+        track_id, status="converted", mp3_path=str(song),
+        m4a_path=str(out / "gone.m4a"), raw_path=None,
+    )
+    item = BatchItem(
+        source=env["source"], track=env["db"].get_track(track_id), position=1
+    )
+
+    env["pipeline"].start([item], ["convert"], force=True, retag=True)
+    env["pipeline"].wait(10)
+
+    assert env["db"].get_track(track_id).m4a_path is None
