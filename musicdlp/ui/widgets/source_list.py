@@ -569,6 +569,7 @@ class SourceListWidget(QWidget):
         """An empty library says what to do; it is not a blank panel."""
         empty = self.model.rowCount() == 0
         self.stack.setCurrentWidget(self.empty if empty else self.view)
+        self.search.setVisible(not empty)
         self._update_buttons()
 
     def _on_filter_text(self, text: str) -> None:

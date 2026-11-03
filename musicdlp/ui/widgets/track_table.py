@@ -220,7 +220,10 @@ class TrackTableWidget(QWidget):
         self.actions_button.setAccessibleName("More actions")
         filter_row.addWidget(self.actions_button)
 
-        layout.addLayout(filter_row)
+        self.filter_bar = QWidget()
+        self.filter_bar.setLayout(filter_row)
+        layout.addWidget(self.filter_bar)
+        self.filter_bar.hide()
 
         # Table ------------------------------------------------------------
         self.stack = QStackedWidget()
@@ -331,6 +334,7 @@ class TrackTableWidget(QWidget):
         if selected_track_id is not None:
             self._select_by_track_id(selected_track_id)
 
+        self.filter_bar.setVisible(source is not None)
         self._update_counts()
         self._update_empty_state()
         self.refresh_progress_column()

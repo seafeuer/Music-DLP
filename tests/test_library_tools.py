@@ -1341,3 +1341,19 @@ def test_a_key_with_an_unpaired_surrogate_is_saved_cleanly(tmp_path):
     settings.save(path)                     # must not raise
     loaded = Settings.load(path)
     assert loaded.ai_api_key.startswith("sk-test-")
+
+
+def test_the_list_filter_is_hidden_while_the_library_search_is_active(
+    window, qtbot
+):
+    """One query should have one box, not two holding the same words."""
+    main, _db, _data = window
+    assert main.track_table.search.isVisible() or not main.isVisible()
+
+    main.search_edit.setText("playlist")
+    qtbot.wait(30)
+    assert not main.track_table.search.isVisible()
+
+    main.search_edit.clear()
+    qtbot.wait(30)
+    assert main.track_table.search.isVisible()

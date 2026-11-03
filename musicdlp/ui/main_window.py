@@ -768,6 +768,11 @@ class MainWindow(QMainWindow):
             target = ALL_SONGS_ID if sources else None
 
         self.sidebar.set_sources(display, counts, target)
+        # With nothing in the library the details panel is a large empty
+        # frame around disabled buttons; hide it until there is a song.
+        self.inspector_scroll.setVisible(
+            bool(sources) and self.inspector_action.isChecked()
+        )
         if target is None:
             self._current_source_id = None
             self._visible_ids = set()
@@ -818,8 +823,13 @@ class MainWindow(QMainWindow):
         # search is in use, put the query back so the list keeps matching
         # what the box says.
         query = self.search_edit.text().strip()
-        if query and source_id == ALL_SONGS_ID:
+        searching = bool(query) and source_id == ALL_SONGS_ID
+        if searching:
             self.track_table.search.setText(query)
+        # While the library-wide search is showing, its own box above is
+        # the place to type; a second box holding the same words is only
+        # something else to wonder about.
+        self.track_table.search.setVisible(not searching)
         if keep_selected is None:
             self.inspector.set_row(None)
         else:
@@ -873,6 +883,7 @@ class MainWindow(QMainWindow):
         text = (text or "").strip()
 
         if not text:
+            self.track_table.search.show()
             previous = self._search_from
             self._search_from = None
             if previous is not None:
@@ -889,6 +900,7 @@ class MainWindow(QMainWindow):
         # after the switch.
         self.track_table.filter_combo.setCurrentIndex(0)
         self.track_table.search.setText(text)
+        self.track_table.search.setVisible(False)
 
     def _checked_rows(self) -> list[TrackRow]:
         """Every ticked song, across all links."""
@@ -3027,7 +3039,10 @@ class MainWindow(QMainWindow):
         self.track_table.set_mode(self.settings.mode)
         # The details panel stays visible in both modes: it is where a song
         # is understood and edited, and hiding it made editing undiscoverable.
-        self.inspector_scroll.setVisible(self.inspector_action.isChecked())
+        # With an empty library there is nothing to show in it.
+        self.inspector_scroll.setVisible(
+            self.inspector_action.isChecked() and bool(self.db.get_sources())
+        )
         row = self.track_table.current_row()
         self.inspector.set_row(row, self._is_row_checked(row))
 
