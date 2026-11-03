@@ -45,7 +45,9 @@ def _clean_key(text: str) -> str:
 
 from musicdlp.core.config import Settings
 
-from musicdlp.core.paths import config_path, db_path, log_dir, start_directory
+from musicdlp.core.paths import (
+    config_path, db_path, is_writable, log_dir, start_directory,
+)
 from musicdlp.services.ai import (
     AIError, AISettings, friendly_error, list_models, test_connection,
 )
@@ -228,6 +230,7 @@ class SettingsDialog(QDialog):
 
         output_row = QHBoxLayout()
         self.output_edit = QLineEdit(self.settings.output_dir)
+        self.output_edit.setAccessibleName("Output folder")
         output_browse = QPushButton("Browse…")
         output_browse.clicked.connect(self._browse_output)
         output_row.addWidget(self.output_edit, 1)
@@ -319,6 +322,7 @@ class SettingsDialog(QDialog):
         folder_row = QHBoxLayout()
         folder_row.addWidget(QLabel("Spotify folder"))
         self.spotify_edit = QLineEdit(self.settings.spotify_dir)
+        self.spotify_edit.setAccessibleName("Spotify folder")
         self.spotify_edit.setPlaceholderText(
             r"Paste a full path, e.g. C:\Users\you\MusicDLP\Spotify"
         )
@@ -470,6 +474,7 @@ class SettingsDialog(QDialog):
         form.addRow("Model", self._wrap(model_row))
 
         self.ai_key_edit = QLineEdit(self.settings.ai_api_key)
+        self.ai_key_edit.setAccessibleName("API key")
         self.ai_key_edit.setEchoMode(QLineEdit.Password)
         self.ai_key_edit.setPlaceholderText(
             "Not needed for Ollama on this computer"
@@ -1064,10 +1069,29 @@ class SettingsDialog(QDialog):
             )
             return
 
+        output_dir = self.output_edit.text().strip()
+        if not output_dir:
+            QMessageBox.warning(
+                self, "No output folder",
+                "Choose the folder Music DLP should keep downloaded songs in.",
+            )
+            return
+        if not is_writable(Path(output_dir).expanduser()):
+            # A path that is a file, on a disconnected drive, or read-only
+            # let the first download fail halfway with the song stuck on
+            # "Converting". Refuse it while the user is looking at it.
+            QMessageBox.critical(
+                self, "Folder cannot be used",
+                f"Music DLP cannot save downloads there:\n{output_dir}\n\n"
+                "Choose a different folder, or check that the drive is "
+                "connected and not read-only.",
+            )
+            return
+
         settings = Settings(
             theme=self.theme_combo.currentData(),
             mode=self.mode_combo.currentData(),
-            output_dir=self.output_edit.text().strip(),
+            output_dir=output_dir,
             spotify_dir=spotify_dir,
             spotify_format=spotify_format,
             spotify_copy_mode=self.copy_mode.currentData(),

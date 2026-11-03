@@ -748,3 +748,45 @@ def test_a_missing_format_that_cannot_be_rebuilt_stops_claiming_to_exist(
     env["pipeline"].wait(10)
 
     assert env["db"].get_track(track_id).m4a_path is None
+
+
+def test_unusable_output_folder_records_a_failure_per_song(env, tmp_path):
+    """A File-not-a-folder used to abort the job and strand rows."""
+    blocker = tmp_path / "not-a-folder"
+    blocker.write_text("a file", encoding="utf-8")
+    env["settings"].output_dir = str(blocker)
+
+    summary = _summary()
+    env["pipeline"]._execute(
+        env["items"], ["download"], False, env["settings"], summary
+    )
+
+    assert summary["failed"] == 2
+    assert summary["cancelled"] is False
+    for track_id in env["track_ids"]:
+        track = env["db"].get_track(track_id)
+        assert track.status == "error"
+        assert "download folder" in (track.error or "").lower()
+
+
+def test_unusable_convert_folder_leaves_no_song_converting(env, tmp_path):
+    summary = _summary()
+    env["pipeline"]._execute(
+        env["items"], ["download"], False, env["settings"], summary
+    )
+
+    blocker = tmp_path / "also-not-a-folder"
+    blocker.write_text("a file", encoding="utf-8")
+    env["settings"].output_dir = str(blocker)
+
+    convert = _summary()
+    env["pipeline"]._execute(
+        env["items"], ["convert"], False, env["settings"], convert
+    )
+
+    assert convert["failed"] == 2
+    for track_id in env["track_ids"]:
+        track = env["db"].get_track(track_id)
+        assert track.status == "error"
+        assert track.status != "converting"
+        assert "folder cannot be created" in (track.error or "").lower()

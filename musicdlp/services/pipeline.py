@@ -319,7 +319,27 @@ class Pipeline(QObject):
         force: bool,
     ) -> None:
         raw_dir = settings.raw_dir
-        raw_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            raw_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            # A folder that cannot be created is the user's disk, not a
+            # bug in one song: fail every item with a readable message
+            # instead of aborting the run and leaving rows mid-stage.
+            message = f"The download folder cannot be created: {raw_dir} ({exc})"
+            for item in items:
+                self.db.update_track(
+                    item.track.id, status=ERROR, error=message
+                )
+                _record_failure(
+                    summary,
+                    item.track.id,
+                    f"{item.track.display_title}: {message}",
+                )
+                self.track_changed.emit(item.track.id)
+                tracker.complete_unit(
+                    "download", item.track.display_title, item.track.id
+                )
+            return
 
         for index, item in enumerate(items):
             if self._cancel.is_set():
@@ -603,7 +623,12 @@ class Pipeline(QObject):
                 source=item.source.title,
             )
             out_dir = settings.output_path / fmt.upper()
-            out_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                out_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                raise AppError(
+                    f"The {fmt.upper()} folder cannot be created: {exc}"
+                ) from exc
             output = unique_path(
                 out_dir, stem, f".{fmt}", fallback_id=track.media_id
             )
@@ -717,11 +742,25 @@ class Pipeline(QObject):
             # already right, so the tags and the name are rewritten and the
             # sound is left bit-for-bit alone: re-encoding a lossy file
             # loses quality every time it is done.
-            if retag and self._retag_existing(item, track, settings, summary):
-                summary["converted"] += 1
-                self.track_changed.emit(track.id)
-                tracker.complete_unit("convert", title, track.id)
-                continue
+            if retag:
+                try:
+                    retagged = self._retag_existing(
+                        item, track, settings, summary
+                    )
+                except AppError as exc:
+                    message = exc.user_text()
+                    self.db.update_track(
+                        track.id, status=ERROR, error=message
+                    )
+                    _record_failure(summary, track.id, f"{title}: {message}")
+                    self.track_changed.emit(track.id)
+                    tracker.complete_unit("convert", title, track.id)
+                    continue
+                if retagged:
+                    summary["converted"] += 1
+                    self.track_changed.emit(track.id)
+                    tracker.complete_unit("convert", title, track.id)
+                    continue
 
             raw = Path(track.raw_path) if track.raw_path else None
 
@@ -758,7 +797,13 @@ class Pipeline(QObject):
                     continue
 
                 out_dir = settings.output_path / fmt.upper()
-                out_dir.mkdir(parents=True, exist_ok=True)
+                try:
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                except OSError as exc:
+                    errors.append(
+                        f"The {fmt.upper()} folder cannot be created: {exc}"
+                    )
+                    continue
 
                 stem = render_template(
                     self._filename_template(item.source, settings),

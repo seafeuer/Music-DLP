@@ -90,6 +90,11 @@ class LibraryService:
 
     def _add_one(self, url: str, result: AddResult, cancel_event=None) -> None:
         extracted = self.ytdlp.extract(url, cancel_event=cancel_event)
+        # Extract can finish after the user pressed Cancel: the site does
+        # not stop mid-request. Adding it then would contradict the
+        # "Cancelled." status and tick songs the user just called off.
+        if cancel_event is not None and cancel_event.is_set():
+            raise Cancelled()
         source_id = self.db.add_source(
             url=extracted.url,
             kind=extracted.kind,
