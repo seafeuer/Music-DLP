@@ -17,7 +17,7 @@ already been sent to Spotify.
 
 Last verified on 2026-11-02:
 
-- Full test suite passes (527 tests, offscreen Qt included).
+- Full test suite passes (531 tests, offscreen Qt included).
 - Editing title, artist, album, track number, and cover rewrites the tags and
   the file name, replaces the Spotify copy, and removes the stale one. The
   audio is not decoded or re-encoded: its stream is byte-for-byte the same
@@ -50,7 +50,7 @@ Last verified on 2026-11-02:
 - **Duplicate-aware** — the same video in two playlists is downloaded once.
 - **Resume** — interrupted downloads and conversions continue where they stopped.
 - **Edit any song** — title, artist, album, track number, and cover picture,
-  with a live preview of the file name. "Update the audio file now" rewrites
+  with a live preview of the file name. "Write these details into the audio file now" rewrites
   the file and refreshes the Spotify copy in one step.
 - **Selection across links** — tick songs in one link, switch to another, and
   keep going. One **Download to Spotify (n)** sends everything you ticked.

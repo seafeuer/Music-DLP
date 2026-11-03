@@ -281,6 +281,8 @@ class MainWindow(QMainWindow):
 
         self.setup_banner = SetupBanner()
         self.setup_banner.action_clicked.connect(self._open_setup)
+        self._dismissed_banners: set[str] = set()
+        self.setup_banner.dismissed.connect(self._dismissed_banners.add)
         layout.addWidget(self.setup_banner)
 
         self.steps = StepIndicator()
@@ -1898,6 +1900,10 @@ class MainWindow(QMainWindow):
                 "Songs downloaded. FFmpeg is needed to convert them — "
                 "press “Set up FFmpeg” at the top."
             )
+        elif summary.get("synced"):
+            self.status.set_idle(
+                message + " · In Spotify: Your Library → Local Files."
+            )
         else:
             self.status.set_idle(message)
 
@@ -1907,8 +1913,10 @@ class MainWindow(QMainWindow):
         if summary.get("synced"):
             self._notify(
                 "Sent to Spotify",
-                f"{counted(summary['synced'], 'track')} copied. If they are not in "
-                "Spotify yet, restart it from the Spotify button.",
+                f"{counted(summary['synced'], 'track')} copied into your "
+                "Spotify folder. In Spotify, open Your Library → Local "
+                "Files to play them; if the folder is not listed, add it "
+                "in Settings → Local files and restart Spotify.",
             )
         elif not summary.get("cancelled") and not summary.get("failed"):
             self._notify("Music DLP", message)
@@ -2465,8 +2473,8 @@ class MainWindow(QMainWindow):
         if updated is not None and is_converted(updated.status):
             self.status.set_idle(
                 "Saved in Music DLP only. The audio file still has the old "
-                "details — open Edit details and tick “Update the audio file "
-                "now” to write them in."
+                "details — open Edit details and tick “Write these details "
+                "into the audio file now” to write them in."
             )
         else:
             self.status.set_idle(
@@ -2959,7 +2967,12 @@ class MainWindow(QMainWindow):
 
     def _refresh_setup_banner(self) -> None:
         """Show one clear prompt for whatever is still missing."""
+        if "ffmpeg" in self._dismissed_banners and self.ctx.ffmpeg.available:
+            self._dismissed_banners.discard("ffmpeg")
         if not self.ctx.ffmpeg.available:
+            if "ffmpeg" in self._dismissed_banners:
+                self.setup_banner.clear_prompt()
+                return
             self.setup_banner.show_prompt(
                 "ffmpeg",
                 "Music DLP needs a free helper called FFmpeg to turn videos "
@@ -2969,6 +2982,9 @@ class MainWindow(QMainWindow):
             return
 
         if not self.ctx.spotify.is_installed():
+            if "spotify" in self._dismissed_banners:
+                self.setup_banner.clear_prompt()
+                return
             self.setup_banner.show_prompt(
                 "spotify",
                 "The Spotify app was not found on this computer. You can still "
@@ -2980,6 +2996,9 @@ class MainWindow(QMainWindow):
 
         folder = self.settings.spotify_path
         if not is_writable(folder):
+            if "folder" in self._dismissed_banners:
+                self.setup_banner.clear_prompt()
+                return
             self.setup_banner.show_prompt(
                 "folder",
                 "Music DLP cannot save songs into the Spotify folder. Choose a "
@@ -2988,12 +3007,19 @@ class MainWindow(QMainWindow):
             )
             return
 
+        if "source" in self._dismissed_banners:
+            self.setup_banner.clear_prompt()
+            return
+
         registered = self.ctx.spotify.source_registered(folder)
-        if registered is False and self.ctx.spotify.folder_has_files(folder):
+        # "Cannot tell" also deserves the prompt once songs exist: the
+        # alternative is a user whose songs never appear and who is told
+        # only to restart Spotify.
+        if registered is not True and self.ctx.spotify.folder_has_files(folder):
             self.setup_banner.show_prompt(
                 "source",
-                "Spotify does not know about your songs folder yet, so songs "
-                "will not appear in Spotify. It takes about a minute to fix.",
+                "Spotify may not know about your songs folder yet, so songs "
+                "might not appear there. It takes about a minute to fix.",
                 "Show me how",
             )
             return

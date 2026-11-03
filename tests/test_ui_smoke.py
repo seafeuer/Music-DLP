@@ -569,3 +569,22 @@ def test_a_job_finish_keeps_the_songs_filter_and_search(window, qtbot):
 
     assert main.track_table.filter_combo.currentIndex() == 4
     assert main.track_table.search.text() == "song"
+
+
+def test_dismissed_banner_stays_gone(window, monkeypatch):
+    """Closing a setup prompt keeps it closed for the session."""
+    main, _db, _ids = window
+    # Make the machine look like one without FFmpeg, without replacing the
+    # whole context (closeEvent still needs it).
+    monkeypatch.setattr(main.ctx.ffmpeg, "ffmpeg", None)
+
+    main._refresh_setup_banner()
+    assert main.setup_banner.kind == "ffmpeg"
+
+    main.setup_banner.close_button.click()
+    assert main.setup_banner.kind is None
+
+    # A later refresh (a download finishing, settings changing) must not
+    # bring back the prompt the user just closed.
+    main._refresh_setup_banner()
+    assert main.setup_banner.kind is None
