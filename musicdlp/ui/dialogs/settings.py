@@ -1051,7 +1051,16 @@ class SettingsDialog(QDialog):
 
         spotify_format = self.spotify_format.currentData()
         if spotify_format not in formats:
-            formats.append(spotify_format)
+            # Silently adding it back made the Formats checkboxes a lie:
+            # the user unticked MP3 and still got MP3 files.
+            QMessageBox.warning(
+                self,
+                "Spotify format is not kept",
+                "The format sent to Spotify must also be one of the formats "
+                "Music DLP keeps.\n\nTick it under Formats, or choose a "
+                "different format for Spotify.",
+            )
+            return
 
         spotify_dir = self.spotify_edit.text().strip()
         if not spotify_dir:
@@ -1152,23 +1161,22 @@ class SettingsDialog(QDialog):
             or settings.ai_provider != "auto"
         )
         if wants_ai and not settings.ai_configured:
-            if not settings.ai_configured:
-                QMessageBox.warning(
-                    self,
-                    "AI is not finished",
-                    "Songs will still be named by the built-in rules, but AI "
-                    "naming is not ready.\n\n"
-                    "Set both a server address and a model on the AI tab.",
-                )
-            elif wants_ai and not settings.ai_base_url.startswith(
+            QMessageBox.warning(
+                self,
+                "AI is not finished",
+                "Songs will still be named by the built-in rules, but AI "
+                "naming is not ready.\n\n"
+                "Set both a server address and a model on the AI tab.",
+            )
+        elif wants_ai and not settings.ai_base_url.startswith(
             ("http://", "https://")
         ):
-                QMessageBox.warning(
-                    self,
-                    "AI address looks wrong",
-                    "The server address should start with http:// or "
-                    "https://.\n\nAI naming will not work until it does.",
-                )
+            QMessageBox.warning(
+                self,
+                "AI address looks wrong",
+                "The server address should start with http:// or "
+                "https://.\n\nAI naming will not work until it does.",
+            )
 
         self.result_settings = settings
         self.accept()

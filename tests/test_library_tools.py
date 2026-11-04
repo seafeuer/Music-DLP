@@ -812,8 +812,7 @@ def test_removing_a_song_with_kept_files_forgets_it_and_undo_restores_it(
     track_id = data["tracks"][0]
 
     monkeypatch.setattr(
-        QMessageBox, "question",
-        staticmethod(lambda *args, **kwargs: QMessageBox.No),
+        main, "_confirm_removal", lambda *args, **kwargs: False
     )
     main._remove_track(track_id)
 
@@ -1438,8 +1437,7 @@ def test_undo_after_a_duplicate_removal_brings_its_link_back(
         "musicdlp.ui.main_window.DuplicateDialog", FakeDuplicates
     )
     monkeypatch.setattr(
-        QMessageBox, "question",
-        staticmethod(lambda *args, **kwargs: QMessageBox.No),
+        main, "_confirm_removal", lambda *args, **kwargs: False
     )
 
     main._find_duplicates()
@@ -1593,3 +1591,55 @@ def test_saving_settings_with_ai_untouched_does_not_warn(
 
     assert dialog.result_settings is not None
     assert warnings == []
+
+
+def _settings_dialog(tmp_path):
+    settings = Settings(
+        output_dir=str(tmp_path / "out"),
+        spotify_dir=str(tmp_path / "spotify"),
+    )
+    return SettingsDialog(
+        settings,
+        FFmpegService(""),
+        YtDlpService(settings),
+        SpotifyService(),
+    )
+
+
+def test_settings_refuse_a_spotify_format_that_is_not_kept(
+    qapp, tmp_path, monkeypatch
+):
+    dialog = _settings_dialog(tmp_path)
+    dialog.mp3_check.setChecked(False)
+    dialog.m4a_check.setChecked(True)
+    index = dialog.spotify_format.findData("mp3")
+    dialog.spotify_format.setCurrentIndex(index)
+    warnings = []
+    monkeypatch.setattr(
+        QMessageBox, "warning",
+        staticmethod(lambda *args, **kwargs: warnings.append(args[2])),
+    )
+
+    dialog._save_now()
+
+    assert warnings
+    assert "Spotify" in warnings[0] and "format" in warnings[0]
+    assert dialog.result_settings is None
+
+
+def test_settings_warn_about_an_ai_address_without_a_scheme(
+    qapp, tmp_path, monkeypatch
+):
+    dialog = _settings_dialog(tmp_path)
+    dialog.ai_model_combo.setCurrentText("llama3")
+    dialog.ai_url_edit.setText("localhost:11434")
+    warnings = []
+    monkeypatch.setattr(
+        QMessageBox, "warning",
+        staticmethod(lambda *args, **kwargs: warnings.append(args[2])),
+    )
+
+    dialog._save_now()
+
+    assert warnings
+    assert "address" in warnings[0].lower()

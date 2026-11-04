@@ -280,12 +280,12 @@ class SpotifyService:
     def setup_steps(destination: Path) -> str:
         return (
             "In Spotify Desktop:\n"
-            "1. Click your profile picture -> Settings.\n"
-            "2. Under Local Files, turn on \"Show local files\".\n"
+            "1. Click the arrow next to your name → Settings.\n"
+            "2. Under “Local files”, turn on \"Show local files\".\n"
             "3. Click \"Add a source\" and choose:\n"
             f"   {destination}\n"
             "4. Restart Spotify (the button above does this for you).\n"
-            "5. Open Your Library -> Local Files to see the songs.\n\n"
+            "5. Open Your Library → Local Files to see the songs.\n\n"
             "Seeing songs you did not add? Spotify also lists your Music and "
             "Downloads folders by default. Switch those folders off in the "
             "same Local Files list to keep only Music DLP songs.\n\n"

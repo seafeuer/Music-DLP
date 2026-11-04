@@ -26,7 +26,7 @@ class SpotifyDialog(QDialog):
         parent=None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Spotify Local Files")
+        self.setWindowTitle("Spotify folder")
         fit_dialog(self, 640, 480)
         self.spotify = spotify
         self.selected_dir: Optional[str] = None
@@ -75,10 +75,9 @@ class SpotifyDialog(QDialog):
         layout.addWidget(steps, 1)
 
         note = QLabel(
-            "Spotify does not provide an API for adding local files to a "
-            "playlist. Music-DLP writes tagged MP3s into this folder and "
-            "restarts Spotify so it rescans; you add them to playlists in "
-            "Spotify itself."
+            "Music DLP writes tagged files into this folder and can restart "
+            "Spotify so it reads them. Spotify does not let other apps add "
+            "songs to a playlist, so drag them into one inside Spotify."
         )
         note.setWordWrap(True)
         note.setObjectName("muted")
