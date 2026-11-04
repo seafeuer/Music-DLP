@@ -110,3 +110,21 @@ def test_choose_template_prefers_link_then_folder_then_global():
     ) == "{track:02d} - {title}"
     assert choose_template("{title}") == "{title}"
     assert choose_template("", folder_template=" ") == "{title}"
+
+
+def test_attribute_syntax_in_a_template_falls_back_to_the_title():
+    # Settings accepted {title.foo}; every later preview crashed, and a
+    # conversion died mid-run leaving the song "converting".
+    assert render_template("{title.foo}", title="A song") == "A song"
+
+
+def test_bad_format_spec_in_a_template_falls_back_to_the_title():
+    assert render_template("{track:zz}", title="A song", track=3) == "A song"
+
+
+def test_emoji_title_fits_a_windows_filename(tmp_path):
+    path = unique_path(tmp_path, "😀" * 200, ".mp3")
+
+    assert len(path.name.encode("utf-16-le")) // 2 <= 255
+    path.write_bytes(b"ok")
+    assert path.exists()

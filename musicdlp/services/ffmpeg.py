@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -137,6 +138,7 @@ class FFmpegService:
         bitrate: str = "320",
         normalize: bool = True,
         cancel_event=None,
+        progress_cb=None,
     ) -> Path:
         if not self.ffmpeg:
             raise AppError(
@@ -159,9 +161,27 @@ class FFmpegService:
         if temp_path.exists():
             temp_path.unlink(missing_ok=True)
 
+        def report(value: float) -> None:
+            if progress_cb is not None:
+                try:
+                    progress_cb(max(0.0, min(100.0, float(value))))
+                except Exception:
+                    # Progress is cosmetic; a broken callback must not
+                    # stop a conversion.
+                    logger.debug("Progress callback failed", exc_info=True)
+
+        report(2)
+
         filters: list[str] = []
         if normalize:
-            measured = self.measure_loudness(input_path, cancel_event=cancel_event)
+            measured = self.measure_loudness(
+                input_path,
+                cancel_event=cancel_event,
+                progress_cb=(
+                    lambda p: report(2 + 23 * p / 100.0)
+                    if progress_cb is not None else None
+                ),
+            )
             if measured:
                 filters.append(
                     f"{LOUDNORM}:measured_I={measured['input_i']}"
@@ -170,11 +190,14 @@ class FFmpegService:
                     f":measured_thresh={measured['input_thresh']}"
                     f":offset={measured['target_offset']}:linear=true"
                 )
+        report(25)
 
         cmd = [
             str(self.ffmpeg), "-nostdin", "-hide_banner", "-loglevel", "error",
             "-y", "-i", str(input_path), "-vn", "-map_metadata", "-1",
         ]
+        if progress_cb is not None:
+            cmd += ["-progress", "pipe:1", "-nostats"]
         if filters:
             cmd += ["-af", ",".join(filters)]
 
@@ -191,7 +214,17 @@ class FFmpegService:
 
         duration = self.probe(input_path).get("duration", 0)
         timeout = max(120.0, float(duration) * 3 + 60)
-        code, stderr = self._run(cmd, timeout=timeout, cancel_event=cancel_event)
+        code, stderr = self._run(
+            cmd,
+            timeout=timeout,
+            cancel_event=cancel_event,
+            progress_cb=(
+                lambda p: report(25 + 74 * p / 100.0)
+                if progress_cb is not None else None
+            ),
+            duration=duration,
+        )
+        report(100)
 
         if code != 0:
             temp_path.unlink(missing_ok=True)
@@ -220,7 +253,9 @@ class FFmpegService:
 
     # ---------------------------------------------------------- loudness pass
 
-    def measure_loudness(self, input_path: Path, cancel_event=None) -> Optional[dict]:
+    def measure_loudness(
+        self, input_path: Path, cancel_event=None, progress_cb=None
+    ) -> Optional[dict]:
         """First loudnorm pass. Returns None when measurement is unusable."""
         if not self.ffmpeg:
             return None
@@ -231,8 +266,16 @@ class FFmpegService:
             "-i", str(input_path), "-af", f"{LOUDNORM}:print_format=json",
             "-f", "null", "-",
         ]
+        if progress_cb is not None:
+            cmd += ["-progress", "pipe:1", "-nostats"]
         try:
-            code, stderr = self._run(cmd, timeout=timeout, cancel_event=cancel_event)
+            code, stderr = self._run(
+                cmd,
+                timeout=timeout,
+                cancel_event=cancel_event,
+                progress_cb=progress_cb,
+                duration=duration,
+            )
         except Cancelled:
             raise
         except AppError:
@@ -267,11 +310,15 @@ class FFmpegService:
         cmd: list[str],
         timeout: float = 120.0,
         cancel_event=None,
+        progress_cb=None,
+        duration: float = 0,
     ) -> tuple[int, str]:
         """Run a command, polling so cancellation stays responsive.
 
         stderr goes to a temp file rather than a pipe: a chatty FFmpeg run can
-        fill a pipe and deadlock while we are polling.
+        fill a pipe and deadlock while we are polling. With ``progress_cb``,
+        FFmpeg's ``-progress`` lines are read on a small thread and turned
+        into a percentage, so a long conversion is not a frozen 0%.
         """
         with tempfile.TemporaryFile(
             mode="w+", encoding="utf-8", errors="replace"
@@ -279,10 +326,22 @@ class FFmpegService:
             proc = subprocess.Popen(
                 cmd,
                 stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
+                stdout=(
+                    subprocess.PIPE if progress_cb is not None
+                    else subprocess.DEVNULL
+                ),
                 stderr=err_file,
                 creationflags=CREATE_NO_WINDOW,
             )
+            reader = None
+            if progress_cb is not None and proc.stdout is not None:
+                reader = threading.Thread(
+                    target=self._read_progress,
+                    args=(proc.stdout, duration, progress_cb),
+                    daemon=True,
+                    name="MusicDLP-FFmpegProgress",
+                )
+                reader.start()
             deadline = time.monotonic() + timeout
             try:
                 while proc.poll() is None:
@@ -306,7 +365,39 @@ class FFmpegService:
             finally:
                 if proc.poll() is None:
                     proc.kill()
+                if reader is not None:
+                    reader.join(timeout=2)
                 err_file.seek(0)
                 stderr = err_file.read()
 
         return code, stderr
+
+    @staticmethod
+    def _read_progress(stream, duration: float, callback) -> None:
+        """Turn FFmpeg's ``-progress`` key=value lines into a percentage."""
+        try:
+            for raw in iter(stream.readline, b""):
+                line = raw.decode("utf-8", "replace").strip()
+                if line.startswith("out_time=") and duration > 0:
+                    value = line.split("=", 1)[1]
+                    try:
+                        hours, minutes, seconds = value.split(":")
+                        position = (
+                            int(hours) * 3600
+                            + int(minutes) * 60
+                            + float(seconds)
+                        )
+                    except (ValueError, TypeError):
+                        continue
+                    callback(
+                        max(0.0, min(99.0, position / duration * 100.0))
+                    )
+                elif line == "progress=end":
+                    callback(100.0)
+        except Exception:
+            logger.debug("Could not read FFmpeg progress", exc_info=True)
+        finally:
+            try:
+                stream.close()
+            except Exception:
+                pass

@@ -15,6 +15,28 @@ RESERVED_NAMES = {
 DEFAULT_TEMPLATE = "{title}"
 
 
+def _utf16_len(text: str) -> int:
+    """Length as Windows counts it: UTF-16 code units, not code points.
+
+    An emoji is one Python character but two UTF-16 units, so a name
+    truncated to 140 characters could still be 280 units and be refused
+    by the filesystem.
+    """
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _truncate_utf16(text: str, max_units: int) -> str:
+    used = 0
+    kept: list[str] = []
+    for char in text:
+        units = 2 if ord(char) > 0xFFFF else 1
+        if used + units > max_units:
+            break
+        used += units
+        kept.append(char)
+    return "".join(kept)
+
+
 def choose_template(
     global_template: str,
     *,
@@ -56,8 +78,8 @@ def sanitize_filename(name: str, max_length: int = 140) -> str:
     if stem.upper() in RESERVED_NAMES:
         stem = "_" + stem
 
-    if len(stem) > max_length:
-        stem = stem[:max_length].rstrip(" .") or "Untitled"
+    if _utf16_len(stem) > max_length:
+        stem = _truncate_utf16(stem, max_length).rstrip(" .") or "Untitled"
 
     return f"{stem}{suffix}"
 
@@ -120,7 +142,9 @@ def render_template(
     )
     try:
         rendered = template.format_map(values)
-    except (ValueError, IndexError):
+    except (ValueError, IndexError, AttributeError, TypeError):
+        # {title.foo} or a bad format spec is a typing mistake, not a
+        # reason to lose the song: use the title and let the run finish.
         rendered = title or "Untitled"
 
     # A template of only separators can collapse to nothing.
@@ -145,11 +169,17 @@ def unique_path(
     stem = sanitize_filename(stem)
 
     def fits(candidate_stem: str) -> bool:
-        return len(str(directory / f"{candidate_stem}{extension}")) <= max_path_length
+        return (
+            _utf16_len(str(directory / f"{candidate_stem}{extension}"))
+            <= max_path_length
+        )
 
     if not fits(stem):
-        overflow = len(str(directory / f"{stem}{extension}")) - max_path_length
-        stem = stem[: max(20, len(stem) - overflow - 8)].rstrip(" .") or "Untitled"
+        overflow = (
+            _utf16_len(str(directory / f"{stem}{extension}")) - max_path_length
+        )
+        keep = max(20, _utf16_len(stem) - overflow - 8)
+        stem = _truncate_utf16(stem, keep).rstrip(" .") or "Untitled"
 
     candidate = directory / f"{stem}{extension}"
     if not candidate.exists():

@@ -176,7 +176,7 @@ def split_links(text: str) -> List[str]:
 
     parts = re.split(r"[\s,]+", text.strip())
     links: List[str] = []
-    seen: set[str] = set()
+    seen: set[tuple] = set()
 
     for part in parts:
         part = part.strip().strip("<>()[]\"'")
@@ -186,11 +186,17 @@ def split_links(text: str) -> List[str]:
             if not re.match(r"^[A-Za-z0-9.-]+\.[A-Za-z]{2,}/", part):
                 continue
         normalized = normalize_url(part)
-        if not normalized or normalized in seen:
+        if not normalized:
             continue
-        if classify_url(normalized) is None:
+        info = classify_url(normalized)
+        if info is None:
             continue
-        seen.add(normalized)
+        # The same video arrives as youtu.be/x, watch?v=x&list=…, and with
+        # tracking parameters. Two forms of one media are one link.
+        key = (info.platform, info.kind, info.media_id or normalized)
+        if key in seen:
+            continue
+        seen.add(key)
         links.append(normalized)
 
     return links

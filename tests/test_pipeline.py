@@ -38,9 +38,11 @@ class FakeFFmpeg:
         self.fail_formats: set[str] = set()
 
     def convert(self, input_path, output_path, *, fmt, bitrate,
-                normalize, cancel_event=None):
+                normalize, cancel_event=None, progress_cb=None):
         if fmt in self.fail_formats:
             raise AppError("simulated conversion failure", kind="test")
+        if progress_cb is not None:
+            progress_cb(50)
         self.calls.append(fmt)
         output_path.write_bytes(b"fake-" + fmt.encode())
         return output_path
@@ -790,3 +792,69 @@ def test_unusable_convert_folder_leaves_no_song_converting(env, tmp_path):
         assert track.status == "error"
         assert track.status != "converting"
         assert "folder cannot be created" in (track.error or "").lower()
+
+
+def test_bad_filename_template_does_not_kill_the_run(env):
+    env["settings"].filename_template = "{title.foo}"
+    summary = _summary()
+
+    env["pipeline"]._execute(
+        env["items"], ["download", "convert"], False,
+        env["settings"], summary,
+    )
+
+    assert summary["converted"] == 2
+    assert not summary.get("fatal")
+
+
+def test_a_fatal_error_marks_the_stuck_song_as_failed(env):
+    summary = _summary()
+    track_id = env["track_ids"][0]
+    env["db"].update_track(track_id, status="converting", error=None)
+
+    env["pipeline"]._mark_failed(env["items"], summary, "boom")
+
+    track = env["db"].get_track(track_id)
+    assert track.status == "error"
+    assert track.error == "boom"
+    assert summary["failed"] == 1
+
+    # A second call does not count the same song twice.
+    env["pipeline"]._mark_failed(env["items"], summary, "boom")
+    assert summary["failed"] == 1
+
+
+def test_convert_reports_item_progress(env):
+    seen = []
+    env["pipeline"].progress.connect(seen.append)
+    summary = _summary()
+
+    env["pipeline"]._execute(
+        env["items"], ["download", "convert"], False,
+        env["settings"], summary,
+    )
+
+    convert = [item for item in seen if item["stage"] == "convert"]
+    assert any(item["item_percent"] == 50 for item in convert)
+
+
+def test_ffmpeg_progress_lines_become_percentages():
+    import sys
+
+    from musicdlp.services.ffmpeg import FFmpegService
+
+    values = []
+    code, _stderr = FFmpegService("")._run(
+        [
+            sys.executable, "-c",
+            "print('out_time=00:00:01.000000', flush=True)\n"
+            "print('progress=end', flush=True)",
+        ],
+        timeout=20,
+        progress_cb=values.append,
+        duration=2.0,
+    )
+
+    assert code == 0
+    assert values[0] == 50.0
+    assert values[-1] == 100.0

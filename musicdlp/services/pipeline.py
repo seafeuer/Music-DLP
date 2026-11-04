@@ -239,6 +239,7 @@ class Pipeline(QObject):
         except Exception as exc:
             logger.exception("Pipeline failed")
             summary["fatal"] = str(exc)
+            self._mark_failed(items, summary, str(exc))
             self.failed.emit("Job failed", str(exc))
         finally:
             with self._lock:
@@ -255,6 +256,32 @@ class Pipeline(QObject):
             if track.status in (QUEUED, DOWNLOADING, CONVERTING, SYNCING):
                 self.db.update_track(track.id, status=CANCELLED)
                 self.track_changed.emit(track.id)
+
+    def _mark_failed(
+        self, items: list[BatchItem], summary: dict, message: str
+    ) -> None:
+        """Mark any row a fatal exception left mid-stage as failed.
+
+        Otherwise the run reports "Finished" over a song that is still
+        "Converting" forever, with no error to retry from.
+        """
+        marked = False
+        for item in items:
+            track = self.db.get_track(item.track.id)
+            if track is None:
+                continue
+            if track.status in (QUEUED, DOWNLOADING, CONVERTING, SYNCING):
+                self.db.update_track(
+                    track.id, status=ERROR, error=message
+                )
+                _record_failure(
+                    summary, track.id,
+                    f"{track.display_title}: {message}",
+                )
+                self.track_changed.emit(track.id)
+                marked = True
+        if marked:
+            summary["errors"].append(message)
 
     def _execute(
         self,
@@ -842,6 +869,9 @@ class Pipeline(QObject):
                         ),
                         normalize=settings.normalize,
                         cancel_event=self._cancel,
+                        progress_cb=lambda percent: tracker.item_progress(
+                            "convert", title, percent, track_id=track.id
+                        ),
                     )
 
                     # A catalogue cover saved by an older version may be

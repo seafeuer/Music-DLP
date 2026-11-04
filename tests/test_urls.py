@@ -141,3 +141,12 @@ def test_platform_key():
     assert platform_key("Twitter") == "twitter"
     assert platform_key("Vimeo") == "vimeo"
     assert platform_key(None, "other") == "other"
+
+
+def test_two_forms_of_the_same_video_are_one_link():
+    links = split_links(
+        "https://youtu.be/dup1 "
+        "https://www.youtube.com/watch?v=dup1 "
+        "https://www.youtube.com/watch?v=dup1&list=PLx&si=tracking"
+    )
+    assert links == ["https://youtu.be/dup1"]
