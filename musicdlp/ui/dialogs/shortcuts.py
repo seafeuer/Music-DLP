@@ -14,8 +14,9 @@ SHORTCUTS: tuple[tuple[str, str], ...] = (
     ("F5", "Read the selected link again"),
     ("Ctrl+F", "Search every song in the library"),
     ("Escape", "Clear the search and go back to the link you came from"),
-    ("Ctrl+A", "Tick every song shown"),
+    ("Ctrl+A", "Tick every song shown (when the song list has focus)"),
     ("Ctrl+Shift+A", "Tick every song in the library"),
+    ("Ctrl+Enter", "Run the main action (download, convert, or send)"),
     ("Space", "Tick or untick the highlighted song"),
     ("F2  /  Enter", "Edit the highlighted song's details"),
     ("Delete", "Remove the highlighted songs from the library"),
@@ -24,6 +25,7 @@ SHORTCUTS: tuple[tuple[str, str], ...] = (
     ("Ctrl+Shift+R", "Rewrite the files of the ticked songs"),
     ("Ctrl+L", "Show or hide the activity log"),
     ("Ctrl+,", "Open Settings"),
+    ("Ctrl+/", "Show this list"),
     ("Ctrl+Q", "Quit"),
 )
 
@@ -40,8 +42,9 @@ class ShortcutsDialog(QDialog):
         layout.setSpacing(10)
 
         intro = QLabel(
-            "These work anywhere in the main window. Shortcuts for a "
-            "single dialog are shown on its buttons."
+            "These work when the main window has focus. Inside a text box "
+            "the usual editing keys apply (Ctrl+A selects its text); press "
+            "Escape to close a dialog."
         )
         intro.setWordWrap(True)
         intro.setObjectName("muted")

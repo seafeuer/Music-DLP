@@ -516,8 +516,7 @@ class SourceListWidget(QWidget):
         self.view.source_dropped.connect(self.source_dropped)
 
         self.empty = QLabel(
-            "No links yet.<br><br>"
-            "Paste a link in the box at the top and press <b>Add</b>."
+            "No links yet."
         )
         self.empty.setAlignment(Qt.AlignCenter)
         self.empty.setWordWrap(True)
@@ -530,8 +529,8 @@ class SourceListWidget(QWidget):
 
         footer = QGridLayout()
         footer.setSpacing(6)
-        self.add_button = QPushButton("Add link…")
-        self.add_button.setToolTip("Go to the link box at the top of the window")
+        self.add_button = QPushButton("Paste link…")
+        self.add_button.setToolTip("Put the cursor in the link box at the top of the window")
         self.add_button.clicked.connect(self.add_requested)
         self.folder_button = QPushButton("New folder")
         self.folder_button.setToolTip(
@@ -595,8 +594,7 @@ class SourceListWidget(QWidget):
             self.stack.setCurrentWidget(self.empty)
         else:
             self.empty.setText(
-                "No links yet.<br><br>"
-                "Paste a link in the box at the top and press <b>Add</b>."
+                "No links yet."
             )
             self._update_empty_state()
 

@@ -532,17 +532,19 @@ class TrackTableWidget(QWidget):
         self._edit_action.setEnabled(self.current_row() is not None)
 
     def _update_empty_state(self) -> None:
+        # The empty panel already gives the same instruction; repeating it
+        # in the subtitle made the first screen say it three times.
+        self.subtitle_label.setVisible(
+            not (self.model.rowCount() == 0 and self.source is None)
+        )
         if self.model.rowCount() == 0:
             if self.source is None:
                 self.empty_label.setText(
                     "<div style='line-height:150%'>"
                     "<div style='font-size:18px; font-weight:700'>"
                     "Nothing here yet</div><br>"
-                    "<b>1.</b> Paste a link in the bar at the top "
-                    "(YouTube, X, or another site).<br>"
-                    "<b>2.</b> Press <b>Add</b>.<br>"
-                    "<b>3.</b> Tick the songs you want, then press "
-                    "<b>Download to Spotify</b>."
+                    "Paste a link in the bar at the top and press "
+                    "<b>Add</b> to get started."
                     "</div>"
                 )
             elif self.source.is_folder:

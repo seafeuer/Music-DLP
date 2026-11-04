@@ -75,9 +75,9 @@ def test_delete_asks_once_for_several_songs(window, monkeypatch):
 
     def answer(*args, **kwargs):
         asked.append(args)
-        return QMessageBox.No
+        return False
 
-    monkeypatch.setattr(QMessageBox, "question", staticmethod(answer))
+    monkeypatch.setattr(main, "_confirm_removal", answer)
     main.track_table._remove_selected()
 
     assert len(asked) == 1
@@ -89,8 +89,7 @@ def test_one_undo_brings_back_a_multi_song_removal(window, monkeypatch):
     main._load_source(data["source"])
     main.track_table.table.selectAll()
     monkeypatch.setattr(
-        QMessageBox, "question",
-        staticmethod(lambda *args, **kwargs: QMessageBox.No),
+        main, "_confirm_removal", lambda *args, **kwargs: False
     )
 
     main.track_table._remove_selected()

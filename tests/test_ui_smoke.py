@@ -316,10 +316,10 @@ def test_removing_a_song_is_refused_while_a_job_runs(window, monkeypatch):
     main, db, ids = window
     asked = []
     monkeypatch.setattr(
-        QMessageBox, "question",
-        staticmethod(lambda *args, **kwargs: asked.append(args) or QMessageBox.Yes),
+        main, "_confirm_removal",
+        lambda *args, **kwargs: asked.append(args) or True,
     )
-    monkeypatch.setattr(main, "_is_busy", lambda: True)
+    monkeypatch.setattr(main, "_blocked_by_job", lambda: True)
 
     main._remove_track(ids[0])
 
@@ -620,7 +620,7 @@ def test_inspector_actions_stay_visible_at_minimum_height(window, qtbot):
     main, db, ids = window
     db.update_track(
         ids[0],
-        title="A very long song title " * 5,
+        meta_title="長い日本語の曲名 " * 20,
         error="The Spotify copy failed: " + "a long explanation " * 10,
     )
     source = db.get_sources()[0]
@@ -633,9 +633,17 @@ def test_inspector_actions_stay_visible_at_minimum_height(window, qtbot):
     qtbot.wait(30)
 
     button = main.inspector.edit_button
-    point = button.mapTo(main.inspector_scroll.viewport(), QPoint(0, 0))
-    assert point.y() >= 0
-    assert point.y() + button.height() <= main.inspector_scroll.viewport().height()
+    viewport = main.inspector_scroll.viewport()
+    for button in (
+        main.inspector.edit_button,
+        main.inspector.reconvert_button,
+        main.inspector.retry_button,
+        main.inspector.source_button,
+        main.inspector.reveal_button,
+    ):
+        point = button.mapTo(viewport, QPoint(0, 0))
+        assert point.y() >= 0
+        assert point.y() + button.height() <= viewport.height(), button.text()
 
 
 def test_missing_spotify_is_visible_without_a_tooltip(window):
@@ -687,3 +695,53 @@ def test_sidebar_buttons_do_nothing_without_a_selection(window):
 
     assert not main.sidebar.refresh_button.isEnabled()
     assert not main.sidebar.remove_button.isEnabled()
+
+
+def test_primary_action_keeps_keyboard_focus_when_rebuilt(window, qtbot):
+    from PySide6.QtWidgets import QPushButton
+
+    main, _db, ids = window
+    main._checked = {ids[0]}
+    main.track_table.model.set_checked([ids[0]])
+    main._update_actions()
+    primary = next(
+        button for button in main.action_area.findChildren(QPushButton)
+        if button.objectName() == "primary"
+    )
+    main.activateWindow()
+    primary.setFocus()
+    qtbot.wait(20)
+    assert primary.hasFocus()
+
+    main._update_actions()
+
+    rebuilt = next(
+        button for button in main.action_area.findChildren(QPushButton)
+        if button.objectName() == "primary"
+    )
+    assert rebuilt is not primary
+    assert rebuilt.hasFocus()
+
+
+def test_ctrl_enter_is_the_primary_action_shortcut(window):
+    main, _db, _ids = window
+    assert main._primary_shortcut.key().toString() == "Ctrl+Return"
+
+
+def test_a_superseded_link_read_does_not_touch_the_new_job(window):
+    from musicdlp.services.library import AddResult
+
+    main, _db, _ids = window
+    main._add_generation = 5
+    main._add_running = True
+
+    main._on_add_finished(
+        AddResult(errors=["Cancelled."]), generation=4
+    )
+
+    assert main._add_running is True
+
+    main._on_add_finished(
+        AddResult(errors=["Cancelled."]), generation=5
+    )
+    assert main._add_running is False

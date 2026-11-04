@@ -80,17 +80,28 @@ class ProgressDelegate(QStyledItemDelegate):
             painter.setBrush(QColor(ACCENT))
             painter.drawRoundedRect(fill, 4, 4)
 
-        text_color = (
-            QColor(tokens()["on_accent"]) if percent >= 45
-            else option.palette.text().color()
-        )
+        text_color = option.palette.text().color()
         painter.setPen(text_color)
         font = QFont(option.font)
         font.setPointSizeF(max(7.5, font.pointSizeF() - 1))
         painter.setFont(font)
-        painter.drawText(
-            option.rect,
-            int(Qt.AlignCenter),
-            f"{percent:.0f}%",
-        )
+        label = f"{percent:.0f}%"
+        painter.drawText(option.rect, int(Qt.AlignCenter), label)
+
+        # The centred number crosses both halves at 50%. White text was
+        # drawn over the unfilled light track too (1.24:1); repaint only
+        # the filled part so each half keeps its own readable colour.
+        if percent > 0 and fill.width() > 0:
+            painter.save()
+            painter.setClipRect(
+                QRectF(
+                    fill.left(),
+                    option.rect.top(),
+                    fill.width(),
+                    option.rect.height(),
+                )
+            )
+            painter.setPen(QColor(tokens()["on_accent"]))
+            painter.drawText(option.rect, int(Qt.AlignCenter), label)
+            painter.restore()
         painter.restore()

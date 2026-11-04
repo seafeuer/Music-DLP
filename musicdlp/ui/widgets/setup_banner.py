@@ -61,13 +61,9 @@ class SetupBanner(QFrame):
         self._kind = kind
         self.message.setText(message)
         self.button.setText(button_text)
-        self.setStyleSheet(
-            "#setupBanner {"
-            " background: rgba(245, 158, 11, 0.14);"
-            " border: 1px solid rgba(245, 158, 11, 0.55);"
-            " border-radius: 8px;"
-            "}"
-        )
+        # The tint lives in the theme stylesheet: Qt ignores fractional
+        # alpha in QSS and painted this panel solid orange, which made the
+        # dark-theme text unreadable (1.67:1).
         self.show()
 
     def _dismiss(self) -> None:

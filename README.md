@@ -4,8 +4,9 @@ A Windows desktop app that downloads audio from **YouTube playlists and videos**
 **X/Twitter posts**, and other links supported by yt-dlp, converts it to tagged
 MP3/M4A, and delivers it to **Spotify Local Files**.
 
-Titles are kept exactly as published. You can edit title, artist, album, and
-track number per song before converting.
+Upload titles are cleaned up automatically when the name is unambiguous (see
+**Smart titles**), and you can edit the title, artist, album, and track number
+per song before converting.
 
 ## Status
 
@@ -17,7 +18,7 @@ already been sent to Spotify.
 
 Last verified on 2026-11-02:
 
-- Full test suite passes (562 tests, offscreen Qt included).
+- Full test suite passes (580 tests, offscreen Qt included).
 - Editing title, artist, album, track number, and cover rewrites the tags and
   the file name, replaces the Spotify copy, and removes the stale one. The
   audio is not decoded or re-encoded: its stream is byte-for-byte the same

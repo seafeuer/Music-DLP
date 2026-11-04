@@ -186,7 +186,11 @@ class StatusBarWidget(QWidget):
         # part that changes between the two states.
         self.spotify_button.setToolTip(tooltip or text)
         missing = "not found" in (text or "").lower()
-        self.spotify_button.setText("Spotify not found" if missing else "Spotify")
+        # The button opens the folder dialog, so it says folder, not
+        # "Spotify" (which reads like "launch Spotify").
+        self.spotify_button.setText(
+            "Spotify not found" if missing else "Spotify folder"
+        )
 
 
 def _short_url(url: str) -> str:

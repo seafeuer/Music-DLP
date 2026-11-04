@@ -9,8 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import QObject, QRect, QRunnable, Qt, QThreadPool, Signal
+from PySide6.QtGui import QFontMetrics, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
     QWidget,
@@ -59,6 +59,7 @@ class Inspector(QWidget):
         super().__init__(parent)
         self.thumbnails = thumbnails
         self.current_row: Optional[TrackRow] = None
+        self._full_title = ""
 
         self._art_signals = ArtworkSignals(self)
         self._art_signals.done.connect(self._on_artwork)
@@ -184,6 +185,8 @@ class Inspector(QWidget):
         self.include_check.setChecked(bool(row) and checked)
         self._updating_include = False
         if row is None:
+            self._full_title = ""
+            self.title_label.setToolTip("")
             self.title_label.setText("No song selected")
             self.artist_label.setText(
                 "Pick a song to see its details and edit its name."
@@ -201,7 +204,9 @@ class Inspector(QWidget):
             return
 
         track = row.track
-        self.title_label.setText(track.display_title)
+        self._full_title = track.display_title
+        self.title_label.setToolTip(track.display_title)
+        self._apply_title()
         self.artist_label.setText(track.display_artist or "Unknown artist")
 
         album = track.display_album
@@ -253,6 +258,41 @@ class Inspector(QWidget):
                 QThreadPool.globalInstance().start(
                     ArtworkTask(self.thumbnails, track, self._art_signals)
                 )
+
+    def _apply_title(self) -> None:
+        """Keep a very long title to three lines.
+
+        At 620 px a 170-character title wrapped to a dozen lines and
+        pushed Retry and Show file below the panel's visible area — the
+        controls needed to fix the song. The tooltip keeps the full text.
+        """
+        if not self._full_title:
+            return
+        width = max(120, self.title_label.width() or self.width() - 4)
+        metrics = QFontMetrics(self.title_label.font())
+        limit = metrics.lineSpacing() * 3
+        text = self._full_title
+        if metrics.boundingRect(
+            QRect(0, 0, width, 0), Qt.TextWordWrap, text
+        ).height() > limit:
+            low, high = 0, len(text)
+            while low < high:
+                middle = (low + high + 1) // 2
+                candidate = text[:middle].rstrip() + "…"
+                height = metrics.boundingRect(
+                    QRect(0, 0, width, 0), Qt.TextWordWrap, candidate
+                ).height()
+                if height <= limit:
+                    low = middle
+                else:
+                    high = middle - 1
+            text = text[:low].rstrip() + "…"
+        self.title_label.setText(text)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if self._full_title:
+            self._apply_title()
 
     def _set_pixmap(self, path: str) -> None:
         pixmap = QPixmap(path)

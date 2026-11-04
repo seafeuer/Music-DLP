@@ -230,6 +230,7 @@ class MainWindow(QMainWindow):
         self._all_source: Optional[Source] = None
         self._current_source_id: Optional[int] = None
         self._add_running = False
+        self._add_generation = 0
         self._add_cancel = threading.Event()
         self._add_started = 0.0
         self._add_label = ""
@@ -441,7 +442,7 @@ class MainWindow(QMainWindow):
 
     def _build_menus(self) -> None:
         file_menu = self.menuBar().addMenu("&File")
-        self.add_action = QAction("Add link…", self)
+        self.add_action = QAction("Paste a link…", self)
         self.add_action.setShortcut("Ctrl+N")
         self.add_action.triggered.connect(lambda: self.link_edit.setFocus())
         file_menu.addAction(self.add_action)
@@ -877,6 +878,15 @@ class MainWindow(QMainWindow):
         self._escape = QShortcut(QKeySequence(Qt.Key_Escape), self)
         self._escape.setContext(Qt.WindowShortcut)
         self._escape.activated.connect(self._on_escape)
+
+        # The main action is rebuilt whenever the selection changes, so a
+        # keyboard user cannot rely on keeping focus on it. A shortcut
+        # reaches it from anywhere in the window.
+        self._primary_shortcut = QShortcut(
+            QKeySequence("Ctrl+Return"), self
+        )
+        self._primary_shortcut.setContext(Qt.WindowShortcut)
+        self._primary_shortcut.activated.connect(self._trigger_primary_action)
 
     def _on_escape(self) -> None:
         """Escape clears whatever search is active, then closes the log."""
@@ -1381,6 +1391,8 @@ class MainWindow(QMainWindow):
             return
 
         self._add_running = True
+        self._add_generation += 1
+        generation = self._add_generation
         self._add_cancel = threading.Event()
         self._add_started = time.monotonic()
         self._add_label = f"Reading {counted(len(links), 'link')}…"
@@ -1390,8 +1402,12 @@ class MainWindow(QMainWindow):
 
         signals = LibrarySignals()
         signals.progress.connect(self._on_add_progress)
-        signals.finished.connect(self._on_add_finished)
-        signals.failed.connect(self._on_add_failed)
+        signals.finished.connect(
+            lambda result, g=generation: self._on_add_finished(result, g)
+        )
+        signals.failed.connect(
+            lambda message, g=generation: self._on_add_failed(message, g)
+        )
         self._active_signals = signals
 
         task = AddLinksTask(self.ctx.library, links, self._add_cancel, signals)
@@ -1420,7 +1436,13 @@ class MainWindow(QMainWindow):
         self._add_label = f"Reading link {min(current + 1, total)}/{total}…"
         self.status.set_add_progress(current, total, url)
 
-    def _on_add_finished(self, result: AddResult) -> None:
+    def _on_add_finished(self, result: AddResult, generation=None) -> None:
+        if generation is not None and generation != self._add_generation:
+            # A cancelled read finishing after a new one started. Its
+            # result must not re-enable the controls or overwrite the
+            # newer job's status.
+            self.logger.info("Ignored a superseded link read.")
+            return
         self._add_running = False
         self._stop_add_ticker()
         self._set_controls_enabled(True)
@@ -1454,7 +1476,10 @@ class MainWindow(QMainWindow):
             if result.tracks_owned:
                 summary += f", {result.tracks_owned} already downloaded"
             if result.titles_fixed:
-                summary += f", {counted(result.titles_fixed, 'name')} tidied"
+                summary += (
+                    f", {counted(result.titles_fixed, 'title')} "
+                    "cleaned up"
+                )
             if len(result.sources) > 1:
                 summary += " · all new songs ticked"
             if result.errors:
@@ -1474,7 +1499,9 @@ class MainWindow(QMainWindow):
         for error in result.errors:
             self.logger.warning(error)
 
-    def _on_add_failed(self, message: str) -> None:
+    def _on_add_failed(self, message: str, generation=None) -> None:
+        if generation is not None and generation != self._add_generation:
+            return
         self._add_running = False
         self._stop_add_ticker()
         self._set_controls_enabled(True)
@@ -1501,13 +1528,19 @@ class MainWindow(QMainWindow):
             self.status.set_idle("Wait for the current job to finish.")
             return
         self._add_running = True
+        self._add_generation += 1
+        generation = self._add_generation
         self._add_cancel = threading.Event()
         self._set_controls_enabled(False)
         self.status.set_busy("Refreshing source…")
 
         signals = LibrarySignals()
-        signals.finished.connect(self._on_refresh_finished)
-        signals.failed.connect(self._on_add_failed)
+        signals.finished.connect(
+            lambda result, g=generation: self._on_refresh_finished(result, g)
+        )
+        signals.failed.connect(
+            lambda message, g=generation: self._on_add_failed(message, g)
+        )
         self._active_signals = signals
         QThreadPool.globalInstance().start(
             RefreshSourceTask(
@@ -1515,7 +1548,9 @@ class MainWindow(QMainWindow):
             )
         )
 
-    def _on_refresh_finished(self, result: AddResult) -> None:
+    def _on_refresh_finished(self, result: AddResult, generation=None) -> None:
+        if generation is not None and generation != self._add_generation:
+            return
         self._add_running = False
         self._set_controls_enabled(True)
         if "Cancelled." in result.errors and not result.sources:
@@ -1547,6 +1582,7 @@ class MainWindow(QMainWindow):
         buttons and the old ones occupied the same space and painted over
         each other.
         """
+        focus_was_here = self.action_area.focusWidget() is not None
         while self.action_layout.count():
             item = self.action_layout.takeAt(0)
             widget = item.widget()
@@ -1645,7 +1681,40 @@ class MainWindow(QMainWindow):
         )
         self.duplicates_action.setEnabled(not busy)
         self.sidebar.set_busy(busy)
+
+        # New buttons are appended to the tab chain after the status bar.
+        # Put them back beside More, and keep the keyboard where it was
+        # instead of dropping it into the link box.
+        buttons = self.action_area.findChildren(QPushButton)
+        previous = self.more_button
+        for button in buttons:
+            self.setTabOrder(previous, button)
+            previous = button
+        if buttons:
+            self.setTabOrder(previous, self.steps)
+            if focus_was_here:
+                target = next(
+                    (b for b in buttons if b.objectName() == "primary"),
+                    buttons[0],
+                )
+                if target.isEnabled():
+                    # A freshly added button is not visible until the
+                    # layout runs, and a hidden widget cannot take focus.
+                    target.show()
+                    target.setFocus(Qt.OtherFocusReason)
         self._update_steps()
+
+    def _trigger_primary_action(self) -> None:
+        """Run the main action from the keyboard (Ctrl+Enter)."""
+        if self._is_busy():
+            return
+        for button in self.action_area.findChildren(QPushButton):
+            if button.isVisible() and button.isEnabled():
+                button.click()
+                return
+        self.status.set_idle(
+            "Tick a song first, then press Ctrl+Enter."
+        )
 
     def _update_steps(self) -> None:
         """Reflect the current selection in the pipeline strip."""
@@ -1726,7 +1795,8 @@ class MainWindow(QMainWindow):
             self.steps.set_step(index, DONE, "Already done")
 
         for index in indexes:
-            if summary.get("failed") and index == last_index:
+            if (summary.get("failed") or summary.get("fatal")) \
+                    and index == last_index:
                 self.steps.set_step(index, STEP_ERROR, "Finished with errors")
             else:
                 self.steps.set_step(index, DONE, "Done")
@@ -1919,11 +1989,16 @@ class MainWindow(QMainWindow):
             parts.append(f"{summary['failed']} failed")
         message = ", ".join(parts) if parts else "Finished."
 
-        if summary.get("failed"):
+        if summary.get("failed") or summary.get("fatal"):
             # The Modes table promises the log drawer opens on error.
             self.logs_action.setChecked(True)
         if summary.get("cancelled"):
             self.status.set_idle("Job cancelled.")
+        elif summary.get("fatal"):
+            self.status.set_idle(
+                "The job stopped on an error — the songs it touched are "
+                "marked failed. Press Logs for details."
+            )
         elif summary.get("failed"):
             self.status.set_idle(f"{message} — press Logs for details.")
         elif not self.ctx.ffmpeg.available:
@@ -2341,21 +2416,15 @@ class MainWindow(QMainWindow):
             return
 
         count = len(dialog.remove_ids)
-        reply = QMessageBox.question(
-            self,
+        delete_files = self._confirm_removal(
             "Remove duplicate songs",
             f"Remove {count} duplicate cop"
-            f"{'y' if count == 1 else 'ies'} from the library?\n\n"
-            "Yes — also delete their audio files from disk.\n"
-            "No — keep the files, just remove them from the library.\n"
-            "Cancel — do nothing.",
-            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
-            QMessageBox.No,
+            f"{'y' if count == 1 else 'ies'} from the library?",
+            "Remove and delete files",
+            "Remove and keep files",
         )
-        if reply == QMessageBox.Cancel:
+        if delete_files is None:
             return
-
-        delete_files = reply == QMessageBox.Yes
         if not delete_files:
             # With the files kept, the whole removal can be put back,
             # including a one-song link that disappears with its song.
@@ -2780,22 +2849,46 @@ class MainWindow(QMainWindow):
             stages.append("sync")
         self._start_pipeline([row], stages, force=True)
 
+    def _confirm_removal(
+        self,
+        title: str,
+        question: str,
+        delete_text: str,
+        keep_text: str,
+    ):
+        """Ask what to do with the files, with the labels spelled out.
+
+        A generic "Yes" beside "delete the audio files" is easy to
+        misfire; the buttons say what they do, as the move dialog does.
+        Returns True to delete, False to keep, None to cancel.
+        """
+        box = QMessageBox(self)
+        box.setWindowTitle(title)
+        box.setIcon(QMessageBox.Warning)
+        box.setText(question)
+        delete = box.addButton(delete_text, QMessageBox.DestructiveRole)
+        keep = box.addButton(keep_text, QMessageBox.AcceptRole)
+        box.addButton("Cancel", QMessageBox.RejectRole)
+        box.setDefaultButton(keep)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is delete:
+            return True
+        if clicked is keep:
+            return False
+        return None
+
     def _remove_track(self, track_id: int) -> None:
         if self._blocked_by_job():
             return
-        reply = QMessageBox.question(
-            self,
+        delete_files = self._confirm_removal(
             "Remove track",
-            "Remove this track from the library?\n\n"
-            "Yes — also delete downloaded and converted files.\n"
-            "No — keep the files on disk.\n"
-            "Cancel — do nothing.",
-            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
-            QMessageBox.Cancel,
+            "Remove this track from the library?",
+            "Remove and delete files",
+            "Remove and keep files",
         )
-        if reply == QMessageBox.Cancel:
+        if delete_files is None:
             return
-        delete_files = reply == QMessageBox.Yes
         if not delete_files:
             # With the files kept, the row can be put back exactly as it
             # was. Deleting files cannot be undone, so no promise there.
@@ -2828,19 +2921,14 @@ class MainWindow(QMainWindow):
             self._remove_track(ids[0])
             return
 
-        reply = QMessageBox.question(
-            self,
+        delete_files = self._confirm_removal(
             "Remove songs",
-            f"Remove {len(ids)} songs from the library?\n\n"
-            "Yes — also delete their downloaded and converted files.\n"
-            "No — keep the files on disk.\n"
-            "Cancel — do nothing.",
-            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
-            QMessageBox.Cancel,
+            f"Remove {len(ids)} songs from the library?",
+            "Remove and delete files",
+            "Remove and keep files",
         )
-        if reply == QMessageBox.Cancel:
+        if delete_files is None:
             return
-        delete_files = reply == QMessageBox.Yes
         if not delete_files:
             snapshot, doomed = self._snapshot_removal(ids)
             self._push_undo(
@@ -3132,9 +3220,15 @@ class MainWindow(QMainWindow):
     def _update_spotify_state(self) -> None:
         exe = self.ctx.spotify.find_exe()
         if exe:
-            self.status.set_spotify_state("Spotify", str(exe))
+            self.status.set_spotify_state(
+                "Spotify folder",
+                "Choose the folder Spotify reads local files from",
+            )
         else:
-            self.status.set_spotify_state("Spotify: not found", "Spotify was not found.")
+            self.status.set_spotify_state(
+                "Spotify: not found",
+                "Spotify was not found on this computer.",
+            )
         self.status.set_output_path(self.settings.output_path)
 
     # ---------------------------------------------------------------- legacy

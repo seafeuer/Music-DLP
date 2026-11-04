@@ -226,7 +226,6 @@ class SetupDialog(QDialog):
         )
         picture_help.setObjectName("muted")
         picture_help.setWordWrap(True)
-        tags_layout.addWidget(picture_help)
 
         tags_buttons = QHBoxLayout()
         rewrite = QPushButton("Update song details and pictures")
@@ -236,11 +235,20 @@ class SetupDialog(QDialog):
         tags_buttons.addWidget(rewrite)
         tags_buttons.addWidget(reset_index)
         tags_buttons.addStretch(1)
-        tags_layout.addLayout(tags_buttons)
 
         self.tags_status = QLabel("")
         self.tags_status.setWordWrap(True)
-        tags_layout.addWidget(self.tags_status)
+
+        # Repair tools are not setup: on a fresh install there is nothing
+        # to repair yet, so they are hidden until the folder has songs.
+        self.picture_box = QWidget()
+        picture_layout = QVBoxLayout(self.picture_box)
+        picture_layout.setContentsMargins(0, 0, 0, 0)
+        picture_layout.setSpacing(8)
+        picture_layout.addWidget(picture_help)
+        picture_layout.addLayout(tags_buttons)
+        picture_layout.addWidget(self.tags_status)
+        tags_layout.addWidget(self.picture_box)
 
         self.tell_status = QLabel("")
         self.tell_status.setWordWrap(True)
@@ -310,13 +318,16 @@ class SetupDialog(QDialog):
         self.ffmpeg = FFmpegService(self.settings.ffmpeg_path)
         if self.ffmpeg.available:
             self._mark(self.ffmpeg_status, True, "Ready — FFmpeg is installed.")
-            self.install_button.setText("Reinstall")
+            # Offering "Reinstall" beside a green tick invited a new user
+            # to install what they already had.
+            self.install_button.hide()
         else:
             self._mark(
                 self.ffmpeg_status, False,
                 "Not installed yet. Music DLP cannot convert songs without it.",
             )
             self.install_button.setText("Install it for me")
+            self.install_button.show()
 
         if self.spotify.is_installed():
             self._mark(self.spotify_status, True, "Ready — Spotify is installed.")
@@ -333,6 +344,15 @@ class SetupDialog(QDialog):
             self.folder_card.setToolTip("")
         else:
             self.folder_card.setToolTip("This folder cannot be written to.")
+
+        checker = getattr(self.spotify, "folder_has_files", None)
+        has_songs = False
+        if checker is not None:
+            try:
+                has_songs = bool(checker(folder))
+            except Exception:
+                has_songs = False
+        self.picture_box.setVisible(has_songs)
 
         self._check_spotify_source(quiet=True)
 

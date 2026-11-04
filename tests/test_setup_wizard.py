@@ -11,15 +11,19 @@ from musicdlp.ui.widgets.setup_banner import SetupBanner
 
 
 class FakeSpotify:
-    def __init__(self, registered=None, installed=True) -> None:
+    def __init__(self, registered=None, installed=True, has_files=False) -> None:
         self.registered = registered
         self.installed = installed
+        self.has_files = has_files
 
     def is_installed(self) -> bool:
         return self.installed
 
     def source_registered(self, folder):
         return self.registered
+
+    def folder_has_files(self, folder):
+        return self.has_files
 
 
 @pytest.fixture()
@@ -101,3 +105,43 @@ def test_banner_dismiss_reports_its_kind_and_hides(qtbot):
     banner.show_prompt("source", "Spotify may not know", "Show me how")
     assert banner.kind == "source"
 
+
+
+def _wizard(tmp_path, monkeypatch, spotify):
+    monkeypatch.setattr(Settings, "save", lambda self, path=None: None)
+    settings = Settings(
+        theme="dark",
+        output_dir=str(tmp_path / "out"),
+        spotify_dir=str(tmp_path / "spotify"),
+        ffmpeg_path=str(tmp_path / "missing-ffmpeg.exe"),
+        first_run_done=True,
+        notifications=False,
+    )
+    return SetupDialog(
+        settings, FFmpegService(settings.ffmpeg_path), spotify
+    )
+
+
+def test_repair_tools_wait_until_there_are_songs(qtbot, tmp_path, monkeypatch):
+    wizard = _wizard(tmp_path, monkeypatch, FakeSpotify(has_files=False))
+    qtbot.addWidget(wizard)
+    wizard.show()
+    assert wizard.picture_box.isHidden()
+
+    with_songs = _wizard(tmp_path, monkeypatch, FakeSpotify(has_files=True))
+    qtbot.addWidget(with_songs)
+    with_songs.show()
+    assert not with_songs.picture_box.isHidden()
+
+
+def test_install_button_is_hidden_when_ffmpeg_is_ready(
+    qtbot, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        FFmpegService, "available", property(lambda self: True)
+    )
+    wizard = _wizard(tmp_path, monkeypatch, FakeSpotify())
+    qtbot.addWidget(wizard)
+    wizard.show()
+
+    assert wizard.install_button.isHidden()

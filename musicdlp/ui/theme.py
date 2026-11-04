@@ -172,14 +172,33 @@ def build_palette(theme: str) -> QPalette:
     return palette
 
 
+def _mix(foreground: str, background: str, amount: float) -> str:
+    """Blend two hex colours. Qt ignores fractional alpha in QSS, so a
+    translucent banner has to be computed as a solid colour instead."""
+    def parts(value: str) -> tuple[int, int, int]:
+        value = value.lstrip("#")
+        return tuple(int(value[i:i + 2], 16) for i in (0, 2, 4))
+    fg, bg = parts(foreground), parts(background)
+    mixed = tuple(
+        round(b + (f - b) * amount) for f, b in zip(fg, bg)
+    )
+    return "#" + "".join(f"{channel:02x}" for channel in mixed)
+
+
 def build_stylesheet(theme: str) -> str:
     c = tokens(theme)
+    banner_bg = _mix("#f59e0b", c["window"], 0.14)
+    banner_border = _mix("#f59e0b", c["window"], 0.55)
     return f"""
     QMainWindow, QDialog {{ background: {c['window']}; }}
     QToolBar {{ border: none; spacing: 6px; }}
 
     QFrame#panel {{ background: {c['panel']}; border: 1px solid {c['border']};
                     border-radius: 8px; }}
+    QFrame#setupBanner {{
+        background: {banner_bg}; border: 1px solid {banner_border};
+        border-radius: 8px;
+    }}
 
     QLabel[tone="muted"] {{ color: {c['muted']}; }}
     QLabel#muted {{ color: {c['muted']}; }}
@@ -247,6 +266,9 @@ def build_stylesheet(theme: str) -> str:
     QPushButton#quiet:hover, QToolButton#quiet:hover {{
         background: {c['hover']}; color: {c['text']};
     }}
+    QPushButton#quiet:focus, QToolButton#quiet:focus {{
+        border: 1px solid {c['link']};
+    }}
 
     QTableView {{
         background: {c['panel']}; alternate-background-color: {c['panel_alt']};
@@ -256,6 +278,8 @@ def build_stylesheet(theme: str) -> str:
         gridline-color: {c['border']};
     }}
     QTableView::item {{ padding: 4px; }}
+    QScrollArea {{ border: 1px solid transparent; }}
+    QScrollArea:focus {{ border: 1px solid {c['link']}; }}
     QHeaderView::section {{
         background: {c['panel']}; border: none;
         border-bottom: 1px solid {c['border']};

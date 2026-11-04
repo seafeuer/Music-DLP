@@ -13,7 +13,9 @@ from pathlib import Path
 
 import pytest
 
-from musicdlp.ui.theme import DARK, LIGHT, STATUS_COLORS, tokens
+from musicdlp.ui.theme import (
+    DARK, LIGHT, STATUS_COLORS, _mix, build_stylesheet, tokens,
+)
 
 AA_BODY = 4.5
 
@@ -129,3 +131,44 @@ def test_scrollbar_handle_is_visible_on_both_surfaces(theme):
     colors = tokens(theme)
     for surface in ("window", "panel"):
         assert contrast(colors["control_border"], colors[surface]) >= 3.0
+
+
+@pytest.mark.parametrize("theme", ["dark", "light"])
+def test_setup_banner_tint_keeps_its_text_readable(theme):
+    """Qt ignores fractional alpha, so the tint must be a solid colour."""
+    colors = tokens(theme)
+    background = _mix("#f59e0b", colors["window"], 0.14)
+    assert contrast(colors["text"], background) >= AA_BODY
+    sheet = build_stylesheet(theme)
+    assert "QFrame#setupBanner" in sheet
+    assert "rgba(245, 158, 11, 0.14)" not in sheet
+
+
+def test_quiet_status_button_shows_a_focus_ring(qapp):
+    from PySide6.QtWidgets import (
+        QPushButton, QVBoxLayout, QWidget,
+    )
+
+    from musicdlp.ui.theme import apply_theme
+
+    apply_theme(qapp, "dark")
+    window = QWidget()
+    layout = QVBoxLayout(window)
+    quiet = QPushButton("Logs")
+    quiet.setObjectName("quiet")
+    quiet.resize(80, 30)
+    other = QPushButton("Other")
+    layout.addWidget(quiet)
+    layout.addWidget(other)
+    window.show()
+
+    other.setFocus()
+    qapp.processEvents()
+    unfocused = quiet.grab().toImage()
+    quiet.setFocus()
+    qapp.processEvents()
+    focused = quiet.grab().toImage()
+
+    assert quiet.hasFocus()
+    assert unfocused.pixelColor(40, 0).name() != tokens("dark")["link"]
+    assert focused.pixelColor(40, 0).name() == tokens("dark")["link"]
