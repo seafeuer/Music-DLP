@@ -1,6 +1,7 @@
 """The setup wizard's pages, and a banner that stays dismissed."""
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog
 
 from musicdlp.core.config import Settings
@@ -46,29 +47,37 @@ def test_setup_is_a_five_step_wizard(dialog):
     assert dialog.stack.currentIndex() == 0
     assert dialog.step_label.text() == "Step 1 of 5"
     assert not dialog.back_button.isEnabled()
-    assert not dialog.next_button.isHidden()
-    assert dialog.footer.primary_button.text() == "Save and close"
+    assert dialog.footer.primary_button.text() == "Next"
+    assert dialog.footer.primary_button.isDefault()
 
     for expected in (1, 2, 3, 4):
-        dialog._next()
+        dialog.footer.primary_button.click()
         assert dialog.stack.currentIndex() == expected
         assert dialog.stack.currentWidget() is dialog.cards[expected][1]
         assert dialog.step_label.text() == f"Step {expected + 1} of 5"
 
-    # The last page has one way forward, not two.
-    assert dialog.next_button.isHidden()
+    # The last page has one way forward, and it finishes.
     assert dialog.footer.primary_button.text() == "Finish"
     assert dialog.back_button.isEnabled()
 
     dialog._back()
     assert dialog.stack.currentIndex() == 3
-    assert not dialog.next_button.isHidden()
-    assert dialog.footer.primary_button.text() == "Save and close"
+    assert dialog.footer.primary_button.text() == "Next"
+
+
+def test_return_advances_instead_of_closing(dialog, qtbot):
+    """Enter used to press "Save and close" and skip the whole wizard."""
+    dialog.activateWindow()
+    qtbot.keyClick(dialog, Qt.Key_Return)
+    assert dialog.stack.currentIndex() == 1
+    assert dialog.isVisible()
+    assert not dialog.result()
 
 
 def test_finish_saves_and_closes(dialog):
     for _ in range(4):
-        dialog._next()
+        dialog.footer.primary_button.click()
+    assert dialog.footer.primary_button.text() == "Finish"
     dialog.footer.primary_button.click()
     assert dialog.result() == QDialog.Accepted
     assert dialog.saved is True

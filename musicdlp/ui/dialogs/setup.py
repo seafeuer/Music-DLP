@@ -265,8 +265,9 @@ class SetupDialog(QDialog):
 
         self.footer = DialogFooter(self, cancel_text="Close")
         self.back_button = self.footer.add_action("Back", self._back)
-        self.next_button = self.footer.add_action("Next", self._next)
-        self.footer.set_primary("Save and close", self._save)
+        # Next is the primary action, so Enter moves to the next page
+        # instead of closing the wizard the way "Save and close" did.
+        self.footer.set_primary("Next", self._next)
         outer.addWidget(self.footer)
         self._show_step(0)
 
@@ -369,12 +370,11 @@ class SetupDialog(QDialog):
         self.step_label.setText(f"Step {index + 1} of {len(self.cards)}")
         self.back_button.setEnabled(index > 0)
         last = index == len(self.cards) - 1
-        # On the last page the primary button is the finish line. Showing
-        # both "Finish" and "Save and close" gave the page two ways out
-        # that did the same thing.
-        self.next_button.setVisible(not last)
+        # One primary action per page: Enter moves forward, and on the
+        # last page it finishes. It never silently skips setup.
         self.footer.set_primary(
-            "Finish" if last else "Save and close", self._save
+            "Finish" if last else "Next",
+            self._save if last else self._next,
         )
 
     def _back(self) -> None:
