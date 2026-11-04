@@ -188,7 +188,12 @@ def split_links(text: str) -> List[str]:
         normalized = normalize_url(part)
         if not normalized:
             continue
-        info = classify_url(normalized)
+        try:
+            info = classify_url(normalized)
+        except ValueError:
+            # urlparse raises "Invalid IPv6 URL" for a half-typed IPv6
+            # address. That is a bad paste, not an internal crash.
+            continue
         if info is None:
             continue
         # The same video arrives as youtu.be/x, watch?v=x&list=…, and with

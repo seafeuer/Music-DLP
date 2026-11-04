@@ -128,3 +128,8 @@ def test_emoji_title_fits_a_windows_filename(tmp_path):
     assert len(path.name.encode("utf-16-le")) // 2 <= 255
     path.write_bytes(b"ok")
     assert path.exists()
+
+
+def test_an_unpaired_surrogate_is_replaced_not_raised():
+    assert sanitize_filename("bad \ud800 title") == "bad _ title"
+    assert render_template("{title}", title="bad \ud800") == "bad _"

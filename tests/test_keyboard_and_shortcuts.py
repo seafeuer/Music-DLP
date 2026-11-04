@@ -140,3 +140,43 @@ def test_escape_closes_the_log_drawer(window):
     main._on_escape()
 
     assert not main.log_drawer.isVisible()
+
+
+def test_enter_adds_links_in_the_multi_link_dialog(qtbot):
+    from PySide6.QtWidgets import QDialog
+
+    from musicdlp.ui.dialogs.bulk_add import BulkAddDialog
+
+    dialog = BulkAddDialog()
+    qtbot.addWidget(dialog)
+    dialog.show()
+    dialog.text.setPlainText("https://youtu.be/abc123")
+    dialog.text.setFocus()
+    qtbot.wait(20)
+
+    qtbot.keyClick(dialog.text, Qt.Key_Return)
+
+    assert dialog.result() == QDialog.Accepted
+    assert dialog.links == ["https://youtu.be/abc123"]
+
+
+def test_shift_enter_starts_a_new_line_in_the_multi_link_dialog(qtbot):
+    from PySide6.QtGui import QTextCursor
+    from PySide6.QtWidgets import QDialog
+
+    from musicdlp.ui.dialogs.bulk_add import BulkAddDialog
+
+    dialog = BulkAddDialog()
+    qtbot.addWidget(dialog)
+    dialog.show()
+    dialog.text.setPlainText("https://youtu.be/abc123")
+    cursor = dialog.text.textCursor()
+    cursor.movePosition(QTextCursor.MoveOperation.End)
+    dialog.text.setTextCursor(cursor)
+    dialog.text.setFocus()
+    qtbot.wait(20)
+
+    qtbot.keyClick(dialog.text, Qt.Key_Return, Qt.ShiftModifier)
+
+    assert dialog.result() != QDialog.Accepted
+    assert dialog.text.toPlainText().endswith("\n")

@@ -9,7 +9,11 @@ from musicdlp.ui.dialogs.footer import DialogFooter
 
 SHORTCUTS: tuple[tuple[str, str], ...] = (
     ("Ctrl+N", "Put the cursor in the link box"),
-    ("Enter", "Add the link in the box (or search, in a search box)"),
+    (
+        "Enter",
+        "Add the link in the box (Shift+Enter starts a new line when "
+        "adding several)",
+    ),
     ("Ctrl+Shift+V", "Add several links at once"),
     ("F5", "Read the selected link again"),
     ("Ctrl+F", "Search every song in the library"),

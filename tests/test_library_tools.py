@@ -1643,3 +1643,26 @@ def test_settings_warn_about_an_ai_address_without_a_scheme(
 
     assert warnings
     assert "address" in warnings[0].lower()
+
+
+def test_settings_refuse_an_unwritable_spotify_folder(
+    qapp, tmp_path, monkeypatch
+):
+    dialog = _settings_dialog(tmp_path)
+    folder = tmp_path / "locked"
+    folder.mkdir()
+    dialog.spotify_edit.setText(str(folder))
+    messages = []
+    monkeypatch.setattr(
+        "musicdlp.ui.dialogs.settings.is_writable", lambda path: False
+    )
+    monkeypatch.setattr(
+        QMessageBox, "critical",
+        staticmethod(lambda *args, **kwargs: messages.append(args[2])),
+    )
+
+    dialog._save_now()
+
+    assert messages
+    assert "cannot write" in messages[0].lower()
+    assert dialog.result_settings is None

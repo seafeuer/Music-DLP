@@ -312,6 +312,11 @@ def test_a_failed_tag_write_is_reported(env, monkeypatch):
     monkeypatch.setattr(
         pipeline_module, "embed_tags", lambda *args, **kwargs: False
     )
+    # The cover lookup is a live network call; this test is about the tag
+    # failure, and a slow catalogue must not make the suite hang.
+    monkeypatch.setattr(
+        pipeline_module, "find_cover", lambda *args, **kwargs: None
+    )
     summary = _summary()
     env["pipeline"]._execute(
         env["items"], ["download", "convert"], False,

@@ -227,7 +227,7 @@ class Bridge(QObject):
     """
 
     # (rows, stages) - rows are TrackRow objects ready for BatchItem.
-    start_pipeline = Signal(object, object)
+    start_pipeline = Signal(object, object, bool)
 
     def __init__(
         self,
@@ -430,8 +430,9 @@ class Bridge(QObject):
         rows = self._rows_for(track_ids)
         force = bool(body.get("force"))
         # Handed to the GUI thread; the pipeline is not thread-safe to start
-        # from here.
-        self.start_pipeline.emit(rows, stages)
+        # from here. The panel's "Update the audio file now" sends force,
+        # and dropping it here rewrote nothing while clearing the flag.
+        self.start_pipeline.emit(rows, stages, force)
         return {"started": True, "tracks": len(rows), "stages": stages}
 
     def _sync_plan(self, body: dict) -> dict:
@@ -715,7 +716,11 @@ class Bridge(QObject):
         self._rows_for(track_ids)
 
         def work() -> dict:
-            notes = maintenance.rewrite_tags(self.db, self.settings)
+            # The panel sends the songs the user selected; rewriting the
+            # whole library would touch files they did not choose.
+            notes = maintenance.rewrite_tags(
+                self.db, self.settings, track_ids=track_ids
+            )
             return {"notes": list(notes)}
 
         return self.jobs.start("rewrite", work).to_dict()

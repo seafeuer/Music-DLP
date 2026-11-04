@@ -1077,6 +1077,13 @@ class SettingsDialog(QDialog):
                 f"That folder cannot be created:\n{spotify_dir}\n\n{exc}",
             )
             return
+        if not is_writable(Path(spotify_dir).expanduser()):
+            QMessageBox.critical(
+                self, "Folder cannot be used",
+                f"Music DLP cannot write to:\n{spotify_dir}\n\nChoose a "
+                "folder you own, such as one under your user folder.",
+            )
+            return
 
         output_dir = self.output_edit.text().strip()
         if not output_dir:

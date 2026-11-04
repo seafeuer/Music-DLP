@@ -285,7 +285,7 @@ def test_starting_a_job_asks_for_the_gui_thread(env):
     # Direct connection so the emission is observable without an event
     # loop; in the app the receiver lives on the GUI thread and Qt queues it.
     bridge.start_pipeline.connect(
-        lambda rows, stages: seen.append((rows, stages)),
+        lambda rows, stages, force: seen.append((rows, stages, force)),
         Qt.ConnectionType.DirectConnection,
     )
 
@@ -299,6 +299,29 @@ def test_starting_a_job_asks_for_the_gui_thread(env):
     assert status == 200
     assert payload["started"] is True
     assert seen and seen[0][1] == ["download"]
+    assert seen[0][2] is False
+
+
+def test_the_panel_can_ask_for_a_forced_rewrite(env):
+    bridge, *_ = env
+    seen = []
+    bridge.start_pipeline.connect(
+        lambda rows, stages, force: seen.append((rows, stages, force)),
+        Qt.ConnectionType.DirectConnection,
+    )
+
+    _call(
+        bridge,
+        "/api/jobs",
+        method="POST",
+        body={
+            "track_ids": [env[4]],
+            "stages": ["convert"],
+            "force": True,
+        },
+    )
+
+    assert seen and seen[0][2] is True
 
 
 def test_starting_a_job_for_an_unknown_song_is_a_400(env):

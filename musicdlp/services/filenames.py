@@ -60,6 +60,10 @@ def choose_template(
 def sanitize_filename(name: str, max_length: int = 140) -> str:
     """Make a name safe on Windows while keeping Unicode letters."""
     text = name or ""
+    # A title decoded from another program can contain an unpaired
+    # surrogate, which cannot be encoded as a filename (or as UTF-16 for
+    # the length limit). Replace it the way settings already do.
+    text = text.encode("utf-8", "replace").decode("utf-8")
     text = "".join("_" if ch in INVALID_CHARS else ch for ch in text)
     text = "".join(" " if ch in "\r\n\t" else ch for ch in text)
     text = "".join(ch for ch in text if ch >= " " and ch != "\x7f")

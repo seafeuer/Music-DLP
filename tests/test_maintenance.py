@@ -151,3 +151,41 @@ def test_healthy_library_is_untouched(tmp_path, not_temp):
     assert notes == []
     assert db.get_track(track_id).mp3_path == str(audio)
     db.close()
+
+
+def test_rewrite_tags_can_be_limited_to_ticked_songs(tmp_path, monkeypatch):
+    from musicdlp.core import maintenance
+
+    seen = []
+
+    def fake_embed(path, **kwargs):
+        seen.append(Path(path).name)
+        return True
+
+    monkeypatch.setattr(
+        "musicdlp.services.tagging.embed_tags", fake_embed
+    )
+    settings = Settings(
+        output_dir=str(tmp_path / "out"),
+        spotify_dir=str(tmp_path / "spotify"),
+        first_run_done=True,
+    )
+    db = Database(tmp_path / "library.db")
+    ids = []
+    for index in ("one", "two"):
+        track_id = db.upsert_track(
+            platform="youtube",
+            media_id=index,
+            url=f"https://www.youtube.com/watch?v={index}",
+            title=index.title(),
+            uploader="Artist",
+        )
+        path = tmp_path / f"{index}.mp3"
+        path.write_bytes(b"audio")
+        db.update_track(track_id, mp3_path=str(path), status="converted")
+        ids.append(track_id)
+
+    maintenance.rewrite_tags(db, settings, track_ids=[ids[0]])
+
+    assert seen == ["one.mp3"]
+    db.close()

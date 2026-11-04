@@ -150,3 +150,10 @@ def test_two_forms_of_the_same_video_are_one_link():
         "https://www.youtube.com/watch?v=dup1&list=PLx&si=tracking"
     )
     assert links == ["https://youtu.be/dup1"]
+
+
+def test_a_malformed_ipv6_link_is_ignored_not_raised():
+    assert split_links("http://[::1") == []
+    assert split_links("see http://[::1/x and https://youtu.be/ok1") == [
+        "https://youtu.be/ok1"
+    ]

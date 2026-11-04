@@ -239,11 +239,14 @@ def _find_by_name(
     return None
 
 
-def rewrite_tags(db: Database, settings: Settings) -> list[str]:
+def rewrite_tags(
+    db: Database, settings: Settings, track_ids=None
+) -> list[str]:
     """Re-write tags and artwork into existing output files.
 
     Used after the tag format changes, or when a player shows songs without
     their picture. No audio is converted; only the tag block is replaced.
+    ``track_ids`` limits the work to the songs the user ticked.
     """
     from musicdlp.services.tagging import embed_tags
 
@@ -251,7 +254,16 @@ def rewrite_tags(db: Database, settings: Settings) -> list[str]:
     rewritten = 0
     failed = 0
 
-    for track in db.get_all_tracks():
+    if track_ids is None:
+        tracks = db.get_all_tracks()
+    else:
+        wanted = {int(value) for value in track_ids}
+        tracks = [
+            track for track in db.get_all_tracks()
+            if track.id in wanted
+        ]
+
+    for track in tracks:
         paths = [Path(p) for p in (track.mp3_path, track.m4a_path) if p]
         paths = [p for p in paths if p.exists()]
 
