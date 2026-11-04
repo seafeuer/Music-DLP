@@ -144,6 +144,16 @@ def test_setup_banner_tint_keeps_its_text_readable(theme):
     assert "rgba(245, 158, 11, 0.14)" not in sheet
 
 
+@pytest.mark.parametrize("theme", ["dark", "light"])
+def test_setup_banner_has_a_visible_boundary(theme):
+    """The tint alone is 1.1:1 on the light window; the border carries it."""
+    colors = tokens(theme)
+    border = (
+        colors["warning"] if theme == "dark" else "#b45309"
+    )
+    assert contrast(border, colors["window"]) >= 3.0
+
+
 def test_quiet_status_button_shows_a_focus_ring(qapp):
     from PySide6.QtWidgets import (
         QPushButton, QVBoxLayout, QWidget,

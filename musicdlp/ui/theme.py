@@ -187,8 +187,11 @@ def _mix(foreground: str, background: str, amount: float) -> str:
 
 def build_stylesheet(theme: str) -> str:
     c = tokens(theme)
+    # A tinted surface alone is only 1.1:1 against the light window, so
+    # the prompt read as plain text; the border is what gives it a panel
+    # boundary (4.6:1 light, 5.2:1 dark).
     banner_bg = _mix("#f59e0b", c["window"], 0.14)
-    banner_border = _mix("#f59e0b", c["window"], 0.55)
+    banner_border = c["warning"] if _is_dark(theme) else "#b45309"
     return f"""
     QMainWindow, QDialog {{ background: {c['window']}; }}
     QToolBar {{ border: none; spacing: 6px; }}

@@ -365,7 +365,7 @@ class MainWindow(QMainWindow):
         self.link_edit.returnPressed.connect(self._add_from_input)
         add_row.addWidget(self.link_edit, 1)
 
-        self.paste_button = QPushButton("Paste")
+        self.paste_button = QPushButton("Paste & add")
         self.paste_button.setToolTip(
             "Read the link on the clipboard and add it"
         )
@@ -442,7 +442,7 @@ class MainWindow(QMainWindow):
 
     def _build_menus(self) -> None:
         file_menu = self.menuBar().addMenu("&File")
-        self.add_action = QAction("Paste a link…", self)
+        self.add_action = QAction("New link…", self)
         self.add_action.setShortcut("Ctrl+N")
         self.add_action.triggered.connect(lambda: self.link_edit.setFocus())
         file_menu.addAction(self.add_action)
@@ -1364,6 +1364,10 @@ class MainWindow(QMainWindow):
         if not text:
             self.link_edit.setFocus()
             return
+        # The box is cleared so the next paste has room, but a failed read
+        # then leaves the user with an error and nothing to correct. Keep
+        # the text until the add starts, and put it back on failure.
+        self._last_add_text = text
         self.link_edit.clear()
         self._add_links_text(text)
 
@@ -1467,21 +1471,34 @@ class MainWindow(QMainWindow):
                 ALL_SONGS_ID if len(result.sources) > 1 else result.sources[0]
             )
             self._refresh_sources(target)
-            summary = (
-                f"Added {counted(len(result.sources), 'link')}, "
-                f"{counted(result.tracks_total, 'song')}"
-            )
-            if result.tracks_new:
-                summary += f", {result.tracks_new} new"
-            if result.tracks_owned:
-                summary += f", {result.tracks_owned} already downloaded"
-            if result.titles_fixed:
-                summary += (
-                    f", {counted(result.titles_fixed, 'title')} "
-                    "cleaned up"
+            if len(result.sources) == 1 and result.tracks_total == 1:
+                # One song is the common first add. Name it, rather than
+                # reporting "1 link, 1 song, 1 new, 1 title cleaned up",
+                # which counts things nobody asked about.
+                rows = self.db.get_tracks_for_source(result.sources[0])
+                if rows:
+                    row = rows[0]
+                    name = row.track.display_title
+                    artist = row.track.display_artist
+                    summary = f"Added “{name}”"
+                    if artist:
+                        summary += f" by {artist}"
+                else:
+                    summary = "Added 1 song"
+            else:
+                summary = (
+                    f"Added {counted(len(result.sources), 'link')}, "
+                    f"{counted(result.tracks_total, 'song')}"
                 )
-            if len(result.sources) > 1:
-                summary += " · all new songs ticked"
+                if result.tracks_owned:
+                    summary += f", {result.tracks_owned} already downloaded"
+                if result.titles_fixed:
+                    summary += (
+                        f", {counted(result.titles_fixed, 'title')} "
+                        "cleaned up"
+                    )
+                if len(result.sources) > 1:
+                    summary += " · all new songs ticked"
             if result.errors:
                 summary += (
                     f" · {counted(len(result.errors), 'link')} "
@@ -1491,6 +1508,13 @@ class MainWindow(QMainWindow):
             self.logger.info(summary)
         else:
             self.status.set_idle("Could not add the link.")
+            restored = getattr(self, "_last_add_text", "")
+            if restored and not self.link_edit.text():
+                # Give the text back so it can be corrected instead of
+                # retyped.
+                self.link_edit.setText(restored)
+                self.link_edit.selectAll()
+                self.link_edit.setFocus()
             if result.errors:
                 self.logger.error(result.errors[0])
                 QMessageBox.warning(
@@ -1898,15 +1922,16 @@ class MainWindow(QMainWindow):
         self._start_pipeline(rows, [stage])
 
     def start_pipeline_for_bridge(
-        self, rows: list[TrackRow], stages: list[str]
+        self, rows: list[TrackRow], stages: list[str], force: bool = False
     ) -> None:
         """Start a job the panel inside Spotify asked for.
 
         The bridge runs on its own threads; this is called on the GUI
         thread through a queued signal, which is where the pipeline has to
-        be started from.
+        be started from. ``force`` rewrites existing files, which is what
+        "Update the audio file now" means.
         """
-        self._start_pipeline(rows, stages)
+        self._start_pipeline(rows, stages, force=force)
 
     def _start_pipeline(
         self,
@@ -3033,14 +3058,16 @@ class MainWindow(QMainWindow):
 
     def _update_theme_button(self) -> None:
         dark = self.settings.theme == "dark"
-        # The icon is the action: sun to go light, moon to go dark. The
-        # full word is kept when there is room for it.
+        # The word is dropped before the button is: the switch stayed
+        # reachable in the View menu, but the visible control vanished at
+        # exactly the 1000-px minimum a user judges the app at.
         width = self.width()
-        # The word needs about 80 px, which the action buttons need more
-        # on a narrow window. The View menu and Settings both switch the
-        # theme there.
-        self.theme_button.setVisible(width >= 1180)
-        self.theme_button.setText("Light" if dark else "Dark")
+        self.theme_button.setVisible(True)
+        symbol = "☀" if dark else "☾"
+        self.theme_button.setText(
+            f"{symbol} {'Light' if dark else 'Dark'}" if width >= 1180
+            else symbol
+        )
         self.theme_button.setToolTip(
             "Switch to the light theme" if dark else "Switch to the dark theme"
         )
@@ -3374,6 +3401,23 @@ class MainWindow(QMainWindow):
                     self.move(
                         available.x() + (available.width() - self.width()) // 2,
                         available.y() + (available.height() - self.height()) // 2,
+                    )
+                    return
+                # A window saved on a bigger monitor, or before the display
+                # was scaled up, can still hang off the bottom edge. Shrink
+                # it to the space that exists instead of leaving the status
+                # bar and the dialog buttons off-screen.
+                if (
+                    self.width() > available.width()
+                    or self.height() > available.height()
+                ):
+                    self.resize(
+                        min(self.width(), available.width()),
+                        min(self.height(), available.height()),
+                    )
+                    self.move(
+                        max(available.x(), min(self.x(), available.right() - self.width())),
+                        max(available.y(), min(self.y(), available.bottom() - self.height())),
                     )
         except Exception:
             pass

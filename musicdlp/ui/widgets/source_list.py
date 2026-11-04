@@ -515,9 +515,9 @@ class SourceListWidget(QWidget):
         self.view.tracks_dropped.connect(self.tracks_dropped)
         self.view.source_dropped.connect(self.source_dropped)
 
-        self.empty = QLabel(
-            "No links yet."
-        )
+        # The table beside it already gives the instruction; repeating it
+        # here made the first screen say it three times.
+        self.empty = QLabel("No links yet.")
         self.empty.setAlignment(Qt.AlignCenter)
         self.empty.setWordWrap(True)
         self.empty.setObjectName("muted")
@@ -529,7 +529,7 @@ class SourceListWidget(QWidget):
 
         footer = QGridLayout()
         footer.setSpacing(6)
-        self.add_button = QPushButton("Paste link…")
+        self.add_button = QPushButton("New link…")
         self.add_button.setToolTip("Put the cursor in the link box at the top of the window")
         self.add_button.clicked.connect(self.add_requested)
         self.folder_button = QPushButton("New folder")
@@ -593,9 +593,7 @@ class SourceListWidget(QWidget):
             )
             self.stack.setCurrentWidget(self.empty)
         else:
-            self.empty.setText(
-                "No links yet."
-            )
+            self.empty.setText("No links yet.")
             self._update_empty_state()
 
     def select_source(self, source_id: int) -> None:

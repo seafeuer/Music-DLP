@@ -52,7 +52,37 @@ class TrackTableView(QTableView):
                 self.toggle_pressed.emit(row.track.id)
                 event.accept()
                 return
+        if key in (Qt.Key_Tab, Qt.Key_Backtab):
+            # Qt moves the cursor cell to cell and never leaves the table,
+            # which trapped the keyboard inside the song list (WCAG 2.1.2).
+            # Tab leaves the table; the arrow keys still move between cells.
+            self._focus_past_table(forward=key == Qt.Key_Tab)
+            event.accept()
+            return
         super().keyPressEvent(event)
+
+    def _focus_past_table(self, forward: bool) -> None:
+        """Move focus to the next or previous widget outside this table."""
+        widget = self.nextInFocusChain()
+        for _ in range(200):
+            if widget is self:
+                break
+            inside = widget is self or self.isAncestorOf(widget)
+            if (
+                not inside
+                and widget.isVisible()
+                and widget.isEnabled()
+                and widget.focusPolicy() & Qt.TabFocus
+            ):
+                widget.setFocus(
+                    Qt.TabFocusReason if forward else Qt.BacktabFocusReason
+                )
+                return
+            widget = (
+                widget.nextInFocusChain() if forward
+                else widget.previousInFocusChain()
+            )
+        super().focusNextPrevChild(forward)
 
     def selected_track_ids(self) -> list[int]:
         model = self.model()
@@ -441,12 +471,18 @@ class TrackTableWidget(QWidget):
 
         show_format = mode == "pro" and width >= 560
         show_progress = self._has_progress() and width >= 430
-        show_artist = width >= 580
-        # The fixed columns can add up to more than a narrow pane. The
-        # position and length matter less than the song's name, so they
-        # step aside before the Title column is squeezed to nothing.
+        # The artist is what tells two songs with the same title apart, so
+        # it is kept as long as the title still has room. The song number
+        # and length are the first to go; the status pill shrinks with
+        # them instead of keeping its full width.
         show_position = width >= 380
+        show_artist = width >= 440
         show_duration = width >= 420
+        if not show_artist:
+            show_position = False
+        self.table.setColumnWidth(
+            COL_STATUS, 136 if show_artist else 108
+        )
 
         self.table.setColumnHidden(COL_FORMAT, not show_format)
         self.table.setColumnHidden(COL_PROGRESS, not show_progress)

@@ -97,6 +97,12 @@ class TrackTableModel(QAbstractTableModel):
             return None
         if role == Qt.DisplayRole:
             return COLUMNS[section]
+        if role == Qt.AccessibleTextRole:
+            # A screen reader heard the tick column as a check-mark
+            # symbol, with no hint of what ticking does.
+            if section == COL_CHECK:
+                return "Include in the next run"
+            return COLUMNS[section]
         if role == Qt.ToolTipRole:
             if section == COL_CHECK:
                 return (

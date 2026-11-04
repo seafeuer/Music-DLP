@@ -483,10 +483,15 @@ def test_a_highlighted_but_unticked_song_says_it_is_not_included(window):
 def test_status_messages_are_pluralised(window, monkeypatch):
     from musicdlp.services.library import AddResult
 
-    main, _db, _ids = window
-    result = AddResult(sources=[1], tracks_total=1, tracks_new=1)
+    main, _db, ids = window
+    source_id = main.db.get_sources()[0].id
+    result = AddResult(
+        sources=[source_id], tracks_total=1, tracks_new=0, tracks_owned=1
+    )
     main._on_add_finished(result)
-    assert "Added 1 link, 1 song" in main.status.status_label.text()
+    text = main.status.status_label.text()
+    assert text.startswith("Added")
+    assert "Song 1" in text
 
 
 def test_a_failed_batch_opens_the_activity_log(window):
@@ -745,3 +750,45 @@ def test_a_superseded_link_read_does_not_touch_the_new_job(window):
         AddResult(errors=["Cancelled."]), generation=5
     )
     assert main._add_running is False
+
+
+def test_a_failed_add_gives_the_link_back(window, monkeypatch):
+    from musicdlp.services.library import AddResult
+
+    main, _db, _ids = window
+    monkeypatch.setattr(
+        "musicdlp.ui.main_window.QMessageBox.warning",
+        staticmethod(lambda *args, **kwargs: None),
+    )
+    main.link_edit.setText("https://www.youtube.com/watch?v=broken")
+    main._add_from_input()
+    assert main.link_edit.text() == ""
+
+    main._on_add_finished(
+        AddResult(errors=["That link isn't a video or playlist."])
+    )
+
+    assert main.link_edit.text() == "https://www.youtube.com/watch?v=broken"
+
+
+def test_the_song_table_does_not_trap_the_tab_key(window, qtbot):
+    main, _db, ids = window
+    main._load_source(main.db.get_sources()[0].id)
+    main.track_table.table.setFocus()
+    main.activateWindow()
+    qtbot.wait(20)
+    assert main.track_table.table.hasFocus()
+
+    qtbot.keyClick(main.track_table.table, Qt.Key_Tab)
+    qtbot.wait(20)
+
+    assert not main.track_table.table.hasFocus()
+
+
+def test_the_theme_switch_stays_visible_at_the_minimum_size(window):
+    main, _db, _ids = window
+    main.resize(1000, 620)
+    main._update_theme_button()
+
+    assert main.theme_button.isVisible()
+    assert main.theme_button.text()
