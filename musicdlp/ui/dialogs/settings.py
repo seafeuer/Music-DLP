@@ -1143,8 +1143,15 @@ class SettingsDialog(QDialog):
             return
 
         # A half-filled AI setup would leave "Ask AI" greyed out with no
-        # explanation, so say so now.
-        if settings.ai_model or settings.ai_base_url:
+        # explanation, so say so now. The default base URL (a local Ollama
+        # server) is present even when the user has never touched AI, so
+        # "auto" with no model or key is not a half-filled setup.
+        wants_ai = bool(
+            settings.ai_model
+            or settings.ai_api_key
+            or settings.ai_provider != "auto"
+        )
+        if wants_ai and not settings.ai_configured:
             if not settings.ai_configured:
                 QMessageBox.warning(
                     self,
@@ -1153,7 +1160,9 @@ class SettingsDialog(QDialog):
                     "naming is not ready.\n\n"
                     "Set both a server address and a model on the AI tab.",
                 )
-            elif not settings.ai_base_url.startswith(("http://", "https://")):
+            elif wants_ai and not settings.ai_base_url.startswith(
+            ("http://", "https://")
+        ):
                 QMessageBox.warning(
                     self,
                     "AI address looks wrong",

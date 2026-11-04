@@ -17,7 +17,7 @@ already been sent to Spotify.
 
 Last verified on 2026-11-02:
 
-- Full test suite passes (561 tests, offscreen Qt included).
+- Full test suite passes (562 tests, offscreen Qt included).
 - Editing title, artist, album, track number, and cover rewrites the tags and
   the file name, replaces the Spotify copy, and removes the stale one. The
   audio is not decoded or re-encoded: its stream is byte-for-byte the same

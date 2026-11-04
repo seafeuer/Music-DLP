@@ -1568,3 +1568,28 @@ def test_settings_fields_have_accessible_names(qapp, tmp_path):
     assert dialog.output_edit.accessibleName()
     assert dialog.spotify_edit.accessibleName()
     assert dialog.ai_key_edit.accessibleName()
+
+
+def test_saving_settings_with_ai_untouched_does_not_warn(
+    qapp, tmp_path, monkeypatch
+):
+    settings = Settings(
+        output_dir=str(tmp_path / "out"),
+        spotify_dir=str(tmp_path / "spotify"),
+    )
+    dialog = SettingsDialog(
+        settings,
+        FFmpegService(""),
+        YtDlpService(settings),
+        SpotifyService(),
+    )
+    warnings = []
+    monkeypatch.setattr(
+        QMessageBox, "warning",
+        staticmethod(lambda *args, **kwargs: warnings.append(args[2])),
+    )
+
+    dialog._save_now()
+
+    assert dialog.result_settings is not None
+    assert warnings == []
