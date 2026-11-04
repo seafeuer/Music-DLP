@@ -6,7 +6,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, QUrl, Signal
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, QUrl, Qt, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QDialog, QFileDialog, QFrame,
@@ -76,7 +76,8 @@ class SetupDialog(QDialog):
 
         subtitle = QLabel(
             "There are a few things to set up once. Green ticks mean you are "
-            "ready. You can reopen this any time from the Help menu."
+            "ready and no action is left. You can reopen this any time from "
+            "the Help menu."
         )
         subtitle.setObjectName("muted")
         subtitle.setWordWrap(True)
@@ -150,17 +151,27 @@ class SetupDialog(QDialog):
 
         # Step 3: Folder -------------------------------------------------
         self.folder_card, folder_layout = self._card(
-            "Where your songs are kept",
-            "A folder is simply a place on your computer that holds files, "
-            "like a drawer. Music DLP saves your songs in this drawer and "
-            "Spotify will read them from here.",
+            "Where Spotify will find your songs",
+            "After a song is converted, a copy is placed in this folder and "
+            "Spotify reads it from there. The original download stays in "
+            "your output folder.",
         )
         self.folder_edit = QLineEdit(self.settings.spotify_dir)
         self.folder_edit.setPlaceholderText(
             r"Paste a path here, e.g. C:\Users\you\MusicDLP\Spotify"
         )
+        self.folder_edit.setAccessibleName("Songs folder for Spotify")
         self.folder_edit.editingFinished.connect(self._folder_typed)
         folder_layout.addWidget(self.folder_edit)
+
+        # An inline message, not a tooltip: a folder the app cannot write
+        # to was saved anyway, and the only warning was invisible.
+        self.folder_error = QLabel("")
+        self.folder_error.setWordWrap(True)
+        self.folder_error.setTextFormat(Qt.PlainText)
+        set_tone(self.folder_error, "danger")
+        self.folder_error.hide()
+        folder_layout.addWidget(self.folder_error)
 
         folder_buttons = QHBoxLayout()
         change = QPushButton("Change…")
@@ -210,15 +221,9 @@ class SetupDialog(QDialog):
         tell_buttons.addStretch(1)
         tell_layout.addLayout(tell_buttons)
 
-        # Step 5: done. The picture fix lives here because it is the one
-        # thing people hit after setup, and it needs somewhere to live.
-        self.tags_card, tags_layout = self._card(
-            "You're all set",
-            "Close this window, then paste a link into Music DLP to download "
-            "your first song. New songs appear in Spotify under “Your Library "
-            "→ Local Files”.",
-        )
-
+        # The picture fix and the all-clear live on this last page: a separate
+        # "You're all set" step added nothing to do, and its only buttons
+        # are repair tools that do not apply to a fresh install.
         picture_help = QLabel(
             "Songs appearing without their picture? Spotify is showing an old "
             "cached list. These two buttons fix that; they do not re-download "
@@ -248,15 +253,12 @@ class SetupDialog(QDialog):
         picture_layout.addWidget(picture_help)
         picture_layout.addLayout(tags_buttons)
         picture_layout.addWidget(self.tags_status)
-        tags_layout.addWidget(self.picture_box)
 
         self.tell_status = QLabel("")
         self.tell_status.setWordWrap(True)
         tell_layout.addWidget(self.tell_status)
 
         note = QLabel(
-            "After this, new songs appear in Spotify under “Your Library → "
-            "Local Files”.\n\n"
             "If Spotify also lists songs you did not add, it is showing your "
             "Music and Downloads folders, which it does by default. Switch "
             "those off in the same Local files list so only Music DLP songs "
@@ -265,6 +267,15 @@ class SetupDialog(QDialog):
         note.setObjectName("muted")
         note.setWordWrap(True)
         tell_layout.addWidget(note)
+
+        self.finish_note = QLabel(
+            "That's everything. Press Finish, then paste a link into Music DLP "
+            "to download your first song."
+        )
+        self.finish_note.setObjectName("muted")
+        self.finish_note.setWordWrap(True)
+        tell_layout.addWidget(self.finish_note)
+        tell_layout.addWidget(self.picture_box)
 
         # Push each step's content to the top so short steps do not float
         # in the middle of a tall page.
@@ -328,6 +339,10 @@ class SetupDialog(QDialog):
             )
             self.install_button.setText("Install it for me")
             self.install_button.show()
+        # With FFmpeg ready, "I already have it…" and "Download FFmpeg"
+        # only offered to install what is already there.
+        self.locate_button.setVisible(not self.ffmpeg.available)
+        self.download_button.setVisible(not self.ffmpeg.available)
 
         if self.spotify.is_installed():
             self._mark(self.spotify_status, True, "Ready — Spotify is installed.")
@@ -371,11 +386,16 @@ class SetupDialog(QDialog):
                 "1–5 on this page, then click “Check again”.",
             )
         else:
+            # The prompt promised a green tick, but this state can never
+            # produce one on some machines. Say plainly what is left to
+            # check instead of leaving the middle step permanently open.
             self.tell_status.setText(
-                "Spotify cannot confirm this automatically. If you completed "
-                "steps 1–5, you are done."
+                "•  Can't be checked from here. Follow steps 1–5, then look "
+                "in Spotify under Your Library → Local Files — if your songs "
+                "are there, you are done."
             )
-            self.tell_status.setObjectName("muted")
+            self.tell_status.setStyleSheet("")
+            set_tone(self.tell_status, "muted")
         if not quiet:
             self.tell_status.setVisible(True)
 
@@ -404,6 +424,10 @@ class SetupDialog(QDialog):
         index = getattr(self, "_step_index", 0)
         if index >= len(self.cards) - 1:
             self._save()
+            return
+        # Leaving the folder page means the folder is about to be used;
+        # do not move on with one the app cannot write to.
+        if index == 2 and not self._folder_typed():
             return
         self._show_step(index + 1)
 
@@ -500,23 +524,51 @@ class SetupDialog(QDialog):
         self.folder_edit.setText(folder)
         self._folder_typed()
 
-    def _folder_typed(self) -> None:
-        """Accept a pasted path, creating the folder if needed."""
+    def _folder_typed(self) -> bool:
+        """Accept a pasted path, creating the folder if needed.
+
+        Returns False when the folder cannot be used, so Next can refuse
+        to move on: a songs folder Spotify cannot read is the one setup
+        mistake that makes every later step fail.
+        """
         text = self.folder_edit.text().strip()
         if not text:
-            return
+            self._show_folder_error("Choose a folder for your songs.")
+            return False
         path = Path(text).expanduser()
         try:
             path.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            set_tone(self.folder_edit, "danger")
-            return
+        except OSError as exc:
+            self._show_folder_error(
+                f"That folder cannot be created:\n{path}\n\n{exc}"
+            )
+            return False
+        if not is_writable(path):
+            # C:\Windows\System32 exists, so mkdir succeeds; writing does
+            # not. Without this check it was saved as the songs folder and
+            # the only hint was a tooltip nobody sees.
+            self._show_folder_error(
+                f"Music DLP cannot write to:\n{path}\n\nChoose a folder "
+                "you own, such as one under your user folder."
+            )
+            return False
+        self._show_folder_error("")
         self.folder_edit.setProperty("tone", "")
         self.folder_edit.setStyleSheet("")
         self.settings.spotify_dir = str(path)
         self.settings.save()
         self.saved = True
         self.refresh()
+        return True
+
+    def _show_folder_error(self, message: str) -> None:
+        self.folder_error.setText(message)
+        self.folder_error.setVisible(bool(message))
+        set_tone(self.folder_edit, "danger" if message else "")
+
+    def _folder_is_usable(self) -> bool:
+        path = Path(self.folder_edit.text().strip() or ".").expanduser()
+        return is_writable(path)
 
     def _open_folder(self) -> None:
         SpotifyService.open_folder(Path(self.folder_edit.text()))

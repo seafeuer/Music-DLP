@@ -46,26 +46,26 @@ def dialog(qtbot, tmp_path, monkeypatch):
     return wizard
 
 
-def test_setup_is_a_five_step_wizard(dialog):
-    assert len(dialog.cards) == 5
+def test_setup_is_a_four_step_wizard(dialog):
+    assert len(dialog.cards) == 4
     assert dialog.stack.currentIndex() == 0
-    assert dialog.step_label.text() == "Step 1 of 5"
+    assert dialog.step_label.text() == "Step 1 of 4"
     assert not dialog.back_button.isEnabled()
     assert dialog.footer.primary_button.text() == "Next"
     assert dialog.footer.primary_button.isDefault()
 
-    for expected in (1, 2, 3, 4):
+    for expected in (1, 2, 3):
         dialog.footer.primary_button.click()
         assert dialog.stack.currentIndex() == expected
         assert dialog.stack.currentWidget() is dialog.cards[expected][1]
-        assert dialog.step_label.text() == f"Step {expected + 1} of 5"
+        assert dialog.step_label.text() == f"Step {expected + 1} of 4"
 
     # The last page has one way forward, and it finishes.
     assert dialog.footer.primary_button.text() == "Finish"
     assert dialog.back_button.isEnabled()
 
     dialog._back()
-    assert dialog.stack.currentIndex() == 3
+    assert dialog.stack.currentIndex() == 2
     assert dialog.footer.primary_button.text() == "Next"
 
 
@@ -79,7 +79,7 @@ def test_return_advances_instead_of_closing(dialog, qtbot):
 
 
 def test_finish_saves_and_closes(dialog):
-    for _ in range(4):
+    for _ in range(3):
         dialog.footer.primary_button.click()
     assert dialog.footer.primary_button.text() == "Finish"
     dialog.footer.primary_button.click()
@@ -145,3 +145,35 @@ def test_install_button_is_hidden_when_ffmpeg_is_ready(
     wizard.show()
 
     assert wizard.install_button.isHidden()
+
+
+def test_an_unwritable_folder_blocks_next_with_a_visible_message(
+    dialog, monkeypatch, tmp_path
+):
+    dialog._show_step(2)
+    # A path that exists but cannot be written to: on Windows, a system
+    # folder; on any platform, a directory that is a file's parent is not
+    # enough, so simulate the write test instead.
+    monkeypatch.setattr(
+        "musicdlp.ui.dialogs.setup.is_writable", lambda path: False
+    )
+    dialog.folder_edit.setText(str(tmp_path))
+
+    dialog._next()
+
+    assert dialog.stack.currentIndex() == 2
+    assert not dialog.folder_error.isHidden()
+    assert "cannot write" in dialog.folder_error.text().lower()
+
+
+def test_a_bad_folder_path_explains_itself(dialog, tmp_path):
+    dialog._show_step(2)
+    blocker = tmp_path / "a-file"
+    blocker.write_text("not a folder", encoding="utf-8")
+
+    dialog.folder_edit.setText(str(blocker / "inside"))
+    dialog._next()
+
+    assert dialog.stack.currentIndex() == 2
+    assert dialog.folder_error.text()
+    assert "cannot be created" in dialog.folder_error.text().lower()
