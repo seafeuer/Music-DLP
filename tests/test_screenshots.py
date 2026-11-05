@@ -18,7 +18,6 @@ from pathlib import Path
 
 import pytest
 from PIL import Image, ImageChops
-from PySide6.QtWidgets import QApplication
 
 from musicdlp.core.config import Settings
 from musicdlp.core.db import Database

@@ -3,6 +3,44 @@
 Earlier releases were not recorded here. This file starts with the audit
 release.
 
+## Unreleased
+
+Additions from §4 of the 2026-11-05 audit. The version number and the
+packaged build are unchanged until the next release.
+
+### Panel
+
+- **Find duplicates** shows the same groups as the desktop, keeps the copy
+  that is furthest along, and removes only the ticked copies. Only songs the
+  duplicate grouping found can be removed, and their files stay on disk
+  unless the delete box is ticked.
+- **Reconnect files** points songs whose audio moved at a copy in a folder,
+  matched by file name.
+- **Ask a chatbot** copies the prompt for the songs that need names and reads
+  the reply back into the review dialog, including the album.
+- **Check files** reports two songs sharing one file and files changed
+  outside Music DLP.
+
+### Desktop
+
+- **An interrupted batch is offered again.** The running batch is recorded
+  when the pipeline starts and cleared when it ends, so a crash, a power cut
+  or a forced shutdown no longer loses the rest of the work.
+- **Closing during a job can keep it running in the tray**, with Show and
+  Quit in the tray menu. Quitting clears the resume marker.
+- **Backups.** Settings → Advanced keeps dated copies of the library and
+  settings: one a day, one before a schema upgrade, and one on demand.
+  Restore is applied at the next start and keeps the previous library.
+- **Edit → Check song files…** compares each output with the fingerprint
+  Music DLP recorded when it wrote the file.
+
+### Tests
+
+- A bridge contract test reads the panel source, fails on an undeclared
+  route, and validates every response the panel reads.
+- Six screenshot baselines cover the main window at three sizes in both
+  themes.
+
 ## 2.10.0 — 2026-11-05
 
 Data safety and correctness fixes from the 2026-11-05 audit.

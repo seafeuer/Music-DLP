@@ -1014,8 +1014,6 @@ def test_refresh_status_says_one_song_not_one_tracks(window):
 
 
 def test_checking_files_reports_a_clean_library(window):
-    from PySide6.QtWidgets import QMessageBox
-
     main, _db, _ids = window
     # Nothing has a fingerprint yet: nothing can mismatch, and the status
     # line says so rather than opening a dialog.

@@ -81,6 +81,15 @@ Last verified on 2026-11-05:
   `cookies.txt` file, for sign-in checks and protected posts.
 - **Import old library** — brings sources, tracks, and output paths over from
   the previous Music DLP database.
+- **Interrupted batches resume** — if Music DLP closes or crashes during a
+  job, the next start offers to continue it. Closing the window while a batch
+  runs can keep it going in the tray instead of cancelling.
+- **Backups** — Settings → Advanced keeps dated copies of the library and the
+  settings: one automatically each day, one before an upgrade, and one
+  whenever you press **Back up now**. **Restore a backup…** puts one back at
+  the next start and keeps the previous library beside it.
+- **Check song files** — Edit → Check song files… finds two songs that ended
+  up sharing one file, and files that changed outside Music DLP.
 
 ## Requirements
 
@@ -464,12 +473,19 @@ version of the same song is not mistaken for the original.
 The toolbar carries the same actions as the desktop app: download, convert,
 send to Spotify, edit details (with cover art and "update the audio file
 now"), AI naming, translation, album numbering, fixing covers, rewriting
-files, looking up album details, and sending to Google Drive. AI naming,
-translation, cover fixes, and rewrites show what will change before they are
-applied; album numbering applies to the ticked songs immediately.
+files, looking up album details, sending to Google Drive, finding duplicate
+songs, reconnecting missing files, the chatbot export/import, and checking
+song files. AI naming, translation, cover fixes, and rewrites show what will
+change before they are applied; album numbering applies to the ticked songs
+immediately.
 
-Not in the panel yet: finding duplicates, reconnecting missing files, and
-the chatbot export/import. Use the desktop app for those.
+**Find duplicates** shows the same groups as the desktop, keeps the copy that
+is furthest along, and removes only the copies you tick. Their audio files
+stay on disk unless you tick the delete box. **Reconnect files** asks for the
+folder the songs are in now and matches them by file name. **Ask a chatbot**
+copies a prompt you can paste into any chatbot and reads its reply back into
+the usual review dialog. **Check files** reports two songs sharing one file
+and files changed outside Music DLP.
 
 ### The bridge
 
@@ -480,11 +496,6 @@ off in Settings, or by setting `bridge_enabled` to `false`.
 
 ## Known limitations
 
-- **The window must stay open while a batch runs.** Closing it asks before
-  cancelling, and a queue does not resume after a restart; interrupted songs
-  continue when you retry them.
-- **The panel cannot do everything the desktop can.** Finding duplicates,
-  reconnecting missing files, and the chatbot export/import are desktop-only.
 - **Mirroring is exact.** **Sync playlist** removes songs you added to that
   playlist by hand. The preview shows how many and asks before anything is
   removed.
@@ -493,8 +504,13 @@ off in Settings, or by setting `bridge_enabled` to `false`.
 - **Spotify matches local files by title, artist and length.** Two different
   songs with identical tags appear as one playlist entry; the sync preview
   names them before you sync.
-- **There is no persistent tray icon.** A Windows notification can announce a
-  finished batch, but the window is the app.
+- **The panel's folder list is polled.** A folder added, renamed or deleted on
+  the desktop can take up to 20 seconds to appear in the panel.
+- **A restore waits for the next start.** Choosing a backup in Settings writes
+  a request; close Music DLP and open it again to put the backup in place.
+- **The file check only knows files Music DLP wrote.** Songs converted by an
+  older version have no fingerprint until they are rewritten or converted
+  again, so they are not checked.
 - **The packaged build is unsigned.** Windows SmartScreen may warn the first
   time it is run.
 
