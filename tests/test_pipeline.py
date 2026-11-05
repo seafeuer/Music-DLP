@@ -907,3 +907,31 @@ def test_a_pending_edit_is_written_on_the_next_normal_convert(
     assert summary["converted"] == 1
     # The audio was renamed, not re-encoded.
     assert env["ffmpeg"].calls == []
+
+
+def test_a_cancelled_conversion_leaves_no_temp_file(tmp_path, monkeypatch):
+    from musicdlp.core.errors import Cancelled
+    from musicdlp.services.ffmpeg import FFmpegService
+
+    service = FFmpegService("")
+    service.ffmpeg = tmp_path / "ffmpeg.exe"
+    monkeypatch.setattr(
+        service, "measure_loudness", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        service, "probe", lambda path: {"duration": 10}
+    )
+
+    def cancel(*args, **kwargs):
+        raise Cancelled()
+
+    monkeypatch.setattr(service, "_run", cancel)
+    raw = tmp_path / "input.webm"
+    raw.write_bytes(b"audio")
+    output = tmp_path / "out" / "Song.mp3"
+    output.parent.mkdir()
+
+    with pytest.raises(Cancelled):
+        service.convert(raw, output, fmt="mp3", normalize=False)
+
+    assert list(output.parent.iterdir()) == []

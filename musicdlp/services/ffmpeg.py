@@ -214,16 +214,22 @@ class FFmpegService:
 
         duration = self.probe(input_path).get("duration", 0)
         timeout = max(120.0, float(duration) * 3 + 60)
-        code, stderr = self._run(
-            cmd,
-            timeout=timeout,
-            cancel_event=cancel_event,
-            progress_cb=(
-                lambda p: report(25 + 74 * p / 100.0)
-                if progress_cb is not None else None
-            ),
-            duration=duration,
-        )
+        try:
+            code, stderr = self._run(
+                cmd,
+                timeout=timeout,
+                cancel_event=cancel_event,
+                progress_cb=(
+                    lambda p: report(25 + 74 * p / 100.0)
+                    if progress_cb is not None else None
+                ),
+                duration=duration,
+            )
+        except (Cancelled, AppError):
+            # A cancelled or timed-out encode leaves a partial .tmp file
+            # in the user's output folder on every attempt.
+            temp_path.unlink(missing_ok=True)
+            raise
         report(100)
 
         if code != 0:
