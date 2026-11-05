@@ -59,7 +59,7 @@ def status_label(status: str) -> str:
         CANCELLED: "Cancelled",
         NEEDS_UPDATE: "Needs update",
         MISSING: "File missing",
-        SYNC_PENDING: "Spotify copy needs sending",
+        SYNC_PENDING: "Spotify copy failed",
     }.get(status, status.title())
 
 

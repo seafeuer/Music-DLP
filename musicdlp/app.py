@@ -184,7 +184,7 @@ def main() -> int:
             reply = QMessageBox.question(
                 None,
                 "Import old library?",
-                f"An old Music-DLP library was found at:\n{legacy}\n\n"
+                f"An old Music DLP library was found at:\n{legacy}\n\n"
                 "Import its sources and tracks? Existing files are referenced "
                 "in place and nothing is moved.",
                 QMessageBox.Yes | QMessageBox.No,

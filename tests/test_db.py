@@ -173,7 +173,7 @@ def test_a_failed_spotify_copy_is_not_shown_as_an_audio_error():
         status="converted", needs_update=False, sync_error="copy failed",
     )
     assert display_status(track) == SYNC_PENDING
-    assert status_label(SYNC_PENDING) == "Spotify copy needs sending"
+    assert status_label(SYNC_PENDING) == "Spotify copy failed"
 
     track.sync_error = None
     assert display_status(track) == "converted"

@@ -61,7 +61,7 @@ def import_legacy(db: Database, old_path: Path) -> ImportSummary:
     if old_path.resolve() == db.path.resolve():
         raise ValueError("That is the current library database, not an old one.")
     if not _looks_like_legacy(old_path):
-        raise ValueError("That file does not look like an old Music-DLP database.")
+        raise ValueError("That file does not look like an old Music DLP database.")
 
     summary = ImportSummary()
     base_dir = old_path.parent

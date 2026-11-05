@@ -499,9 +499,10 @@ class TrackTableWidget(QWidget):
         mode = getattr(self, "mode", "easy")
         title_min = 220
 
-        # The pill has to fit "Not downloaded" and "Sending to Spotify";
-        # shrinking it clipped the status instead of saving the title room.
-        status_width = 136
+        # The pill has to fit "Not downloaded", "Sending to Spotify" and
+        # "Spotify copy failed"; shrinking it clipped the status instead of
+        # saving the title room. The title still keeps its 220 px minimum.
+        status_width = 192
         remaining = width - 32 - status_width  # check box + status
 
         show_position = remaining - title_min >= 38

@@ -116,12 +116,12 @@ class SpotifyDialog(QDialog):
         path = Path(self.folder_edit.text()).expanduser()
         if is_writable(path):
             QMessageBox.information(
-                self, "Folder is writable", f"Music-DLP can write to:\n{path}"
+                self, "Folder is writable", f"Music DLP can write to:\n{path}"
             )
         else:
             QMessageBox.warning(
                 self, "Folder is not writable",
-                f"Choose a folder Music-DLP can write to:\n{path}",
+                f"Choose a folder Music DLP can write to:\n{path}",
             )
 
     def _save(self) -> None:

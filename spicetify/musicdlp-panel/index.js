@@ -32,7 +32,7 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
     cancelled: "Cancelled",
     needs_update: "Needs update",
     missing: "File missing",
-    sync_error: "Spotify copy needs sending"
+    sync_error: "Spotify copy failed"
   };
 
   // Spotify accepts about 100 playlist entries per write. Batch bigger

@@ -255,7 +255,9 @@ class SourceDelegate(QStyledItemDelegate):
             bar.setWidth(3)
             painter.drawRoundedRect(bar, 1.5, 1.5)
         elif hovered:
-            painter.setBrush(QColor(128, 128, 128, 30))
+            hover = QColor(option.palette.mid().color())
+            hover.setAlpha(30)
+            painter.setBrush(hover)
             painter.setPen(Qt.NoPen)
             painter.drawRoundedRect(rect, 7, 7)
 

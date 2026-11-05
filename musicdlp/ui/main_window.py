@@ -1648,7 +1648,7 @@ class MainWindow(QMainWindow):
                 self.logger.warning(error)
         else:
             self.status.set_idle(
-                f"Refreshed: {result.tracks_total} tracks, "
+                f"Refreshed: {counted(result.tracks_total, 'song')}, "
                 f"{result.tracks_new} new."
             )
 
@@ -1724,7 +1724,7 @@ class MainWindow(QMainWindow):
 
             sync = size_to_text(
                 QPushButton(
-                    f"Spotify{suffix}" if compact
+                    f"Send{suffix}" if compact
                     else f"Send to Spotify{suffix}"
                 )
             )
@@ -2134,7 +2134,7 @@ class MainWindow(QMainWindow):
         if summary.get("synced"):
             self._notify(
                 "Sent to Spotify",
-                f"{counted(summary['synced'], 'track')} copied into your "
+                f"{counted(summary['synced'], 'song')} copied into your "
                 "Spotify folder. In Spotify, open Your Library → Local "
                 "Files to play them; if the folder is not listed, add it "
                 "in Settings → Local files and restart Spotify.",
@@ -3021,8 +3021,8 @@ class MainWindow(QMainWindow):
         if self._blocked_by_job():
             return
         delete_files = self._confirm_removal(
-            "Remove track",
-            "Remove this track from the library?",
+            "Remove song",
+            "Remove this song from the library?",
             "Remove and delete files",
             "Remove and keep files",
         )
@@ -3459,7 +3459,7 @@ class MainWindow(QMainWindow):
 
         self._refresh_sources()
         message = (
-            f"Imported {counted(summary.tracks, 'track')} in "
+            f"Imported {counted(summary.tracks, 'song')} in "
             f"{counted(summary.sources, 'link')}."
         )
         if summary.errors:

@@ -71,7 +71,11 @@ class ProgressDelegate(QStyledItemDelegate):
         track = option.rect.adjusted(8, 10, -8, -10)
 
         painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(128, 128, 128, 55))
+        # The unfilled part of the bar follows the theme instead of a
+        # hard-coded grey that vanished on the light palette.
+        empty = QColor(option.palette.mid().color())
+        empty.setAlpha(55)
+        painter.setBrush(empty)
         painter.drawRoundedRect(QRectF(track), 4, 4)
 
         if percent > 0:

@@ -999,3 +999,15 @@ def test_details_fields_are_paired_with_their_labels(qapp, tmp_path):
     assert dialog.artist_edit.accessibleName() == "Artist"
     assert dialog.album_edit.accessibleName() == "Album"
     assert dialog.track_spin.accessibleName() == "Track number"
+
+
+def test_refresh_status_says_one_song_not_one_tracks(window):
+    """Docs polish: the status line used to read "Refreshed: 1 tracks"."""
+    from musicdlp.services.library import AddResult
+
+    main, db, _ids = window
+    result = AddResult(
+        sources=[db.get_sources()[0].id], tracks_total=1, tracks_new=1
+    )
+    main._on_refresh_finished(result)
+    assert main.status.status_label.text() == "Refreshed: 1 song, 1 new."
