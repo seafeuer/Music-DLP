@@ -174,6 +174,10 @@ class StatusBarWidget(QWidget):
         self.status_label.setText(message)
         self.detail_label.setText("")
 
+    def set_message(self, message: str) -> None:
+        """Say something without disturbing a running job's progress."""
+        self.status_label.setText(message)
+
     # ------------------------------------------------------------- locations
 
     def set_output_path(self, path: Path) -> None:

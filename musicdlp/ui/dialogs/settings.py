@@ -854,7 +854,7 @@ class SettingsDialog(QDialog):
             lambda: QApplication.clipboard().setText(diagnostics)
         )
         open_logs = QPushButton("Open log folder")
-        open_logs.clicked.connect(lambda: SpotifyService.open_folder(log_dir()))
+        open_logs.clicked.connect(lambda: self._open_folder(log_dir()))
         buttons.addWidget(copy_button)
         buttons.addWidget(open_logs)
         buttons.addStretch(1)
@@ -1007,8 +1007,16 @@ class SettingsDialog(QDialog):
                 "or place ffmpeg.exe next to the app.",
             )
 
+    def _open_folder(self, path: Path) -> None:
+        if not SpotifyService.open_folder(path):
+            QMessageBox.warning(
+                self, "Could not open the folder",
+                f"Windows could not open:\n{path}\n\n"
+                "Check that the path is a folder and the drive is connected.",
+            )
+
     def _open_spotify_folder(self) -> None:
-        SpotifyService.open_folder(Path(self.spotify_edit.text()).expanduser())
+        self._open_folder(Path(self.spotify_edit.text()).expanduser())
 
     def _restart_spotify(self) -> None:
         ok, message = self._spotify.restart()

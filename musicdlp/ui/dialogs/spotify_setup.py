@@ -98,7 +98,13 @@ class SpotifyDialog(QDialog):
             self.folder_edit.setText(folder)
 
     def _open_folder(self) -> None:
-        SpotifyService.open_folder(Path(self.folder_edit.text()).expanduser())
+        path = Path(self.folder_edit.text()).expanduser()
+        if not SpotifyService.open_folder(path):
+            QMessageBox.warning(
+                self, "Could not open the folder",
+                f"Windows could not open:\n{path}\n\n"
+                "Check that the path is a folder and the drive is connected.",
+            )
 
     def _restart(self) -> None:
         ok, message = self.spotify.restart()

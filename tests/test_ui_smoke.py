@@ -972,3 +972,19 @@ def test_the_duplicates_dialog_caps_the_file_column(qapp, tmp_path):
     assert header.sectionResizeMode(4) == QHeaderView.Interactive
     assert header.sectionSize(4) == 240
     db.close()
+
+
+def test_open_output_says_when_the_folder_cannot_be_opened(window, monkeypatch):
+    """M24: a disconnected drive must not look like a dead button."""
+    from musicdlp.services.spotify import SpotifyService
+
+    main, _db, _ids = window
+    monkeypatch.setattr(
+        SpotifyService, "open_folder", staticmethod(lambda path: False)
+    )
+
+    main._open_output()
+
+    text = main.status.status_label.text()
+    assert "Could not open" in text
+    assert str(main.settings.output_path) in text

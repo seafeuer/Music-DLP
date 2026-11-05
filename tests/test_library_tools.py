@@ -1853,3 +1853,34 @@ def test_a_bad_folder_does_not_block_the_other_settings(
     assert saved.get("theme") == "light"
     assert saved.get("output_dir") == str(output)
     assert "cannot save downloads" in dialog.folder_problem.lower()
+
+
+def test_settings_says_when_the_spotify_folder_cannot_be_opened(
+    qapp, window, monkeypatch
+):
+    """M24: open_folder's False used to look like a dead button."""
+    from musicdlp.ui.dialogs.spotify_setup import SpotifyDialog
+
+    main, _db, _data = window
+    warned = []
+    monkeypatch.setattr(
+        SpotifyService, "open_folder", staticmethod(lambda path: False)
+    )
+    monkeypatch.setattr(
+        QMessageBox, "warning", lambda *args, **kwargs: warned.append(args)
+    )
+
+    settings_dialog = SettingsDialog(
+        main.settings, main.ctx.ffmpeg, main.ctx.ytdlp, main.ctx.spotify, main
+    )
+    settings_dialog.spotify_edit.setText(str(main.settings.spotify_path))
+    settings_dialog._open_spotify_folder()
+    assert warned and "Could not open" in warned[-1][1]
+
+    spotify_dialog = SpotifyDialog(
+        str(main.settings.spotify_path), main.ctx.spotify, main
+    )
+    spotify_dialog.folder_edit.setText(str(main.settings.spotify_path))
+    spotify_dialog._open_folder()
+    assert len(warned) == 2
+    assert "Could not open" in warned[-1][1]

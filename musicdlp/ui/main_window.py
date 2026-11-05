@@ -3155,13 +3155,24 @@ class MainWindow(QMainWindow):
         if os.name == "nt":
             subprocess.Popen(["explorer", "/select,", str(path)])
         else:
-            SpotifyService.open_folder(path.parent)
+            self._open_folder(path.parent)
 
     def _open_url(self, url: str) -> None:
         QDesktopServices.openUrl(QUrl(url))
 
+    def _open_folder(self, path: Path) -> None:
+        """Open a folder, and say so when the drive is not there.
+
+        ``open_folder`` returns False for a disconnected drive or a path
+        that is a file. Ignoring it made the button look dead.
+        """
+        if not SpotifyService.open_folder(path):
+            self.status.set_message(
+                f"Could not open {path}. Check that the drive is connected."
+            )
+
     def _open_output(self) -> None:
-        SpotifyService.open_folder(self.settings.output_path)
+        self._open_folder(self.settings.output_path)
 
     def _open_log_folder(self) -> None:
         from musicdlp.core.paths import log_dir
@@ -3170,7 +3181,7 @@ class MainWindow(QMainWindow):
             # The button says "Open log file"; it used to open the folder.
             self._reveal_path(log_file)
             return
-        SpotifyService.open_folder(log_dir())
+        self._open_folder(log_dir())
 
     # -------------------------------------------------------------- settings
 
