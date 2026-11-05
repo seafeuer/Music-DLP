@@ -226,6 +226,41 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
     });
   }
 
+  /* What a file check found, in one sentence. */
+  function integritySummary(report) {
+    var checked = (report && report.checked) || 0;
+    var shared = ((report && report.shared) || []).length;
+    var changed = ((report && report.changed) || []).length;
+    if (!shared && !changed) {
+      return "Every checked file matches what Music DLP wrote ("
+        + checked + " file" + (checked === 1 ? "" : "s") + ").";
+    }
+    var parts = [];
+    if (shared) {
+      parts.push(shared + " group" + (shared === 1 ? "" : "s")
+        + " of songs share one file");
+    }
+    if (changed) {
+      parts.push(changed + " file" + (changed === 1 ? "" : "s")
+        + " changed outside Music DLP");
+    }
+    return parts.join("; ") + ".";
+  }
+
+  function integrityNames(report) {
+    var lines = [];
+    ((report && report.shared) || []).forEach(function (group) {
+      var titles = (group.tracks || []).map(function (track) {
+        return track.title;
+      });
+      lines.push("Sharing one file: " + titles.join(" · "));
+    });
+    ((report && report.changed) || []).forEach(function (item) {
+      lines.push("Changed: " + item.title);
+    });
+    return lines;
+  }
+
   function copyText(text) {
     if (typeof navigator !== "undefined" && navigator.clipboard
         && navigator.clipboard.writeText) {
@@ -1080,6 +1115,39 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
     );
   }
 
+  /* The result of the file check. Read-only: the fix is an explicit
+   "Update files" or a look in the desktop app, never a quiet rewrite. */
+  function IntegrityDialog(props) {
+    var report = props.report || {};
+    var shared = report.shared || [];
+    var changed = report.changed || [];
+    var lines = integrityNames(report);
+
+    return h(Modal, { title: "Check song files", onClose: props.onClose },
+      h("p", { className: "mdlp-hint" }, integritySummary(report)),
+      lines.length
+        ? h("ul", { className: "mdlp-preview" },
+            lines.map(function (line, index) {
+              return h("li", { key: index }, line);
+            }))
+        : null,
+      shared.length
+        ? h("p", { className: "mdlp-unsure" },
+            "Two songs that point at one file usually have the same name, "
+            + "album and track number. Give one of them different details, "
+            + "then press Update files.")
+        : null,
+      changed.length
+        ? h("p", { className: "mdlp-unsure" },
+            "A changed file was edited or replaced outside Music DLP. Press "
+            + "Update files to write the song's details into it again.")
+        : null,
+      h("div", { className: "mdlp-actions" },
+        h("button", { className: "mdlp-btn primary", onClick: props.onClose },
+          "Close"))
+    );
+  }
+
   function LookupDialog(props) {
     // Album and track number come from MusicBrainz; title and artist stay
     // as they are unless the catalogue disagreed.
@@ -1214,7 +1282,8 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
     }
 
     async function loadTracks(folderId) {
-      var path = folderId ? "/api/tracks?folder=" + folderId : "/api/tracks";
+      // Keep the route itself a literal: the contract test reads these.
+      var path = "/api/tracks" + (folderId ? "?folder=" + folderId : "");
       var list = await api("GET", path);
       setTracks(list);
       setSelected(new Set());
@@ -1570,6 +1639,18 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
       }
     }
 
+    async function checkFiles() {
+      setBusy("Checking the song files…");
+      try {
+        var report = await api("GET", "/api/integrity");
+        setDialog({ type: "integrity", report: report });
+      } catch (err) {
+        notify(err.message, "error");
+      } finally {
+        setBusy("");
+      }
+    }
+
     async function findDuplicates() {
       setBusy("Looking for duplicate songs…");
       try {
@@ -1765,6 +1846,8 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
           "Rewrite files"),
         h("button", { className: "mdlp-btn", disabled: !!busy, onClick: findDuplicates },
           "Find duplicates"),
+        h("button", { className: "mdlp-btn", disabled: !!busy, onClick: checkFiles },
+          "Check files"),
         h("button", { className: "mdlp-btn", disabled: !!busy, onClick: reconnectFiles },
           "Reconnect files"),
         h("button", { className: "mdlp-btn", disabled: !!busy, onClick: exportForChatbot },
@@ -1847,6 +1930,13 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
             onClose: closeDialog,
             onError: function (text) { notify(text, "error"); },
             onDone: function (text) { finish(text); }
+          })
+        : null,
+
+      dialog && dialog.type === "integrity"
+        ? h(IntegrityDialog, {
+            report: dialog.report,
+            onClose: closeDialog
           })
         : null,
 

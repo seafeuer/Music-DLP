@@ -24,6 +24,7 @@ from musicdlp.services.artwork import (
     find_cover,
 )
 from musicdlp.services.filenames import safe_stem
+from musicdlp.services.fingerprint import record_fingerprints
 from musicdlp.services.smart_titles import suggest as smart_suggest
 from musicdlp.services.tagging import replace_cover
 from musicdlp.services.ytdlp import YtDlpService
@@ -469,6 +470,9 @@ class LibraryService:
                 replace_cover(copy, found)
 
         self.db.update_track(track_id, cover_path=str(found))
+        # The picture lives inside the file, so its bytes changed even
+        # though the audio did not.
+        record_fingerprints(self.db, track_id)
         return "updated"
 
     def apply_video_cover(self, track_id: int, thumbnails=None) -> str:
@@ -531,6 +535,7 @@ class LibraryService:
             cover_path=str(found),
             cover_source=COVER_VIDEO,
         )
+        record_fingerprints(self.db, track_id)
         return "updated"
 
     def relink_from_folder(self, folder: Path) -> dict:
@@ -591,6 +596,9 @@ class LibraryService:
             # had. A pending rewrite stays pending: the file may have been
             # found again while its tags are still the old ones.
             self.db.update_track(track.id, **updates)
+            # The path changed, so the stored fingerprint has to move with
+            # it or the next check calls the file replaced.
+            record_fingerprints(self.db, track.id)
             counts["relinked"] += 1
         return counts
 

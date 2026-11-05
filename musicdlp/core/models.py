@@ -178,6 +178,9 @@ class Track:
     smart_confidence: Optional[float] = None
     smart_reason: Optional[str] = None
     cover_source: Optional[str] = None
+    # JSON: absolute output path -> a small fingerprint of that file, used
+    # to notice a file that was replaced or shared between two songs.
+    fingerprints: Optional[str] = None
 
     @classmethod
     def from_row(cls, row: Mapping[str, Any]) -> "Track":
@@ -218,6 +221,9 @@ class Track:
             smart_reason=row["smart_reason"] if "smart_reason" in row.keys() else None,
             cover_source=(
                 row["cover_source"] if "cover_source" in row.keys() else None
+            ),
+            fingerprints=(
+                row["fingerprints"] if "fingerprints" in row.keys() else None
             ),
         )
 

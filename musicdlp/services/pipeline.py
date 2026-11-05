@@ -43,6 +43,7 @@ from musicdlp.services.filenames import (
     choose_template, render_template, unique_path,
 )
 from musicdlp.services.ffmpeg import FFmpegService
+from musicdlp.services.fingerprint import record_fingerprints
 from musicdlp.services.spotify import SpotifyService
 from musicdlp.services.tagging import embed_tags
 from musicdlp.services.thumbnails import ThumbnailService, youtube_fallbacks
@@ -618,6 +619,9 @@ class Pipeline(QObject):
             error=None,
             needs_update=0,
         )
+        # Remember what the retagged file looks like, so a later integrity
+        # check does not report our own write as an outside change.
+        record_fingerprints(self.db, track.id)
         return True
 
     def _fill_missing_formats(
@@ -992,6 +996,7 @@ class Pipeline(QObject):
                     error=None,
                     needs_update=0,
                 )
+                record_fingerprints(self.db, track.id)
                 summary["converted"] += 1
                 if not settings.keep_raw and raw.exists():
                     try:

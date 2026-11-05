@@ -935,3 +935,27 @@ def test_health_gives_the_panel_a_folder_to_reconnect_from(env):
 
     assert status == 200
     assert payload["output_dir"]
+
+
+def test_the_panel_can_check_the_song_files(env, tmp_path):
+    from musicdlp.services.fingerprint import record_fingerprints
+
+    bridge, db, _library, _folder_id, track_id = env
+    path = tmp_path / "song.mp3"
+    path.write_bytes(b"A" * 300_000)
+    db.update_track(track_id, status="converted", mp3_path=str(path))
+    record_fingerprints(db, track_id)
+
+    status, payload = _call(bridge, "/api/integrity")
+
+    assert status == 200
+    assert payload["checked"] == 1
+    assert payload["shared"] == []
+    assert payload["changed"] == []
+
+    # Some other program replaced the file.
+    path.write_bytes(b"B" * 300_000)
+    status, payload = _call(bridge, "/api/integrity")
+
+    assert status == 200
+    assert [item["track_id"] for item in payload["changed"]] == [track_id]

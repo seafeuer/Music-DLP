@@ -574,6 +574,14 @@ class MainWindow(QMainWindow):
         self.duplicates_action.triggered.connect(self._find_duplicates)
         edit_menu.addAction(self.duplicates_action)
 
+        self.check_files_action = QAction("Check song files…", self)
+        self.check_files_action.setToolTip(
+            "Compare each song's file with what Music DLP last wrote, and "
+            "find two songs that ended up sharing one file"
+        )
+        self.check_files_action.triggered.connect(self._check_files)
+        edit_menu.addAction(self.check_files_action)
+
         ai_menu = self.menuBar().addMenu("&AI")
         ask_action = QAction("Name songs with AI…", self)
         ask_action.triggered.connect(lambda: self._open_suggestions(True))
@@ -1766,6 +1774,7 @@ class MainWindow(QMainWindow):
             (count > 0 or self._current_source_id is not None) and not busy
         )
         self.duplicates_action.setEnabled(not busy)
+        self.check_files_action.setEnabled(not busy)
         self.sidebar.set_busy(busy)
 
         # New buttons are appended to the tab chain after the status bar.
@@ -2668,6 +2677,60 @@ class MainWindow(QMainWindow):
         self.status.set_idle(
             f"Updated the details of {count} song{'' if count == 1 else 's'}. "
             "Press Update files to write them in."
+        )
+
+    def _check_files(self) -> None:
+        """Compare the files on disk with what Music DLP last wrote.
+
+        Catches two accidents: two rows pointing at one file (a naming
+        collision), and a file replaced by a different song while its row
+        kept the old details.
+        """
+        if self._is_busy():
+            self.status.set_idle("Wait for the current job to finish.")
+            return
+
+        from musicdlp.services.fingerprint import check_library
+
+        report = check_library(self.db)
+        shared = report.get("shared") or []
+        changed = report.get("changed") or []
+        checked = report.get("checked") or 0
+
+        if not shared and not changed:
+            self.status.set_idle(
+                f"Checked {counted(checked, 'file')} — every one matches "
+                "what Music DLP wrote."
+            )
+            return
+
+        lines = []
+        for group in shared:
+            titles = ", ".join(
+                item["title"] for item in group.get("tracks", [])
+            )
+            lines.append(f"Two or more songs share one file: {titles}")
+        for item in changed:
+            lines.append(f"Changed outside Music DLP: {item['title']}")
+
+        box = QMessageBox(self)
+        box.setWindowTitle("Check song files")
+        box.setIcon(QMessageBox.Warning)
+        box.setText(
+            f"{counted(len(shared), 'group')} of songs share a file and "
+            f"{counted(len(changed), 'file')} changed outside Music DLP."
+            if shared else
+            f"{counted(len(changed), 'file')} changed outside Music DLP."
+        )
+        box.setInformativeText(
+            "A shared file usually means two songs got the same name, album "
+            "and track number. A changed file can be rebuilt with "
+            "“Update files”."
+        )
+        box.setDetailedText("\n".join(lines))
+        box.exec()
+        self.status.set_idle(
+            "File check finished — press Check song files again for details."
         )
 
     def _find_duplicates(self) -> None:

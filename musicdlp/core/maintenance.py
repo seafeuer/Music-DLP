@@ -319,6 +319,10 @@ def rewrite_tags(
                 cover_path=cover,
             ) or ok
         if ok:
+            from musicdlp.services.fingerprint import record_fingerprints
+
+            # The tag block was replaced, so the file's bytes changed.
+            record_fingerprints(db, track.id)
             rewritten += 1
         else:
             failed += 1

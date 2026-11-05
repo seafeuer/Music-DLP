@@ -12,9 +12,9 @@ from typing import Callable, Optional
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-    QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
-    QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea,
-    QSpinBox, QTabWidget, QToolButton, QVBoxLayout, QWidget,
+    QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QInputDialog,
+    QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton,
+    QScrollArea, QSpinBox, QTabWidget, QToolButton, QVBoxLayout, QWidget,
 )
 
 logger = logging.getLogger("musicdlp.settings")
@@ -43,6 +43,7 @@ def _clean_key(text: str) -> str:
     return cleaned.strip()
 
 
+from musicdlp.core import backup
 from musicdlp.core.config import Settings
 
 from musicdlp.core.paths import (
@@ -908,6 +909,29 @@ class SettingsDialog(QDialog):
         buttons.addStretch(1)
         form.addRow("", self._wrap(buttons))
 
+        backup_buttons = QHBoxLayout()
+        back_up_now = QPushButton("Back up now")
+        back_up_now.clicked.connect(self._back_up_now)
+        restore = QPushButton("Restore a backup…")
+        restore.clicked.connect(self._restore_backup)
+        open_backups = QPushButton("Open backup folder")
+        open_backups.clicked.connect(
+            lambda: self._open_folder(backup.backups_dir())
+        )
+        backup_buttons.addWidget(back_up_now)
+        backup_buttons.addWidget(restore)
+        backup_buttons.addWidget(open_backups)
+        backup_buttons.addStretch(1)
+        form.addRow("Backups", self._wrap(backup_buttons))
+        backup_hint = QLabel(
+            "Each backup is a dated copy of the library and the settings. "
+            "Music DLP makes one automatically each day and before an "
+            f"upgrade, and keeps the newest {backup.KEEP_BACKUPS}."
+        )
+        backup_hint.setWordWrap(True)
+        backup_hint.setObjectName("muted")
+        form.addRow("", backup_hint)
+
         self.ytdlp_button = QPushButton(
             f"Update yt-dlp (currently {self._ytdlp.version()})"
         )
@@ -1054,6 +1078,86 @@ class SettingsDialog(QDialog):
                 "Install FFmpeg with: winget install Gyan.FFmpeg\n"
                 "or place ffmpeg.exe next to the app.",
             )
+
+    def _back_up_now(self) -> None:
+        folder = backup.create_backup("manual")
+        if folder is None:
+            QMessageBox.warning(
+                self,
+                "Nothing to back up",
+                "There is no library file to copy yet. Add a link first.",
+            )
+            return
+        QMessageBox.information(
+            self,
+            "Backup saved",
+            f"The library was copied to:\n{folder}\n\n"
+            f"Music DLP keeps the newest {backup.KEEP_BACKUPS} backups.",
+        )
+
+    def _restore_backup(self) -> None:
+        entries = backup.list_backups()
+        if not entries:
+            QMessageBox.information(
+                self,
+                "No backups yet",
+                "Music DLP has not made a backup yet. Press “Back up now” "
+                "first.",
+            )
+            return
+
+        labels = [self._backup_label(entry) for entry in entries]
+        choice, ok = QInputDialog.getItem(
+            self,
+            "Restore a backup",
+            "Replace the library with:",
+            labels,
+            0,
+            False,
+        )
+        if not ok:
+            return
+        entry = entries[labels.index(choice)]
+
+        reply = QMessageBox.warning(
+            self,
+            "Restore this backup?",
+            f"The library will be replaced by the copy from "
+            f"{entry['created_at']} ({entry['tracks']} songs).\n\n"
+            "Your current library is kept beside the new one, but any songs "
+            "added since that backup will not be in it. Music DLP must be "
+            "closed and opened again to finish.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            backup.request_restore(Path(entry["path"]))
+        except (backup.BackupError, OSError) as exc:
+            QMessageBox.critical(
+                self, "Could not restore", str(exc)
+            )
+            return
+        QMessageBox.information(
+            self,
+            "Close and open Music DLP",
+            "The restore is ready. Close Music DLP and open it again; the "
+            "backup is put in place before the library is opened.",
+        )
+
+    @staticmethod
+    def _backup_label(entry: dict) -> str:
+        when = str(entry.get("created_at") or "").replace("T", " ")[:16]
+        reason = {
+            "daily": "automatic",
+            "before-migration": "before an upgrade",
+            "manual": "manual",
+        }.get(str(entry.get("reason") or ""), str(entry.get("reason") or ""))
+        tracks = entry.get("tracks") or 0
+        songs = f"{tracks} song{'' if tracks == 1 else 's'}"
+        return f"{when} — {songs}" + (f" — {reason}" if reason else "")
 
     def _open_folder(self, path: Path) -> None:
         if not SpotifyService.open_folder(path):

@@ -344,3 +344,26 @@ test("a chatbot review sends its album but the other reviews do not", () => {
     ["artist", "title", "track_id"]
   );
 });
+
+test("a file check says what it found", () => {
+  const { context } = loadPanel();
+  const clean = { checked: 4, shared: [], changed: [] };
+  assert.match(context.integritySummary(clean), /4 files/);
+  assert.match(context.integritySummary(clean), /matches/);
+
+  const problems = {
+    checked: 9,
+    shared: [{ tracks: [{ id: 1, title: "One" }, { id: 2, title: "Two" }] }],
+    changed: [{ track_id: 3, title: "Three" }]
+  };
+  const summary = context.integritySummary(problems);
+  assert.match(summary, /one file/);
+  assert.match(summary, /changed outside/);
+
+  const names = context.integrityNames(problems);
+  assert.equal(names.length, 2);
+  assert.match(names[0], /One/);
+  assert.match(names[0], /Two/);
+  assert.match(names[1], /Changed: Three/);
+  assert.deepEqual(Array.from(context.integrityNames(clean)), []);
+});

@@ -13,8 +13,11 @@ from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QStyle
 
 from musicdlp import APP_NAME, __version__
+from musicdlp.core import backup
 from musicdlp.core.config import Settings
-from musicdlp.core.db import Database, quarantine_database
+from musicdlp.core.db import (
+    SCHEMA_VERSION, Database, quarantine_database, schema_version_on_disk,
+)
 from musicdlp.core.logging import setup_logging
 from musicdlp.core.maintenance import repair_library
 from musicdlp.core.paths import db_path, ensure_app_dirs, log_dir
@@ -143,6 +146,18 @@ def main() -> int:
     # not take the app down before there is anywhere to report it.
     logger = setup_logging(log_dir(), "INFO")
     _install_excepthook(logger)
+
+    # A restore the user asked for last time is applied before the
+    # database or the settings are opened, so nothing is holding the files
+    # being replaced. It also restores the settings snapshot, which is why
+    # this comes before Settings.load().
+    try:
+        restored = backup.apply_pending_restore()
+        if restored:
+            logger.info(restored)
+    except Exception as exc:  # noqa: BLE001 - never stop the app
+        logger.warning("Could not apply a restore: %s", exc)
+
     try:
         settings = Settings.load()
     except Exception:
@@ -154,7 +169,23 @@ def main() -> int:
     logger.info("Starting Music DLP %s", __version__)
     apply_theme(app, settings.theme)
 
+    # An upgrade rewrites the library file before anyone sees it. Take a
+    # copy of the old one first, so a bad migration has something to
+    # fall back to.
+    try:
+        on_disk = schema_version_on_disk(db_path())
+        if on_disk is not None and on_disk < SCHEMA_VERSION:
+            backup.create_backup("before-migration")
+    except Exception as exc:  # noqa: BLE001 - a backup must not block start
+        logger.warning("Could not back up before the upgrade: %s", exc)
+
     db = _open_database(logger)
+    # One automatic snapshot a day is the safety net for a mistaken delete
+    # when the user never used "Back up now".
+    try:
+        backup.maybe_daily_backup()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not take the daily backup: %s", exc)
     ctx = build_context(settings, db, logger)
 
     # Recover files that were left in an old or temporary folder.

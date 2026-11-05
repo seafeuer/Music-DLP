@@ -101,7 +101,7 @@ TRACK_UPDATABLE = {
     "raw_path", "mp3_path", "m4a_path", "cover_path",
     "downloaded_at", "converted_at", "synced_at", "sync_error",
     "needs_update", "smart_title", "smart_artist", "smart_confidence",
-    "smart_reason", "duration", "cover_source",
+    "smart_reason", "duration", "cover_source", "fingerprints",
     # The media details can be repaired from the link later (an older
     # entry may have been stored before the site published them).
     "thumbnail_url", "description",
@@ -206,6 +206,36 @@ def quarantine_database(path: str | Path) -> Optional[Path]:
     return backup
 
 
+def schema_version_on_disk(path: str | Path) -> Optional[int]:
+    """The schema version of a library file, without opening it for writing.
+
+    Used before the app opens the database, so an upgrade can take a
+    backup of the old file first. Returns None when the file does not
+    exist or has no schema at all (a brand-new library).
+    """
+    path = Path(path)
+    if not path.is_file():
+        return None
+    try:
+        connection = sqlite3.connect(
+            f"file:{path.as_posix()}?mode=ro", uri=True
+        )
+        try:
+            row = connection.execute(
+                "SELECT version FROM schema_meta LIMIT 1"
+            ).fetchone()
+        finally:
+            connection.close()
+    except sqlite3.Error:
+        return None
+    if not row:
+        return None
+    try:
+        return int(row[0])
+    except (TypeError, ValueError):
+        return None
+
+
 class Database:
     """Small repository layer over SQLite."""
 
@@ -293,6 +323,7 @@ class Database:
             ("smart_confidence", "REAL"),
             ("smart_reason", "TEXT"),
             ("cover_source", "TEXT"),
+            ("fingerprints", "TEXT"),
         ):
             if column not in columns:
                 conn.execute(f"ALTER TABLE tracks ADD COLUMN {column} {kind}")

@@ -523,6 +523,13 @@ class Bridge(QObject):
         if method == "POST" and route == ["rewrite"]:
             return self._rewrite(body)
 
+        if method == "GET" and route == ["integrity"]:
+            # Read every stored file's fingerprint; a big library can take
+            # a second or two, so the panel shows its busy state around it.
+            from musicdlp.services.fingerprint import check_library
+
+            return check_library(self.db)
+
         if method == "GET" and route == ["duplicates"]:
             return self._duplicates()
 

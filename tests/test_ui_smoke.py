@@ -1011,3 +1011,36 @@ def test_refresh_status_says_one_song_not_one_tracks(window):
     )
     main._on_refresh_finished(result)
     assert main.status.status_label.text() == "Refreshed: 1 song, 1 new."
+
+
+def test_checking_files_reports_a_clean_library(window):
+    from PySide6.QtWidgets import QMessageBox
+
+    main, _db, _ids = window
+    # Nothing has a fingerprint yet: nothing can mismatch, and the status
+    # line says so rather than opening a dialog.
+    main._check_files()
+
+    assert "matches" in main.status.status_label.text()
+
+
+def test_checking_files_reports_two_songs_sharing_one_file(
+    window, tmp_path, monkeypatch
+):
+    from PySide6.QtWidgets import QMessageBox
+
+    from musicdlp.services.fingerprint import record_fingerprints
+
+    main, db, ids = window
+    content = b"X" * 300_000
+    for track_id, name in zip(ids, ("one.mp3", "two.mp3")):
+        path = tmp_path / name
+        path.write_bytes(content)
+        db.update_track(track_id, status="converted", mp3_path=str(path))
+        record_fingerprints(db, track_id)
+
+    # The report is a modal; the test only needs the status line beside it.
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: None)
+    main._check_files()
+
+    assert "press Check song files again" in main.status.status_label.text()
