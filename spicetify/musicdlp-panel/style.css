@@ -1,6 +1,7 @@
-/* Music DLP panel, styled to sit inside Spotify's dark shell. */
+/* Music DLP panel, styled with Spotify's own theme variables so it follows
+ * dark, light and coloured themes instead of assuming a dark shell. */
 
-#musicdlp-root {
+.musicdlp-app {
   padding: 16px 24px 48px;
   color: var(--spice-text, #fff);
   font-family: inherit;
@@ -13,6 +14,7 @@
   align-items: center;
   gap: 12px;
   margin-bottom: 14px;
+  flex-wrap: wrap;
 }
 
 .mdlp-header h1 {
@@ -48,11 +50,11 @@
 
 .mdlp-input {
   flex: 1 1 320px;
-  min-width: 220px;
-  background: rgba(255, 255, 255, 0.1);
+  min-width: 180px;
+  background: var(--spice-card, rgba(255, 255, 255, 0.1));
   border: 1px solid transparent;
   border-radius: 4px;
-  color: inherit;
+  color: var(--spice-text, inherit);
   padding: 8px 12px;
   font-size: 14px;
   font-family: inherit;
@@ -60,12 +62,12 @@
 
 .mdlp-input:focus {
   outline: none;
-  border-color: rgba(255, 255, 255, 0.4);
+  border-color: var(--spice-button, rgba(255, 255, 255, 0.4));
 }
 
 .mdlp-btn {
-  background: rgba(255, 255, 255, 0.1);
-  color: inherit;
+  background: var(--spice-card, rgba(255, 255, 255, 0.1));
+  color: var(--spice-text, inherit);
   border: none;
   border-radius: 4px;
   padding: 8px 14px;
@@ -75,18 +77,29 @@
   font-family: inherit;
 }
 
-.mdlp-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.2); }
+.mdlp-btn:hover:not(:disabled) {
+  background: var(--spice-button, rgba(255, 255, 255, 0.2));
+}
+
 .mdlp-btn:disabled { opacity: 0.4; cursor: default; }
 
 .mdlp-btn.primary { background: #1db954; color: #000; }
 .mdlp-btn.primary:hover:not(:disabled) { background: #1ed760; }
-.mdlp-btn.danger { background: rgba(226, 33, 52, 0.85); color: #fff; }
+.mdlp-btn.danger { background: #c81b2c; color: #fff; }
+.mdlp-btn.danger:hover:not(:disabled) { background: #e22134; }
+
+.mdlp-refresh { margin-left: auto; }
 
 .mdlp-layout {
   display: grid;
-  grid-template-columns: 220px 1fr;
+  grid-template-columns: minmax(150px, 220px) minmax(0, 1fr);
   gap: 20px;
   align-items: start;
+}
+
+@media (max-width: 560px) {
+  .mdlp-layout { grid-template-columns: 1fr; }
+  .musicdlp-app { padding: 12px 16px 40px; }
 }
 
 .mdlp-folders {
@@ -103,16 +116,26 @@
   border-radius: 4px;
   cursor: pointer;
   font-size: 14px;
+  overflow: hidden;
 }
 
-.mdlp-folder:hover { background: rgba(255, 255, 255, 0.08); }
-.mdlp-folder.active { background: rgba(255, 255, 255, 0.16); font-weight: 600; }
+.mdlp-folder > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mdlp-folder:hover { background: var(--spice-card, rgba(255, 255, 255, 0.08)); }
+.mdlp-folder.active {
+  background: var(--spice-card, rgba(255, 255, 255, 0.16));
+  font-weight: 600;
+}
 .mdlp-folder .count { color: var(--spice-subtext, #b3b3b3); font-size: 12px; }
 
 .mdlp-table-wrap {
   border-radius: 8px;
-  background: rgba(0, 0, 0, 0.2);
-  overflow: hidden;
+  background: var(--spice-card, rgba(0, 0, 0, 0.2));
+  overflow-x: auto;
 }
 
 .mdlp-table {
@@ -128,18 +151,27 @@
   letter-spacing: 0.06em;
   color: var(--spice-subtext, #b3b3b3);
   padding: 10px 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 1px solid var(--spice-card, rgba(255, 255, 255, 0.1));
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .mdlp-table td {
   padding: 8px 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid var(--spice-card, rgba(255, 255, 255, 0.05));
   vertical-align: middle;
 }
 
-.mdlp-table tr:hover td { background: rgba(255, 255, 255, 0.05); }
+.mdlp-table tr:hover td { background: var(--spice-card, rgba(255, 255, 255, 0.05)); }
 .mdlp-table tr.selected td { background: rgba(29, 185, 84, 0.12); }
+
+.mdlp-title,
+.mdlp-artist {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 34vw;
+}
 
 .mdlp-title { font-weight: 500; }
 .mdlp-artist { color: var(--spice-subtext, #b3b3b3); font-size: 13px; }
@@ -148,13 +180,15 @@
   font-size: 11px;
   padding: 2px 8px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--spice-card, rgba(255, 255, 255, 0.12));
   white-space: nowrap;
 }
 
-.mdlp-status.synced { background: rgba(29, 185, 84, 0.25); color: #7ee2a8; }
-.mdlp-status.error, .mdlp-status.missing { background: rgba(226, 33, 52, 0.25); color: #ff8a95; }
-.mdlp-status.converted { background: rgba(90, 160, 255, 0.25); color: #9cc4ff; }
+.mdlp-status.synced { background: rgba(29, 185, 84, 0.25); color: var(--spice-text, #7ee2a8); }
+.mdlp-status.error,
+.mdlp-status.missing { background: rgba(226, 33, 52, 0.25); color: var(--spice-text, #ff8a95); }
+.mdlp-status.pending { background: rgba(232, 185, 35, 0.25); color: var(--spice-text, #e8b923); }
+.mdlp-status.converted { background: rgba(90, 160, 255, 0.25); color: var(--spice-text, #9cc4ff); }
 
 .mdlp-empty {
   padding: 40px 12px;
@@ -171,7 +205,7 @@
 
 .mdlp-bar {
   height: 4px;
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--spice-card, rgba(255, 255, 255, 0.12));
   border-radius: 2px;
   overflow: hidden;
   margin-top: 6px;
@@ -183,16 +217,48 @@
   transition: width 0.2s ease;
 }
 
+/* A message from an action. Fixed and above the modals: errors raised from
+ * inside a dialog used to be painted underneath it. */
 .mdlp-toast {
-  margin-top: 12px;
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 1100;
+  max-width: min(520px, 90vw);
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  white-space: pre-wrap;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.mdlp-toast.ok { background: #1a3d28; color: #d8f7e4; }
+.mdlp-toast.err { background: #4a1a21; color: #ffe0e3; }
+
+.mdlp-toast-close {
+  background: none;
+  border: none;
+  color: inherit;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  opacity: 0.8;
+}
+
+.mdlp-banner {
+  margin-bottom: 14px;
   padding: 10px 14px;
   border-radius: 6px;
   font-size: 13px;
   white-space: pre-wrap;
 }
 
-.mdlp-toast.ok { background: rgba(29, 185, 84, 0.18); color: #9be7b8; }
-.mdlp-toast.err { background: rgba(226, 33, 52, 0.18); color: #ff9aa4; }
+.mdlp-banner.ok { background: rgba(29, 185, 84, 0.18); }
+.mdlp-banner.err { background: rgba(226, 33, 52, 0.18); }
 
 /* Modals */
 .mdlp-overlay {
@@ -206,7 +272,8 @@
 }
 
 .mdlp-modal {
-  background: #282828;
+  background: var(--spice-card, #282828);
+  color: var(--spice-text, #fff);
   border-radius: 8px;
   padding: 22px;
   width: min(760px, 92vw);
@@ -265,13 +332,13 @@
 .mdlp-review-table td {
   text-align: left;
   padding: 6px 8px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid var(--spice-card, rgba(255, 255, 255, 0.08));
   vertical-align: top;
 }
 
 .mdlp-review-table input[type="text"] {
   width: 100%;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--spice-card, rgba(255, 255, 255, 0.08));
   border: 1px solid transparent;
   border-radius: 3px;
   color: inherit;
@@ -279,4 +346,13 @@
   font-family: inherit;
 }
 
-.mdlp-unsure { color: #e8b923; font-size: 11px; }
+.mdlp-preview {
+  margin: 10px 0 0;
+  padding-left: 20px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.mdlp-preview .warn { color: #e8b923; font-weight: 600; }
+
+.mdlp-unsure { color: #e8b923; font-size: 12px; }

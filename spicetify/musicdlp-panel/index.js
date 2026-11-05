@@ -34,6 +34,12 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
     missing: "File missing"
   };
 
+  // Spotify accepts about 100 playlist entries per write. Batch bigger
+  // selections instead of sending one oversized call that fails whole.
+  var PLAYLIST_CHUNK = 100;
+  // Pages of playlist contents to read before giving up.
+  var PLAYLIST_PAGE = 100;
+
   // React is resolved lazily: Spicetify exposes it once its own bundle has
   // loaded, which is before this module is imported, but going through a
   // getter keeps the panel from depending on load order.
@@ -48,14 +54,34 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
   }
 
   async function api(method, path, body) {
-    var response = await fetch(BASE + path, {
-      method: method,
-      headers: {
-        Authorization: "Bearer " + TOKEN,
-        "Content-Type": "application/json"
-      },
-      body: body === undefined ? undefined : JSON.stringify(body)
-    });
+    // A request that never answers left every button disabled forever.
+    var controller = typeof AbortController === "function"
+      ? new AbortController() : null;
+    var timer = controller
+      ? setTimeout(function () { controller.abort(); }, 20000)
+      : null;
+    var response;
+    try {
+      response = await fetch(BASE + path, {
+        method: method,
+        headers: {
+          Authorization: "Bearer " + TOKEN,
+          "Content-Type": "application/json"
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: controller ? controller.signal : undefined
+      });
+    } catch (err) {
+      // fetch() rejects for a stopped app, a blocked port and a CORS
+      // failure alike. Say what to check instead of "Failed to fetch".
+      throw new Error(
+        "Music DLP could not be reached at " + BASE + ". Make sure the app "
+        + "is running, that the panel is switched on in its settings, and "
+        + "that Spotify was restarted after it was installed."
+      );
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
     var data = null;
     try {
       data = await response.json();
@@ -89,8 +115,85 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
   function statusClass(status) {
     if (status === "synced") return "synced";
     if (status === "error" || status === "missing") return "error";
+    if (status === "needs_update") return "pending";
     if (status === "converted") return "converted";
     return "";
+  }
+
+  /* The status to show for a song.
+   *
+   * The bridge sends display_status, which folds in a deleted file and an
+   * unsaved edit. Older bridges sent only status, so fall back to it.
+   */
+  function trackStatus(track) {
+    return track.display_status || track.status;
+  }
+
+  /* Which ticked songs a stage can actually act on.
+   *
+   * The desktop filters this before starting a job; without the same
+   * filter the panel used to start jobs that silently did nothing.
+   */
+  function eligibleFor(stage, tracks) {
+    return (tracks || []).filter(function (track) {
+      if (stage === "download") return true;
+      if (stage === "convert") {
+        // A retag works on the existing file; anything else needs the
+        // download that is kept for converting.
+        return !!(track.has_raw || (track.has_file && !track.file_missing));
+      }
+      if (stage === "sync") {
+        return !!(track.has_file && !track.file_missing);
+      }
+      return false;
+    });
+  }
+
+  /* The songs a multi-stage run can act on.
+   *
+   * The last stage decides: a download run can take anything, convert
+   * needs downloaded audio, and sync needs a converted file.
+   */
+  function eligibleForStages(stages, tracks) {
+    var list = tracks || [];
+    if (stages.indexOf("download") >= 0) return list;
+    if (stages.indexOf("sync") >= 0) return eligibleFor("sync", list);
+    if (stages.indexOf("convert") >= 0) return eligibleFor("convert", list);
+    return list;
+  }
+
+  /* The body a review dialog sends.
+   *
+   * Translate and AI reviews own a title and an artist. The album and
+   * track number belong to other dialogs, so they are not sent: the bridge
+   * writes only the fields it receives.
+   */
+  function reviewMetadataBody(row) {
+    return {
+      track_id: row.track_id,
+      title: row.title,
+      artist: row.artist
+    };
+  }
+
+  function albumMetadataBody(track, album, number) {
+    return {
+      track_id: track.id,
+      title: track.title,
+      artist: track.artist,
+      album: album,
+      track_number: number
+    };
+  }
+
+  function lookupMetadataBody(row) {
+    return {
+      track_id: row.track_id,
+      title: row.title,
+      artist: row.artist,
+      album: row.album,
+      track_number: row.track_number
+    };
   }
 
   // ------------------------------------------------------------ Spotify side
@@ -141,38 +244,123 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
     return uri;
   }
 
-  async function syncFolder(folder) {
-    var playlistUri = await ensurePlaylist(folder.title);
-    var contents = await platform().PlaylistAPI.getContents(playlistUri);
-    var items = (contents && contents.items) || [];
-    var playlistUris = items.map(function (item) { return item.uri; });
+  /* Read every entry of a playlist.
+   *
+   * getContents returns one page. Mapping that page as the whole playlist
+   * made out-of-page songs look absent, so a sync could add duplicates and
+   * never remove a song beyond the first page.
+   */
+  async function readPlaylist(playlistUri) {
+    var items = [];
+    var offset = 0;
+    for (var page = 0; page < 100; page++) {
+      var contents = await platform().PlaylistAPI.getContents(playlistUri, {
+        offset: offset,
+        limit: PLAYLIST_PAGE
+      });
+      var batch = (contents && contents.items) || [];
+      items = items.concat(batch);
+      if (batch.length < PLAYLIST_PAGE) break;
+      offset += batch.length;
+    }
+    return items;
+  }
 
-    var localTracks = await platform().LocalFilesAPI.getTracks();
+  /* Read Spotify's Local Files index, and say whether the read is whole.
+   *
+   * An empty list is what Spotify returns while it is scanning or before
+   * it has indexed a folder. The bridge refuses to plan removals on that
+   * evidence, and this flag is how it knows.
+   */
+  async function readLocalFiles() {
+    var tracks = await platform().LocalFilesAPI.getTracks();
+    var list = tracks || [];
+    return { tracks: list, complete: list.length > 0 };
+  }
+
+  /* Work out what a sync would do, without changing anything. */
+  async function planSync(folder) {
+    var playlistUri = await ensurePlaylist(folder.title);
+    var items = await readPlaylist(playlistUri);
+    var playlistUris = items.map(function (item) { return item.uri; });
+    var local = await readLocalFiles();
+
     var plan = await api("POST", "/api/sync/plan", {
       folder_id: folder.id,
-      local_tracks: slimLocalTracks(localTracks),
-      playlist_uris: playlistUris
+      local_tracks: slimLocalTracks(local.tracks),
+      playlist_uris: playlistUris,
+      local_files_complete: local.complete
     });
+    return { playlistUri: playlistUri, items: items, plan: plan };
+  }
 
-    if (plan.to_add.length) {
-      await platform().PlaylistAPI.add(playlistUri, plan.to_add, {});
+  async function addInChunks(playlistUri, uris) {
+    for (var i = 0; i < uris.length; i += PLAYLIST_CHUNK) {
+      await platform().PlaylistAPI.add(
+        playlistUri, uris.slice(i, i + PLAYLIST_CHUNK), {}
+      );
     }
-    if (plan.to_remove.length) {
-      var rows = items
-        .filter(function (item) { return plan.to_remove.indexOf(item.uri) >= 0; })
-        .map(function (item) { return { uid: item.uid || "", uri: item.uri }; });
-      if (rows.length) await platform().PlaylistAPI.remove(playlistUri, rows);
-    }
+  }
 
+  async function removeInChunks(playlistUri, items, uris) {
+    var wanted = {};
+    uris.forEach(function (uri) { wanted[uri] = true; });
+    var rows = items
+      .filter(function (item) { return wanted[item.uri]; })
+      .map(function (item) { return { uid: item.uid || "", uri: item.uri }; });
+    for (var i = 0; i < rows.length; i += PLAYLIST_CHUNK) {
+      await platform().PlaylistAPI.remove(
+        playlistUri, rows.slice(i, i + PLAYLIST_CHUNK)
+      );
+    }
+  }
+
+  /* Apply a plan the user has approved. Additions are safe; removals are
+   * only ever sent after the preview dialog's explicit confirmation.
+   */
+  async function applySync(playlistUri, plan, items) {
+    if (plan.to_add && plan.to_add.length) {
+      await addInChunks(playlistUri, plan.to_add);
+    }
+    if (plan.to_remove && plan.to_remove.length) {
+      await removeInChunks(playlistUri, items, plan.to_remove);
+    }
     return { playlistUri: playlistUri, plan: plan };
+  }
+
+  /* What to tell the user about a plan. */
+  function describePlan(plan) {
+    var summary = plan.summary || {};
+    if (!plan.to_add.length && !plan.to_remove.length) {
+      var text = "Playlist “up to date”.";
+      if (summary.unmatched) {
+        text = summary.unmatched + " song(s) are not in Spotify's Local "
+          + "Files yet. Download and convert them first, then sync again.";
+      }
+      return text;
+    }
+    var lines = [];
+    if (plan.to_add.length) lines.push(plan.to_add.length + " to add");
+    if (plan.to_remove.length) lines.push(plan.to_remove.length + " to remove");
+    if (summary.unmatched) lines.push(summary.unmatched + " unmatched");
+    return lines.join(", ") + ".";
   }
 
   // ------------------------------------------------------------- components
 
   function Toast(props) {
     if (!props.toast) return null;
-    return h("div", { className: "mdlp-toast " + (props.toast.kind === "error" ? "err" : "ok") },
-      props.toast.text);
+    return h("div", {
+      className: "mdlp-toast " + (props.toast.kind === "error" ? "err" : "ok"),
+      role: "status"
+    },
+      h("span", null, props.toast.text),
+      h("button", {
+        className: "mdlp-toast-close",
+        "aria-label": "Dismiss",
+        onClick: props.onClose
+      }, "×")
+    );
   }
 
   function Modal(props) {
@@ -182,6 +370,61 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
         h("h2", null, props.title),
         props.children
       )
+    );
+  }
+
+  /* A sync is shown before it happens.
+   *
+   * Removals are destructive: a playlist can contain songs the user added
+   * by hand. The confirm button says how many songs will go and is not
+   * the default action, so pressing Enter cannot empty a playlist.
+   */
+  function SyncPreviewDialog(props) {
+    var plan = props.plan;
+    var summary = plan.summary || {};
+    var removes = plan.to_remove.length;
+    var adds = plan.to_add.length;
+    var busyState = React_().useState(false);
+    var busy = busyState[0], setBusy = busyState[1];
+
+    async function apply() {
+      setBusy(true);
+      try {
+        await applySync(props.playlistUri, plan, props.items);
+        props.onDone("Playlist “" + props.folderTitle + "” updated: "
+          + adds + " added, " + removes + " removed.");
+      } catch (err) {
+        props.onError(err.message);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    return h(Modal, { title: "Sync “" + props.folderTitle + "”", onClose: props.onClose },
+      h("p", { className: "mdlp-hint" }, describePlan(plan)),
+      h("ul", { className: "mdlp-preview" },
+        h("li", null, adds + " song(s) will be added"),
+        h("li", { className: removes ? "warn" : "" },
+          removes + " song(s) will be removed from the playlist"),
+        h("li", null, (summary.unmatched || 0) + " song(s) have no Local Files match")),
+      plan.reason ? h("p", { className: "mdlp-unsure" }, plan.reason) : null,
+      removes
+        ? h("p", { className: "mdlp-unsure" },
+            "Songs you added to this playlist by hand are removed too. "
+            + "Cancel to leave the playlist untouched.")
+        : null,
+      h("div", { className: "mdlp-actions" },
+        h("button", { className: "mdlp-btn", onClick: props.onClose },
+          removes ? "Cancel" : "Close"),
+        adds || removes
+          ? h("button", {
+              className: "mdlp-btn " + (removes ? "danger" : "primary"),
+              disabled: busy,
+              onClick: apply
+            }, busy ? "Applying…" : (removes
+              ? "Remove " + removes + " and add " + adds
+              : "Add " + adds + " song(s)"))
+          : null)
     );
   }
 
@@ -229,8 +472,8 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
               h("td", null, h("div", { className: "mdlp-artist" }, track.artist || "—")),
               h("td", null, h("div", { className: "mdlp-artist" }, track.album || "—")),
               h("td", null,
-                h("span", { className: "mdlp-status " + statusClass(track.status) },
-                  statusLabel(track.status)))
+                h("span", { className: "mdlp-status " + statusClass(trackStatus(track)) },
+                  statusLabel(trackStatus(track))))
             );
           })
         )
@@ -265,14 +508,28 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
           album: album,
           track_number: number === "" ? null : Number(number)
         });
+        var started = false;
         if (updateFile && canUpdate) {
-          await api("POST", "/api/jobs", {
+          var stages = ["convert"];
+          if (!track.has_file && !track.has_raw) {
+            stages = ["download", "convert"];
+          }
+          if (track.status === "synced") stages.push("sync");
+          // force rebuilds missing audio; retag rewrites the existing file
+          // instead of re-encoding it.
+          var result = await api("POST", "/api/jobs", {
             track_ids: [track.id],
-            stages: track.status === "synced" ? ["convert", "sync"] : ["convert"],
-            force: true
+            stages: stages,
+            force: true,
+            retag: true
           });
+          if (!result.started) {
+            throw new Error(result.reason || "Music DLP could not start the update.");
+          }
+          started = true;
         }
-        props.onSaved(updateFile ? "Saved and updating the file." : "Saved.");
+        props.onSaved(started ? "Saved and updating the file." : "Saved.",
+          { started: started });
       } catch (err) {
         props.onError(err.message);
       } finally {
@@ -357,11 +614,7 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
       try {
         var chosen = rows.filter(function (row) { return row.checked; });
         for (var i = 0; i < chosen.length; i++) {
-          await api("POST", "/api/metadata", {
-            track_id: chosen[i].track_id,
-            title: chosen[i].title,
-            artist: chosen[i].artist
-          });
+          await api("POST", "/api/metadata", reviewMetadataBody(chosen[i]));
         }
         props.onDone("Applied to " + chosen.length + " song(s).");
       } catch (err) {
@@ -409,24 +662,40 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
     var albumState = React.useState("");
     var startState = React.useState(1);
     var busyState = React.useState(false);
+    var updateState = React.useState(true);
     var album = albumState[0], setAlbum = albumState[1];
     var start = startState[0], setStart = startState[1];
     var busy = busyState[0], setBusy = busyState[1];
+    var updateFile = updateState[0], setUpdateFile = updateState[1];
 
     async function apply() {
       if (!album.trim()) return;
       setBusy(true);
       try {
+        var ids = [];
         for (var i = 0; i < props.tracks.length; i++) {
-          await api("POST", "/api/metadata", {
-            track_id: props.tracks[i].id,
-            title: props.tracks[i].title,
-            artist: props.tracks[i].artist,
-            album: album.trim(),
-            track_number: Number(start) + i
-          });
+          await api("POST", "/api/metadata", albumMetadataBody(
+            props.tracks[i], album.trim(), Number(start) + i
+          ));
+          ids.push(props.tracks[i].id);
         }
-        props.onDone("Numbered " + props.tracks.length + " song(s).");
+        var started = false;
+        if (updateFile) {
+          // Numbering alone does not touch the files. Without this the
+          // album and track number stay in the database while Spotify
+          // keeps showing the old tags.
+          var result = await api("POST", "/api/rewrite", { track_ids: ids });
+          started = !!(result && result.started);
+        }
+        props.onDone(
+          "Numbered " + props.tracks.length + " song(s)."
+          + (updateFile
+            ? (started
+              ? " Rewriting their files now."
+              : " Tick the songs and press Rewrite files to update them.")
+            : ""),
+          { started: started }
+        );
       } catch (err) {
         props.onError(err.message);
       } finally {
@@ -446,6 +715,10 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
         h("label", null, "First track number"),
         h("input", { className: "mdlp-input", type: "number", value: start,
           onChange: function (e) { setStart(e.target.value); } })),
+      h("label", { className: "mdlp-check" },
+        h("input", { type: "checkbox", checked: updateFile,
+          onChange: function (e) { setUpdateFile(e.target.checked); } }),
+        "Rewrite the files so Spotify shows the new tags"),
       h("div", { className: "mdlp-actions" },
         h("button", { className: "mdlp-btn", onClick: props.onClose }, "Cancel"),
         h("button", { className: "mdlp-btn primary", disabled: busy, onClick: apply },
@@ -481,13 +754,7 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
       try {
         var chosen = rows.filter(function (row) { return row.checked; });
         for (var i = 0; i < chosen.length; i++) {
-          await api("POST", "/api/metadata", {
-            track_id: chosen[i].track_id,
-            title: chosen[i].title,
-            artist: chosen[i].artist,
-            album: chosen[i].album,
-            track_number: chosen[i].track_number
-          });
+          await api("POST", "/api/metadata", lookupMetadataBody(chosen[i]));
         }
         props.onDone("Applied album details to " + chosen.length + " song(s).");
       } catch (err) {
@@ -546,6 +813,10 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
     var linkState = React.useState("");
     var loadingState = React.useState(false);
     var reasonState = React.useState("");
+    // True only while a pipeline job is running. Bridge jobs (add, link,
+    // translate, AI, covers, Drive) are awaited by their own call, so the
+    // pipeline poll must not clear their busy state after a second.
+    var watchingState = React.useState(false);
 
     var connection = connectionState[0], setConnection = connectionState[1];
     var health = healthState[0], setHealth = healthState[1];
@@ -560,6 +831,11 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
     var link = linkState[0], setLink = linkState[1];
     var loading = loadingState[0], setLoading = loadingState[1];
     var reason = reasonState[0], setReason = reasonState[1];
+    var watching = watchingState[0], setWatching = watchingState[1];
+    // The health poll lives for the life of the panel; a ref is how it
+    // knows which folder is open without being torn down on every switch.
+    var activeRef = React.useRef(null);
+    activeRef.current = activeFolder;
 
     function notify(text, kind) {
       setToast({ text: text, kind: kind || "ok" });
@@ -580,6 +856,7 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
 
     React.useEffect(function () {
       var alive = true;
+      var wasOffline = false;
 
       async function first() {
         try {
@@ -587,6 +864,7 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
           if (!alive) return;
           setHealth(info);
           setConnection("online");
+          setReason("");
           var list = await refreshFolders();
           if (!alive) return;
           if (list.length) {
@@ -606,18 +884,52 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
       var timer = setInterval(function () {
         api("GET", "/api/health")
           .then(function (info) {
-            if (alive) { setHealth(info); setConnection("online"); setReason(""); }
+            if (!alive) return;
+            setHealth(info);
+            setConnection("online");
+            setReason("");
+            if (wasOffline) {
+              // The app was restarted while the panel was open: its
+              // folders and songs may be different now.
+              wasOffline = false;
+              refreshFolders().catch(function () {});
+              loadTracks(activeRef.current).catch(function () {});
+            }
           })
           .catch(function (err) {
-            if (alive) {
-              setConnection("offline");
-              setReason(err && err.message ? err.message : "");
-            }
+            if (!alive) return;
+            wasOffline = true;
+            setConnection("offline");
+            setReason(err && err.message ? err.message : "");
           });
       }, 5000);
 
       return function () { alive = false; clearInterval(timer); };
     }, []);
+
+    // A toast left on screen forever hid the panel and stacked errors.
+    React.useEffect(function () {
+      if (!toast) return;
+      var timer = setTimeout(function () { setToast(null); }, 8000);
+      return function () { clearTimeout(timer); };
+    }, [toast]);
+
+    async function refreshAll() {
+      setLoading(true);
+      try {
+        var list = await refreshFolders();
+        var id = activeRef.current;
+        if (id !== null && !list.filter(function (f) { return f.id === id; }).length) {
+          id = list.length ? list[0].id : null;
+          setActiveFolder(id);
+        }
+        await loadTracks(id);
+      } catch (err) {
+        notify(err.message, "error");
+      } finally {
+        setLoading(false);
+      }
+    }
 
     async function chooseFolder(id) {
       setActiveFolder(id);
@@ -631,23 +943,28 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
       }
     }
 
-    // Follow the desktop app's progress while a job runs.
+    // Follow the desktop app's progress while a pipeline job runs. This
+    // effect is tied to watching, not to busy: bridge jobs finish inside
+    // their own awaited call, and the pipeline flag is false the whole
+    // time they run, which used to clear their busy state after a second.
     React.useEffect(function () {
-      if (!busy) return;
+      if (!watching) return;
       var timer = setInterval(function () {
         api("GET", "/api/status").then(function (status) {
           if (status.progress && Object.keys(status.progress).length) {
             setProgress(status.progress);
           }
           if (!status.pipeline_running) {
-            loadTracks(activeFolder).catch(function () {});
+            loadTracks(activeRef.current).catch(function () {});
             refreshFolders().catch(function () {});
             setBusy("");
+            setProgress(null);
+            setWatching(false);
           }
         }).catch(function () {});
       }, 1000);
       return function () { clearInterval(timer); };
-    }, [busy, activeFolder]);
+    }, [watching]);
 
     var selectedTracks = tracks.filter(function (t) { return selected.has(t.id); });
 
@@ -684,13 +1001,30 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
         notify("Tick the songs first.", "error");
         return;
       }
+      var chosen = eligibleForStages(stages, selectedTracks);
+      var skipped = selectedTracks.length - chosen.length;
+      if (!chosen.length) {
+        notify(
+          "None of the ticked songs can be used for this step. Download "
+          + "them first, or tick songs that are already downloaded.",
+          "error"
+        );
+        return;
+      }
       setBusy("Starting " + stages.join(" → ") + "…");
       try {
-        await api("POST", "/api/jobs", {
-          track_ids: selectedTracks.map(function (t) { return t.id; }),
+        var result = await api("POST", "/api/jobs", {
+          track_ids: chosen.map(function (t) { return t.id; }),
           stages: stages
         });
-        notify("Working on " + selectedTracks.length + " song(s).");
+        if (!result.started) {
+          setBusy("");
+          notify(result.reason || "Music DLP could not start the job.", "error");
+          return;
+        }
+        setWatching(true);
+        notify("Working on " + chosen.length + " song(s)."
+          + (skipped ? " " + skipped + " skipped (not downloaded yet)." : ""));
       } catch (err) {
         notify(err.message, "error");
         setBusy("");
@@ -698,28 +1032,42 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
     }
 
     async function doSync() {
-      var folder = folders.filter(function (f) { return f.id === activeFolder; })[0];
-      if (!folder) {
-        notify("Choose a folder first.", "error");
-        return;
-      }
-      setBusy("Syncing “" + folder.title + "” to Spotify…");
+      var folderId = activeRef.current;
+      setBusy("Checking the playlist…");
       try {
-        var result = await syncFolder(folder);
-        var summary = result.plan.summary;
-        var lines = [
-          "Playlist “" + folder.title + "” is up to date.",
-          "Added " + summary.add + ", removed " + summary.remove + "."
-        ];
-        if (summary.unmatched) {
-          lines.push(summary.unmatched + " song(s) are not in Spotify's Local Files yet — "
-            + "download and convert them first, then sync again.");
+        // The desktop may have renamed or deleted the folder since the
+        // panel loaded it; syncing a stale id would plan removals for a
+        // folder that no longer exists.
+        var list = await refreshFolders();
+        var folder = list.filter(function (f) { return f.id === folderId; })[0];
+        if (!folder) {
+          setBusy("");
+          notify("That folder no longer exists. Choose a folder and try again.", "error");
+          return;
         }
-        notify(lines.join("\n"));
-      } catch (err) {
-        notify(err.message, "error");
-      } finally {
+
+        var result = await planSync(folder);
+        var plan = result.plan;
         setBusy("");
+
+        if (!plan.to_add.length && !plan.to_remove.length) {
+          notify(describePlan(plan));
+          if (plan.reason && !plan.safe_to_remove) notify(plan.reason, "error");
+          return;
+        }
+
+        // Nothing is changed until the preview is confirmed. Removals in
+        // particular can include songs the user added by hand.
+        setDialog({
+          type: "sync",
+          folderTitle: folder.title,
+          playlistUri: result.playlistUri,
+          items: result.items,
+          plan: plan
+        });
+      } catch (err) {
+        setBusy("");
+        notify(err.message, "error");
       }
     }
 
@@ -784,7 +1132,7 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
         var parts = Object.keys(counts).map(function (key) { return key + ": " + counts[key]; });
         notify("Covers — " + (parts.join(", ") || "nothing to do")
           + (done.result.errors.length ? "\n" + done.result.errors.join("\n") : ""));
-        loadTracks(activeFolder).catch(function () {});
+        loadTracks(activeRef.current).catch(function () {});
       } catch (err) {
         notify(err.message, "error");
       } finally {
@@ -828,15 +1176,18 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
       if (!selectedTracks.length) return notify("Tick the songs first.", "error");
       setBusy("Rewriting the files…");
       try {
-        var job = await api("POST", "/api/rewrite", {
+        var result = await api("POST", "/api/rewrite", {
           track_ids: selectedTracks.map(function (t) { return t.id; })
         });
-        var done = await waitForJob(job);
-        if (done.status === "error") throw new Error(done.error);
-        notify("Files rewritten and the Spotify copies updated.");
+        if (!result.started) {
+          setBusy("");
+          notify(result.reason || "Music DLP could not start the rewrite.", "error");
+          return;
+        }
+        setWatching(true);
+        notify("Rewriting " + result.tracks + " file(s)…");
       } catch (err) {
         notify(err.message, "error");
-      } finally {
         setBusy("");
       }
     }
@@ -872,6 +1223,13 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
 
     function closeDialog() { setDialog(null); }
 
+    function finish(text, extra) {
+      notify(text);
+      closeDialog();
+      if (extra && extra.started) setWatching(true);
+      loadTracks(activeRef.current).catch(function () {});
+    }
+
     var folderList = h("aside", { className: "mdlp-folders" },
       h("div", {
         className: "mdlp-folder " + (activeFolder === null ? "active" : ""),
@@ -897,11 +1255,17 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
         h("h1", null, "Music DLP"),
         h("span", { className: "mdlp-badge " + connection }, connection),
         health ? h("span", { className: "mdlp-hint" },
-          "Bridge " + health.version + " · playlists go to “" + health.dlp_folder + "”") : null
+          "Bridge " + health.version + " · playlists go to “" + health.dlp_folder + "”") : null,
+        h("button", {
+          className: "mdlp-btn mdlp-refresh",
+          onClick: refreshAll,
+          disabled: loading,
+          title: "Reload folders and songs from Music DLP"
+        }, "Refresh")
       ),
 
       connection === "offline"
-        ? h("div", { className: "mdlp-toast err" },
+        ? h("div", { className: "mdlp-banner err" },
             "Music DLP is not running, or the bridge is switched off. "
             + "Open the Music DLP app on this computer and leave it running."
             + (reason ? "\n" + reason : ""))
@@ -975,15 +1339,13 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
           : null
       ) : null,
 
-      h(Toast, { toast: toast }),
-
       dialog && dialog.type === "edit"
         ? h(EditDialog, {
             track: dialog.track,
             onClose: closeDialog,
             onInfo: function (text) { notify(text); },
             onError: function (text) { notify(text, "error"); },
-            onSaved: function (text) { notify(text); closeDialog(); loadTracks(activeFolder); }
+            onSaved: function (text, extra) { finish(text, extra); }
           })
         : null,
 
@@ -994,7 +1356,7 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
             rows: dialog.rows,
             onClose: closeDialog,
             onError: function (text) { notify(text, "error"); },
-            onDone: function (text) { notify(text); closeDialog(); loadTracks(activeFolder); }
+            onDone: function (text, extra) { finish(text, extra); }
           })
         : null,
 
@@ -1003,7 +1365,7 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
             tracks: selectedTracks,
             onClose: closeDialog,
             onError: function (text) { notify(text, "error"); },
-            onDone: function (text) { notify(text); closeDialog(); loadTracks(activeFolder); }
+            onDone: function (text, extra) { finish(text, extra); }
           })
         : null,
 
@@ -1014,9 +1376,24 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
             rows: dialog.rows,
             onClose: closeDialog,
             onError: function (text) { notify(text, "error"); },
-            onDone: function (text) { notify(text); closeDialog(); loadTracks(activeFolder); }
+            onDone: function (text, extra) { finish(text, extra); }
           })
-        : null
+        : null,
+
+      dialog && dialog.type === "sync"
+        ? h(SyncPreviewDialog, {
+            folderTitle: dialog.folderTitle,
+            playlistUri: dialog.playlistUri,
+            items: dialog.items,
+            plan: dialog.plan,
+            onClose: closeDialog,
+            onError: function (text) { notify(text, "error"); },
+            onDone: function (text) { finish(text); }
+          })
+        : null,
+
+      // Last, so a message is never hidden behind a dialog.
+      h(Toast, { toast: toast, onClose: function () { setToast(null); } })
     );
   }
 
