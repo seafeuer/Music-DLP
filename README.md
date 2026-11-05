@@ -298,8 +298,10 @@ the same for one song.
 - **Edit → Find duplicate songs…** groups songs that look like the same
   recording added twice, keeps the copy that is furthest along, and lets you
   remove the rest.
-- **Ctrl+Z** undoes the last rename, translation, move into a folder, folder
-  creation, or removal that kept its files.
+- **Ctrl+Z** undoes the last song rename or translation, moving songs into a
+  folder, folder creation, or a removal that kept its files (songs or a
+  whole link). Folder renames, moving a link between folders, and anything
+  that deleted files are not undoable.
 - **F2** edits the highlighted song.
 - **Edit → Find missing files…** reconnects songs whose audio is in another
   folder — after moving the library, or after copying it from another
