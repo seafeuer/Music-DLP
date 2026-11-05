@@ -16,6 +16,7 @@ import logging
 import os
 import re
 import threading
+import time
 import uuid
 from dataclasses import dataclass, field
 from http import HTTPStatus
@@ -62,6 +63,8 @@ class Job:
     status: str = "running"
     result: Any = None
     error: str = ""
+    # Monotonic time the job stopped running, used to forget it later.
+    finished_at: Optional[float] = None
 
     def to_dict(self) -> dict:
         return {
@@ -73,16 +76,35 @@ class Job:
         }
 
 
+# How long a finished job's answer stays available. The panel gives up
+# waiting after 12 minutes, so an hour is plenty for a slow tab to come back
+# and read a result, while a long-running desktop session no longer grows the
+# registry without bound.
+FINISHED_JOB_TTL = 3600.0
+
+
 @dataclass
 class JobRegistry:
     """Runs slow work on a thread and keeps the answer for the panel."""
 
     jobs: dict[str, Job] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
+    ttl_seconds: float = FINISHED_JOB_TTL
+
+    def _prune_locked(self) -> None:
+        """Forget finished jobs older than the TTL. Caller holds the lock."""
+        cutoff = time.monotonic() - self.ttl_seconds
+        stale = [
+            job_id for job_id, job in self.jobs.items()
+            if job.finished_at is not None and job.finished_at < cutoff
+        ]
+        for job_id in stale:
+            del self.jobs[job_id]
 
     def start(self, kind: str, work: Callable[[], Any]) -> Job:
         job = Job(id=uuid.uuid4().hex[:12], kind=kind)
         with self._lock:
+            self._prune_locked()
             self.jobs[job.id] = job
 
         def run() -> None:
@@ -93,6 +115,8 @@ class JobRegistry:
                 logger.exception("Bridge job %s failed", kind)
                 job.error = str(exc)
                 job.status = "error"
+            finally:
+                job.finished_at = time.monotonic()
 
         threading.Thread(
             target=run, name=f"MusicDLP-Bridge-{kind}", daemon=True
@@ -101,11 +125,13 @@ class JobRegistry:
 
     def get(self, job_id: str) -> Optional[Job]:
         with self._lock:
+            self._prune_locked()
             return self.jobs.get(job_id)
 
     def has_running(self) -> bool:
         """True while any bridge job is still working."""
         with self._lock:
+            self._prune_locked()
             return any(job.status == "running" for job in self.jobs.values())
 
 

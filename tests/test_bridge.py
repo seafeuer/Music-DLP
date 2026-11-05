@@ -731,3 +731,41 @@ def test_translation_follows_the_desktop_artist_setting(env, monkeypatch):
     _call(bridge, "/api/translate", method="POST", body={"track_ids": [track_id]})
 
     assert captured["translate_artist"] is False
+
+
+# ---------------------------------------------------------- job registry TTL
+
+
+def test_a_finished_job_records_when_it_stopped():
+    from musicdlp.services.bridge import JobRegistry
+
+    registry = JobRegistry()
+    job = registry.start("quick", lambda: 7)
+    for _ in range(500):
+        if job.status != "running":
+            break
+        time.sleep(0.01)
+    assert job.status == "done"
+    assert job.result == 7
+    assert job.finished_at is not None
+
+
+def test_the_registry_forgets_finished_jobs_after_the_ttl():
+    """M25: jobs used to accumulate for the life of the desktop session."""
+    from musicdlp.services.bridge import Job, JobRegistry
+
+    registry = JobRegistry(ttl_seconds=60)
+    now = time.monotonic()
+    registry.jobs["old"] = Job(
+        id="old", kind="sync", status="done", finished_at=now - 61
+    )
+    registry.jobs["fresh"] = Job(
+        id="fresh", kind="sync", status="done", finished_at=now
+    )
+    registry.jobs["running"] = Job(id="running", kind="sync")
+
+    assert registry.get("old") is None
+    assert "old" not in registry.jobs
+    # A recent result and a job that is still working must survive.
+    assert registry.get("fresh") is not None
+    assert registry.get("running") is not None
