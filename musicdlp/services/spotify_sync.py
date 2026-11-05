@@ -96,6 +96,10 @@ class SyncPlan:
     # the song may not be converted yet, or Spotify may not have rescanned.
     unmatched: list[FolderTrack] = field(default_factory=list)
     matched: list[tuple[FolderTrack, str]] = field(default_factory=list)
+    # Why removals were held back. Empty when they are allowed.
+    folder_track_count: int = 0
+    safe_to_remove: bool = False
+    remove_blocked_reason: str = ""
 
     @property
     def is_empty(self) -> bool:
@@ -107,6 +111,9 @@ class SyncPlan:
             "remove": len(self.to_remove),
             "unmatched": len(self.unmatched),
             "matched": len(self.matched),
+            "folder_tracks": self.folder_track_count,
+            "safe_to_remove": self.safe_to_remove,
+            "reason": self.remove_blocked_reason,
         }
 
 
@@ -166,23 +173,34 @@ def build_plan(
     folder_tracks: Iterable[FolderTrack],
     local_tracks: Iterable[LocalTrack],
     playlist_uris: Iterable[str],
+    *,
+    local_files_complete: bool = False,
 ) -> SyncPlan:
     """Return the additions and removals that make the playlist match.
 
-    The playlist is mirrored exactly: songs in it that the folder does not
-    contain are removed, including real Spotify tracks added by hand.
+    Additions are always safe: a song the playlist does not have yet is
+    simply appended. Removals are not, because the folder is mirrored
+    exactly and a song the panel merely failed to see would be deleted.
+    Spotify can return an empty or partial Local Files list while it is
+    still scanning, after a tag edit, or before a folder is indexed, so
+    ``local_files_complete`` has to be true and the folder has to contain
+    songs before anything is removed. When it is not, the pending removals
+    are held back and the reason is reported instead.
     """
+    folder_list = list(folder_tracks)
+    local_list = list(local_tracks)
+
     index: dict[str, list[LocalTrack]] = {}
-    for local in local_tracks:
+    for local in local_list:
         if not local.uri:
             continue
         index.setdefault(_title_key(local.title), []).append(local)
 
-    plan = SyncPlan()
+    plan = SyncPlan(folder_track_count=len(folder_list))
     wanted: list[str] = []
     seen: set[str] = set()
 
-    for folder_track in folder_tracks:
+    for folder_track in folder_list:
         candidates = index.get(_title_key(folder_track.title)) or []
         match = _pick(candidates, folder_track)
         if match is None:
@@ -197,7 +215,27 @@ def build_plan(
     current_set = set(current)
 
     plan.to_add = [uri for uri in wanted if uri not in current_set]
-    plan.to_remove = [uri for uri in current if uri not in seen]
+
+    if not folder_list:
+        plan.remove_blocked_reason = (
+            "The folder has no songs, so syncing would empty the playlist."
+        )
+    elif not local_files_complete or not local_list:
+        plan.remove_blocked_reason = (
+            "Spotify's Local Files list was empty or incomplete. "
+            "Nothing was removed; try again once Spotify has rescanned."
+        )
+    elif current and not plan.matched:
+        plan.remove_blocked_reason = (
+            "None of the folder's songs matched Spotify's Local Files, "
+            "so the playlist was left alone. Rescan Local Files and retry."
+        )
+
+    plan.safe_to_remove = not plan.remove_blocked_reason
+    plan.to_remove = (
+        [uri for uri in current if uri not in seen]
+        if plan.safe_to_remove else []
+    )
     return plan
 
 

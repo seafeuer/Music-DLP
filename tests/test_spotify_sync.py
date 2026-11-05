@@ -43,6 +43,7 @@ def test_a_song_no_longer_in_the_folder_is_removed():
         folder,
         local,
         ["spotify:local:A:S:How+Come:140", "spotify:local:A:S:Other:200"],
+        local_files_complete=True,
     )
 
     assert plan.to_remove == ["spotify:local:A:S:Other:200"]
@@ -51,9 +52,70 @@ def test_a_song_no_longer_in_the_folder_is_removed():
 def test_a_real_spotify_track_is_removed_by_an_exact_mirror():
     folder = [FolderTrack(1, "How Come", "Young Thug", 140)]
     local = [_local("spotify:local:A:S:How+Come:140", "How Come", "Young Thug", seconds=140)]
-    plan = build_plan(folder, local, ["spotify:track:abc123"])
+    plan = build_plan(
+        folder, local, ["spotify:track:abc123"], local_files_complete=True
+    )
 
     assert plan.to_remove == ["spotify:track:abc123"]
+
+
+def test_an_empty_local_index_never_removes_anything():
+    """Spotify can answer with an empty index while it is scanning."""
+    folder = [FolderTrack(1, "How Come", "Young Thug", 140)]
+    playlist = ["spotify:local:A:S:How+Come:140", "spotify:track:hand-picked"]
+
+    plan = build_plan(folder, [], playlist, local_files_complete=True)
+
+    assert plan.to_remove == []
+    assert plan.safe_to_remove is False
+    assert "incomplete" in plan.remove_blocked_reason.lower()
+
+
+def test_an_incomplete_local_scan_never_removes_anything():
+    folder = [FolderTrack(1, "How Come", "Young Thug", 140)]
+    local = [_local("spotify:local:A:S:Other:200", "Other", "Someone", seconds=200)]
+
+    plan = build_plan(
+        folder,
+        local,
+        ["spotify:local:A:S:Other:200"],
+        local_files_complete=False,
+    )
+
+    assert plan.to_remove == []
+    assert plan.safe_to_remove is False
+
+
+def test_an_empty_folder_never_empties_the_playlist():
+    playlist = ["spotify:local:A:S:How+Come:140", "spotify:track:hand-picked"]
+
+    plan = build_plan([], [], playlist, local_files_complete=True)
+
+    assert plan.to_remove == []
+    assert plan.safe_to_remove is False
+    assert "no songs" in plan.remove_blocked_reason.lower()
+
+
+def test_a_complete_scan_with_no_matches_leaves_the_playlist_alone():
+    folder = [FolderTrack(1, "How Come", "Young Thug", 140)]
+    local = [_local("spotify:local:A:S:Elsewhere:200", "Elsewhere", "Someone", seconds=200)]
+    playlist = ["spotify:local:A:S:How+Come:141"]
+
+    plan = build_plan(folder, local, playlist, local_files_complete=True)
+
+    assert plan.to_remove == []
+    assert plan.safe_to_remove is False
+    assert "matched" in plan.remove_blocked_reason.lower()
+
+
+def test_additions_still_work_when_removals_are_held_back():
+    folder = [FolderTrack(1, "How Come", "Young Thug", 140)]
+    local = [_local("spotify:local:A:S:How+Come:140", "How Come", "Young Thug", seconds=140)]
+
+    plan = build_plan(folder, local, [], local_files_complete=False)
+
+    assert plan.to_add == ["spotify:local:A:S:How+Come:140"]
+    assert plan.to_remove == []
 
 
 def test_a_song_with_no_local_file_is_reported_not_added():
