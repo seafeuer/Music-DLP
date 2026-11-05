@@ -165,3 +165,51 @@ def test_relinking_leaves_a_present_file_alone(tmp_path, library):
 
     LibraryService(db, Settings(), None).relink_from_folder(elsewhere)
     assert db.get_track(tid).mp3_path == str(song)
+
+
+def test_relinking_restores_every_missing_format(tmp_path, library):
+    """One missing format used to hide the other forever."""
+    from musicdlp.services.library import LibraryService
+
+    db, source = library
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "Song.mp3").write_bytes(b"x" * 100)
+    (elsewhere / "Song.m4a").write_bytes(b"x" * 100)
+
+    tid = _track(
+        db, source, "h",
+        mp3_path=str(tmp_path / "gone" / "Song.mp3"),
+        status="synced",
+    )
+    db.update_track(tid, m4a_path=str(tmp_path / "gone" / "Song.m4a"))
+
+    service = LibraryService(db, Settings(), None)
+    first = service.relink_from_folder(elsewhere)
+    second = service.relink_from_folder(elsewhere)
+
+    track = db.get_track(tid)
+    assert first["relinked"] == 1 and second["relinked"] == 0
+    assert Path(track.mp3_path) == elsewhere / "Song.mp3"
+    assert Path(track.m4a_path) == elsewhere / "Song.m4a"
+
+
+def test_relinking_keeps_a_pending_rewrite_pending(tmp_path, library):
+    """Finding the file again does not make its old tags current."""
+    from musicdlp.services.library import LibraryService
+
+    db, source = library
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "Song.mp3").write_bytes(b"x" * 100)
+
+    tid = _track(
+        db, source, "i",
+        mp3_path=str(tmp_path / "gone" / "Song.mp3"),
+        status="converted",
+    )
+    db.update_track(tid, needs_update=1)
+
+    LibraryService(db, Settings(), None).relink_from_folder(elsewhere)
+
+    assert db.get_track(tid).needs_update is True

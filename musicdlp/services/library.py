@@ -30,6 +30,10 @@ from musicdlp.services.ytdlp import YtDlpService
 
 logger = logging.getLogger("musicdlp.library")
 
+# Marks a metadata field the caller did not mention, so a partial edit does
+# not overwrite the fields it does not own.
+_UNSET = object()
+
 
 @dataclass
 class AddResult:
@@ -281,22 +285,36 @@ class LibraryService:
         self,
         track_id: int,
         *,
-        title: str,
-        artist: str = "",
-        album: str = "",
-        track_number: Optional[int] = None,
+        title: object = _UNSET,
+        artist: object = _UNSET,
+        album: object = _UNSET,
+        track_number: object = _UNSET,
     ) -> None:
-        """Save edited metadata and flag the written file as out of date."""
+        """Save edited metadata and flag the written file as out of date.
+
+        Only the fields that are passed are written. A caller that edits a
+        title leaves the album and track number alone, which matters for
+        the panel's review dialogs: they own a title and an artist and used
+        to erase everything else by omission.
+        """
+        updates: dict = {}
+        if title is not _UNSET:
+            updates["meta_title"] = (title or "").strip() or None
+        if artist is not _UNSET:
+            updates["meta_artist"] = (artist or "").strip() or None
+        if album is not _UNSET:
+            updates["meta_album"] = (album or "").strip() or None
+        if track_number is not _UNSET:
+            updates["meta_track"] = track_number
+        if not updates:
+            return
+
         track = self.db.get_track(track_id)
-        self.db.update_track(
-            track_id,
-            meta_title=(title or "").strip() or None,
-            meta_artist=(artist or "").strip() or None,
-            meta_album=(album or "").strip() or None,
-            meta_track=track_number,
-            # A converted file still holds the old tags and filename.
-            needs_update=1 if track and is_converted(track.status) else 0,
+        # A converted file still holds the old tags and filename.
+        updates["needs_update"] = (
+            1 if track and is_converted(track.status) else 0
         )
+        self.db.update_track(track_id, **updates)
 
     def set_suggestion(
         self,
@@ -512,7 +530,6 @@ class LibraryService:
             track_id,
             cover_path=str(found),
             cover_source=COVER_VIDEO,
-            needs_update=0,
         )
         return "updated"
 
@@ -544,22 +561,35 @@ class LibraryService:
             return counts
 
         for track in self.db.get_all_tracks():
-            current = [p for p in (track.mp3_path, track.m4a_path) if p]
-            if any(Path(p).exists() for p in current):
+            stored = [
+                (key, Path(value))
+                for key, value in (
+                    ("mp3_path", track.mp3_path),
+                    ("m4a_path", track.m4a_path),
+                )
+                if value
+            ]
+            if not stored:
                 continue
-            wanted = [Path(p).name.lower() for p in current]
-            found = next(
-                (by_name[name] for name in wanted if name in by_name), None
-            )
-            if found is None:
+            gone = [(key, path) for key, path in stored if not path.exists()]
+            if not gone:
+                continue
+
+            # Every format that is missing is relinked in one pass. Looking
+            # up only the first one left the other missing for good: the
+            # track then counted as "not missing" on the next run.
+            updates = {}
+            for key, path in gone:
+                found = by_name.get(path.name.lower())
+                if found is not None:
+                    updates[key] = str(found)
+            if not updates:
                 counts["missing"] += 1
                 continue
 
-            updates = {"mp3_path": str(found)} if found.suffix.lower() == ".mp3"                 else {"m4a_path": str(found)}
-            # The file is back, so a song that was only marked missing
-            # returns to the state it had.
-            if is_converted(track.status):
-                updates["needs_update"] = 0
+            # A song that was only marked missing returns to the state it
+            # had. A pending rewrite stays pending: the file may have been
+            # found again while its tags are still the old ones.
             self.db.update_track(track.id, **updates)
             counts["relinked"] += 1
         return counts

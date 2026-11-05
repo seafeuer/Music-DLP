@@ -83,7 +83,9 @@ def test_the_upload_picture_replaces_the_cover_in_every_copy(env):
 
     track = db.get_track(track_id)
     assert track.cover_source == "video"
-    assert track.needs_update == 0
+    # Changing the picture says nothing about the song's details. Clearing
+    # this flag would hide a pending rename/retag from the next run.
+    assert track.needs_update == 1
     assert track.cover_path.endswith("art.jpg")
 
 
