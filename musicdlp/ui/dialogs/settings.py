@@ -94,6 +94,14 @@ class SettingsDialog(QDialog):
         self._build_spotify()
         self._build_advanced()
 
+        # Select the requested tab only after every tab exists. This used
+        # to run at the end of the AI tab, so start_tab="Spotify" or
+        # "Advanced" silently opened General instead.
+        if self._start_tab:
+            index = self._tab_index(self._start_tab)
+            if index >= 0:
+                self.tabs.setCurrentIndex(index)
+
         self.footer = DialogFooter(self)
         self.footer.set_primary("Save", self._save)
         layout.addWidget(self.footer)
@@ -353,13 +361,21 @@ class SettingsDialog(QDialog):
         form.addRow("Format sent to Spotify", self.spotify_format)
 
         self.copy_mode = QComboBox()
-        self.copy_mode.addItem("Copy (keep a copy in the output folder)", "copy")
-        self.copy_mode.addItem("Move (remove from the output folder)", "move")
+        self.copy_mode.addItem("Copy (keep the file)", "copy")
+        self.copy_mode.addItem("Move (remove the file)", "move")
+        self.copy_mode.setToolTip(
+            "Copy leaves the converted file in your output folder; move "
+            "takes it out of there when it is sent to Spotify"
+        )
         self._select(self.copy_mode, self.settings.spotify_copy_mode)
         form.addRow("When sending", self.copy_mode)
 
-        self.restart_check = QCheckBox(
-            "Restart Spotify after sending so it rescans local files"
+        # A long checkbox label set the tab's minimum width wider than the
+        # dialog, so the right-hand controls were clipped. The tooltip
+        # carries the reason.
+        self.restart_check = QCheckBox("Restart Spotify after sending")
+        self.restart_check.setToolTip(
+            "So Spotify rescans the folder and shows the new songs"
         )
         self.restart_check.setChecked(self.settings.spotify_auto_restart)
         form.addRow("", self.restart_check)
@@ -571,11 +587,6 @@ class SettingsDialog(QDialog):
         )
 
         self._add_tab(tab, "AI")
-
-        if self._start_tab:
-            index = self._tab_index(self._start_tab)
-            if index >= 0:
-                self.tabs.setCurrentIndex(index)
 
     def _tab_index(self, name: str) -> int:
         for index in range(self.tabs.count()):

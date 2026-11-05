@@ -1964,3 +1964,21 @@ def test_settings_labels_are_paired_with_their_fields(qapp, window):
     }
     assert buddies["Theme"] is dialog.theme_combo
     assert buddies["Format sent to Spotify"] is dialog.spotify_format
+
+
+def test_the_spotify_settings_tab_fits_its_dialog(qapp, window):
+    """A long checkbox label made the tab wider than the dialog, so the
+    Browse and Find it buttons were clipped off the right edge."""
+    main, _db, _data = window
+    dialog = SettingsDialog(
+        main.settings, main.ctx.ffmpeg, main.ctx.ytdlp, main.ctx.spotify,
+        main, start_tab="Spotify",
+    )
+    dialog.resize(760, 660)
+    dialog.show()
+    qapp.processEvents()
+
+    scroll = dialog.tabs.currentWidget()
+    assert dialog.tabs.tabText(dialog.tabs.currentIndex()) == "Spotify"
+    assert scroll.widget().width() <= scroll.viewport().width()
+    dialog.close()
