@@ -1884,3 +1884,29 @@ def test_settings_says_when_the_spotify_folder_cannot_be_opened(
     spotify_dialog._open_folder()
     assert len(warned) == 2
     assert "Could not open" in warned[-1][1]
+
+
+def test_settings_can_switch_the_spotify_panel_off_and_change_its_port(
+    qapp, window, monkeypatch
+):
+    """M13: the README said "turn it off in Settings"; no control existed."""
+    main, _db, _data = window
+    monkeypatch.setattr(Settings, "save", lambda self, path=None: None)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
+
+    dialog = SettingsDialog(
+        main.settings, main.ctx.ffmpeg, main.ctx.ytdlp, main.ctx.spotify, main
+    )
+    assert dialog.bridge_check.isChecked() is True
+    dialog.bridge_check.setChecked(False)
+    # The port only matters while the panel is on.
+    assert dialog.bridge_port_spin.isEnabled() is False
+    dialog.bridge_port_spin.setValue(9001)
+    dialog._save()
+
+    saved = dialog.result_settings
+    assert saved is not None
+    assert saved.bridge_enabled is False
+    assert saved.bridge_port == 9001
+    # The token is not shown in the dialog and must survive a save.
+    assert saved.bridge_token == main.settings.bridge_token

@@ -361,6 +361,39 @@ class SettingsDialog(QDialog):
         form.addRow("", self.restart_check)
         layout.addLayout(form)
 
+        # ---- The panel inside Spotify -------------------------------------
+        panel_title = QLabel("Spotify panel (inside Spotify)")
+        panel_title.setObjectName("sectionTitle")
+        layout.addWidget(panel_title)
+
+        panel_form = QFormLayout()
+        self.bridge_check = QCheckBox(
+            "Show Music DLP in Spotify's left nav"
+        )
+        self.bridge_check.setChecked(self.settings.bridge_enabled)
+        self.bridge_check.setToolTip(
+            "The panel talks to Music DLP over a local, token-protected "
+            "connection. Turning this off makes the panel unavailable."
+        )
+        panel_form.addRow("", self.bridge_check)
+
+        self.bridge_port_spin = QSpinBox()
+        self.bridge_port_spin.setRange(1024, 65535)
+        self.bridge_port_spin.setValue(int(self.settings.bridge_port or 8317))
+        self.bridge_port_spin.setEnabled(self.settings.bridge_enabled)
+        self.bridge_check.toggled.connect(self.bridge_port_spin.setEnabled)
+        panel_form.addRow("Local port", self.bridge_port_spin)
+        layout.addLayout(panel_form)
+
+        panel_hint = QLabel(
+            "Changes apply the next time Music DLP starts; reload Spotify "
+            "after that. The panel itself is installed separately with "
+            r"spicetify\install-panel.ps1."
+        )
+        panel_hint.setWordWrap(True)
+        panel_hint.setObjectName("mutedSmall")
+        layout.addWidget(panel_hint)
+
         # ---- Google Drive, for listening on a phone ----------------------
         drive_box = QVBoxLayout()
         drive_title = QLabel("Google Drive (for your phone)")
@@ -1151,11 +1184,11 @@ class SettingsDialog(QDialog):
             translate_language=self.settings.translate_language,
             translate_style=self.settings.translate_style,
             translate_artist=self.settings.translate_artist,
-            # These are not shown here either. Dropping them would reset
-            # the bridge token, and the panel inside Spotify would then
-            # fail its token check on the next start.
-            bridge_enabled=self.settings.bridge_enabled,
-            bridge_port=self.settings.bridge_port,
+            # The token is not shown here; dropping it would reset it and
+            # the panel inside Spotify would fail its token check on the
+            # next start. The switch and port are the panel section above.
+            bridge_enabled=self.bridge_check.isChecked(),
+            bridge_port=self.bridge_port_spin.value(),
             bridge_token=self.settings.bridge_token,
             spotify_dlp_folder=self.settings.spotify_dlp_folder,
             log_level=self.log_level_combo.currentData(),
