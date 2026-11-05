@@ -21,7 +21,7 @@ from PySide6.QtWidgets import QApplication
 
 from musicdlp.core.models import (
     CANCELLED, CONVERTED, CONVERTING, DOWNLOADED, DOWNLOADING, ERROR,
-    MISSING, NEEDS_UPDATE, NEW, QUEUED, SYNCED, SYNCING,
+    MISSING, NEEDS_UPDATE, NEW, QUEUED, SYNCED, SYNCING, SYNC_PENDING,
 )
 
 # (background, foreground) for status pills. Light pills with dark text read
@@ -40,6 +40,9 @@ STATUS_COLORS: dict[str, tuple[str, str]] = {
     CANCELLED: ("#e5e7eb", "#4b5563"),
     NEEDS_UPDATE: ("#ffedd5", "#9a3412"),
     MISSING: ("#fee2e2", "#991b1b"),
+    # A failed Spotify copy is not an audio error, so it gets the amber
+    # "needs attention" pill rather than the red one.
+    SYNC_PENDING: ("#ffedd5", "#9a3412"),
 }
 
 # The single accent used for the one primary action, selection, and focus.

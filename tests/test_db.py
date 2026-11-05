@@ -1,8 +1,12 @@
 """Database schema and repository behavior."""
 
 import sqlite3
+from types import SimpleNamespace
 
 from musicdlp.core.db import Database
+from musicdlp.core.models import (
+    SYNC_PENDING, display_status, status_label,
+)
 
 
 def _db(tmp_path) -> Database:
@@ -155,6 +159,24 @@ def test_status_counts_and_sync_error(tmp_path):
     assert counts["converted"] == 1
     assert db.get_track(a).sync_error == "copy failed"
     db.close()
+
+
+def test_a_failed_spotify_copy_is_not_shown_as_an_audio_error():
+    """M20: the file is fine; only the delivery has to be retried.
+
+    A convert-only run, a relink or a metadata edit never clears
+    ``sync_error``, so before this policy the row said "Error" forever even
+    though its audio was healthy. The error stays visible, but it is
+    labelled as a pending Spotify copy instead.
+    """
+    track = SimpleNamespace(
+        status="converted", needs_update=False, sync_error="copy failed",
+    )
+    assert display_status(track) == SYNC_PENDING
+    assert status_label(SYNC_PENDING) == "Spotify copy needs sending"
+
+    track.sync_error = None
+    assert display_status(track) == "converted"
 
 
 def test_foreign_keys_cascade_source_links(tmp_path):

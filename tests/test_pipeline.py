@@ -735,6 +735,57 @@ def test_a_failed_copy_is_not_reported_as_synced(env):
     assert track.sync_error
 
 
+def test_a_successful_sync_clears_a_previous_sync_error(env):
+    """M20: a retried delivery that succeeds must stop saying it failed."""
+    out = Path(env["settings"].output_dir) / "MP3"
+    out.mkdir(parents=True, exist_ok=True)
+    song = out / "Song 1.mp3"
+    song.write_bytes(b"audio")
+    track_id = env["track_ids"][0]
+    env["db"].update_track(
+        track_id, status="converted", mp3_path=str(song),
+        sync_error="Copying to the Spotify folder failed.",
+    )
+    item = BatchItem(
+        source=env["source"], track=env["db"].get_track(track_id), position=1
+    )
+    env["pipeline"].start([item], ["sync"])
+    env["pipeline"].wait(10)
+
+    track = env["db"].get_track(track_id)
+    assert track.status == "synced"
+    assert track.sync_error is None
+
+
+def test_a_convert_only_run_keeps_the_pending_spotify_label(env):
+    """M20 decision: converting does not prove the Spotify copy arrived.
+
+    Clearing the flag there would hide a real failed delivery until the
+    next sync; the row must keep saying the copy is still to be sent.
+    """
+    out = Path(env["settings"].output_dir) / "MP3"
+    out.mkdir(parents=True, exist_ok=True)
+    song = out / "Song 1.mp3"
+    song.write_bytes(b"audio")
+    raw = Path(env["tmp"]) / "raw" / "song.webm"
+    raw.parent.mkdir(parents=True, exist_ok=True)
+    raw.write_bytes(b"raw")
+    track_id = env["track_ids"][0]
+    env["db"].update_track(
+        track_id, status="converted", mp3_path=str(song),
+        raw_path=str(raw),
+        sync_error="Copying to the Spotify folder failed.",
+    )
+    item = BatchItem(
+        source=env["source"], track=env["db"].get_track(track_id), position=1
+    )
+    env["pipeline"].start([item], ["convert"], force=True, retag=True)
+    env["pipeline"].wait(10)
+
+    track = env["db"].get_track(track_id)
+    assert track.sync_error == "Copying to the Spotify folder failed."
+
+
 def test_a_missing_format_that_cannot_be_rebuilt_stops_claiming_to_exist(
     env, monkeypatch
 ):

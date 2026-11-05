@@ -19,10 +19,15 @@ ERROR = "error"
 CANCELLED = "cancelled"
 NEEDS_UPDATE = "needs_update"
 MISSING = "missing"
+# A converted song whose Spotify copy failed to arrive. It is not an audio
+# error: the file is fine and only the delivery has to be retried. Kept as a
+# distinct display status so the row does not say "Error" forever after a
+# convert-only run, and cleared by the next successful sync.
+SYNC_PENDING = "sync_error"
 
 STATUSES = (
     NEW, QUEUED, DOWNLOADING, DOWNLOADED, CONVERTING, CONVERTED,
-    SYNCING, SYNCED, ERROR, CANCELLED, NEEDS_UPDATE, MISSING,
+    SYNCING, SYNCED, ERROR, CANCELLED, NEEDS_UPDATE, MISSING, SYNC_PENDING,
 )
 
 DOWNLOADED_STATES = (DOWNLOADED, CONVERTING, CONVERTED, SYNCING, SYNCED)
@@ -54,6 +59,7 @@ def status_label(status: str) -> str:
         CANCELLED: "Cancelled",
         NEEDS_UPDATE: "Needs update",
         MISSING: "File missing",
+        SYNC_PENDING: "Spotify copy needs sending",
     }.get(status, status.title())
 
 
@@ -64,7 +70,7 @@ def display_status(track: "Track", file_missing: bool = False) -> str:
     if track.needs_update and is_converted(track.status):
         return NEEDS_UPDATE
     if track.sync_error and track.status in CONVERTED_STATES:
-        return ERROR
+        return SYNC_PENDING
     return track.status
 
 

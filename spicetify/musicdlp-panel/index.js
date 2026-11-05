@@ -31,7 +31,8 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
     error: "Error",
     cancelled: "Cancelled",
     needs_update: "Needs update",
-    missing: "File missing"
+    missing: "File missing",
+    sync_error: "Spotify copy needs sending"
   };
 
   // Spotify accepts about 100 playlist entries per write. Batch bigger
@@ -115,7 +116,7 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
   function statusClass(status) {
     if (status === "synced") return "synced";
     if (status === "error" || status === "missing") return "error";
-    if (status === "needs_update") return "pending";
+    if (status === "needs_update" || status === "sync_error") return "pending";
     if (status === "converted") return "converted";
     return "";
   }

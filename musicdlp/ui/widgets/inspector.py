@@ -244,7 +244,7 @@ class Inspector(QWidget):
         )
         self.retry_button.setEnabled(
             row.file_missing
-            or status in ("error", "cancelled", "needs_update")
+            or status in ("error", "cancelled", "needs_update", "sync_error")
             or bool(track.sync_error)
         )
         self.reveal_button.setEnabled(bool(paths))
@@ -321,7 +321,7 @@ class Inspector(QWidget):
                 "ones. Open “Edit details” and tick “Write these details "
                 "into the audio file now”, or press Re-convert."
             )
-        elif status == "error" and track.sync_error:
+        elif status == "sync_error" and track.sync_error:
             self.hint_label.setText(
                 "The file is fine; only the Spotify copy failed. Press Retry."
             )
