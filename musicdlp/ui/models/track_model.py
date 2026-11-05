@@ -358,6 +358,23 @@ class TrackFilterProxy(QSortFilterProxyModel):
         self.status_filter = value or "all"
         self.endFilterChange()
 
+    def data(self, index, role=Qt.DisplayRole):
+        """Number the rows as they are shown.
+
+        Sorting by title or status used to leave each song's original
+        position in the "#" column, so the visible numbers ran 4, 1, 7.
+        When the order is anything but the position itself, the number is
+        the row's place in this view.
+        """
+        if (
+            role == Qt.DisplayRole
+            and index.isValid()
+            and index.column() == COL_POSITION
+            and self.sortColumn() not in (-1, COL_POSITION)
+        ):
+            return str(index.row() + 1)
+        return super().data(index, role)
+
     def set_search(self, text: str) -> None:
         self.beginFilterChange()
         self.search = (text or "").strip().lower()

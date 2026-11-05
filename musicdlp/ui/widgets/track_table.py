@@ -138,6 +138,9 @@ class TrackTableWidget(QWidget):
     remove_selected_requested = Signal(list)
     open_source_requested = Signal(str)
     clear_search_requested = Signal()
+    # "Clear selection" only clears this view, because ticks are kept per
+    # link. The library-wide clear is a separate action.
+    clear_all_requested = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -220,7 +223,12 @@ class TrackTableWidget(QWidget):
         )
         select_menu.addAction("Needs attention", self.check_problems_visible)
         select_menu.addSeparator()
-        select_menu.addAction("Clear selection", self.model.clear_checks)
+        select_menu.addAction(
+            "Clear selection in this view", self.model.clear_checks
+        )
+        select_menu.addAction(
+            "Clear every ticked song", self.clear_all_requested.emit
+        )
         self.select_button.setMenu(select_menu)
         filter_row.addWidget(self.select_button)
 
@@ -248,7 +256,12 @@ class TrackTableWidget(QWidget):
         actions_menu.addAction(
             "Select needs attention", self.check_problems_visible
         )
-        actions_menu.addAction("Clear selection", self.model.clear_checks)
+        actions_menu.addAction(
+            "Clear selection in this view", self.model.clear_checks
+        )
+        actions_menu.addAction(
+            "Clear every ticked song", self.clear_all_requested.emit
+        )
         self.actions_button.setMenu(actions_menu)
         self.actions_button.setAccessibleName("More actions")
         filter_row.addWidget(self.actions_button)
@@ -267,6 +280,11 @@ class TrackTableWidget(QWidget):
         self.table.setDragDropMode(QAbstractItemView.DragOnly)
         self.table.setDefaultDropAction(Qt.MoveAction)
         self.table.setSortingEnabled(True)
+        # Remember how the user sorted. Every reload used to re-sort by
+        # position, so sorting by title or status was undone by the next
+        # job or edit.
+        self._sort_column = COL_POSITION
+        self._sort_order = Qt.AscendingOrder
         self.table.sortByColumn(COL_POSITION, Qt.AscendingOrder)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -320,7 +338,12 @@ class TrackTableWidget(QWidget):
         self.model.check_changed.connect(self._on_checks_changed)
         self.model.check_toggled.connect(self._select_by_track_id)
         self.table.selectionModel().selectionChanged.connect(self._on_selection_changed)
+        header.sortIndicatorChanged.connect(self._on_sort_changed)
         self._apply_column_visibility()
+
+    def _on_sort_changed(self, column: int, order) -> None:
+        self._sort_column = column
+        self._sort_order = order
 
     # ------------------------------------------------------------------ data
 
@@ -341,7 +364,7 @@ class TrackTableWidget(QWidget):
             source is not None and (source.is_all or source.is_folder)
         )
         self.model.set_rows(rows, checked)
-        self.table.sortByColumn(COL_POSITION, Qt.AscendingOrder)
+        self.table.sortByColumn(self._sort_column, self._sort_order)
 
         if source is None:
             self.title_label.setText("Your library")
@@ -461,29 +484,41 @@ class TrackTableWidget(QWidget):
     def _apply_column_visibility(self) -> None:
         """Hide optional columns when there is not enough width for them.
 
-        This keeps the status readable instead of forcing a horizontal
-        scrollbar and clipping it. The progress column only appears while
-        something is actually running — a column of dashes on every row is
-        noise that looks like an unfinished feature.
+        The title is the one column a song list cannot do without, so every
+        optional column is only shown when at least ``TITLE_MIN`` pixels
+        would remain for it. Before this budget the fixed columns (artist,
+        length, status) were kept at their full width and squeezed the
+        title to about 44 px at the 1000-px window size — wide enough for
+        two letters of a song name.
+
+        The progress column only appears while something is actually
+        running — a column of dashes on every row is noise that looks like
+        an unfinished feature.
         """
         width = self.table.viewport().width()
         mode = getattr(self, "mode", "easy")
+        title_min = 220
 
-        show_format = mode == "pro" and width >= 560
-        show_progress = self._has_progress() and width >= 430
-        # The artist is what tells two songs with the same title apart, so
-        # it is kept as long as the title still has room. The song number
-        # and length are the first to go; the status pill shrinks with
-        # them instead of keeping its full width.
-        show_position = width >= 380
-        show_artist = width >= 440
-        show_duration = width >= 420
-        if not show_artist:
-            show_position = False
-        self.table.setColumnWidth(
-            COL_STATUS, 136 if show_artist else 108
+        # The pill has to fit "Not downloaded" and "Sending to Spotify";
+        # shrinking it clipped the status instead of saving the title room.
+        status_width = 136
+        remaining = width - 32 - status_width  # check box + status
+
+        show_position = remaining - title_min >= 38
+        if show_position:
+            remaining -= 38
+        show_duration = remaining - title_min >= 58
+        if show_duration:
+            remaining -= 58
+        show_artist = remaining - title_min >= 150
+        show_format = (
+            mode == "pro" and remaining - title_min >= 76
         )
+        if show_format:
+            remaining -= 76
+        show_progress = self._has_progress() and remaining - title_min >= 92
 
+        self.table.setColumnWidth(COL_STATUS, status_width)
         self.table.setColumnHidden(COL_FORMAT, not show_format)
         self.table.setColumnHidden(COL_PROGRESS, not show_progress)
         self.table.setColumnHidden(COL_ARTIST, not show_artist)
