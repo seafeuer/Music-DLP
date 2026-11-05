@@ -1921,17 +1921,30 @@ class MainWindow(QMainWindow):
 
         self._start_pipeline(rows, [stage])
 
-    def start_pipeline_for_bridge(
-        self, rows: list[TrackRow], stages: list[str], force: bool = False
-    ) -> None:
+    def start_pipeline_for_bridge(self, request: dict) -> bool:
         """Start a job the panel inside Spotify asked for.
 
         The bridge runs on its own threads; this is called on the GUI
         thread through a queued signal, which is where the pipeline has to
-        be started from. ``force`` rewrites existing files, which is what
-        "Update the audio file now" means.
+        be started from. ``force`` rewrites existing files and ``retag``
+        rewrites their details without re-encoding, which is what "Update
+        the audio file now" means. The bridge waits for the result so it
+        can answer the panel honestly instead of claiming every request
+        started.
         """
-        self._start_pipeline(rows, stages, force=force)
+        request = request or {}
+        started, reason = self._start_pipeline(
+            request.get("rows") or [],
+            request.get("stages") or [],
+            force=bool(request.get("force")),
+            only_synced=bool(request.get("only_synced")),
+            retag=bool(request.get("retag")),
+        )
+        bridge = getattr(self, "bridge", None)
+        request_id = str(request.get("request_id") or "")
+        if bridge is not None and request_id:
+            bridge.report_start(request_id, started, reason)
+        return started
 
     def _start_pipeline(
         self,
@@ -1941,10 +1954,16 @@ class MainWindow(QMainWindow):
         force: bool = False,
         only_synced: bool = False,
         retag: bool = False,
-    ) -> None:
+    ) -> tuple[bool, str]:
         if self._is_busy():
             self.status.set_idle("A job is already running.")
-            return
+            return False, "Music DLP is busy with another job."
+        # Keep the caller's order, but never index a stage the app does not
+        # have: "bogus" used to start a job and then raise KeyError below.
+        known = ("download", "convert", "sync")
+        stages = [stage for stage in known if stage in set(stages)]
+        if not stages:
+            return False, "No step was recognised."
         items = [
             BatchItem(source=row.source, track=row.track, position=row.position)
             for row in rows
@@ -1953,7 +1972,7 @@ class MainWindow(QMainWindow):
             items, stages, force=force, only_synced=only_synced, retag=retag
         ):
             self.status.set_idle("Could not start the job.")
-            return
+            return False, "The job could not be started."
 
         self.track_table.clear_progress()
         self.status.set_busy(f"Starting {' → '.join(stages)}…")
@@ -1967,6 +1986,7 @@ class MainWindow(QMainWindow):
             "Starting %s for %d track(s)", " → ".join(stages), len(items)
         )
         self._update_actions()
+        return True, ""
 
     # -------------------------------------------------------------- pipeline
 

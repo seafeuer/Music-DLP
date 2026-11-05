@@ -29,7 +29,7 @@ from PySide6.QtCore import QObject, Signal
 from musicdlp import __version__
 from musicdlp.core.config import Settings
 from musicdlp.core.db import Database
-from musicdlp.core.models import BatchItem, TrackRow
+from musicdlp.core.models import BatchItem, TrackRow, display_status
 from musicdlp.core.paths import is_isolated
 from musicdlp.services.spotify_sync import (
     LocalTrack,
@@ -102,6 +102,11 @@ class JobRegistry:
     def get(self, job_id: str) -> Optional[Job]:
         with self._lock:
             return self.jobs.get(job_id)
+
+    def has_running(self) -> bool:
+        """True while any bridge job is still working."""
+        with self._lock:
+            return any(job.status == "running" for job in self.jobs.values())
 
 
 # The panel carries its bridge settings in this one line. The installer
@@ -184,6 +189,8 @@ def _jsonable(value: Any) -> Any:
 
 
 def _track_dict(track) -> dict:
+    paths = [Path(path) for path in track.output_paths]
+    file_missing = bool(paths) and not any(path.exists() for path in paths)
     return {
         "id": track.id,
         "title": track.display_title,
@@ -192,9 +199,16 @@ def _track_dict(track) -> dict:
         "track_number": track.display_track,
         "duration": track.duration,
         "status": track.status,
+        # The status a person should see: a converted song whose file was
+        # deleted, or one with an unsaved edit, is not simply "Converted".
+        "display_status": display_status(track, file_missing),
         "url": track.url,
         "thumbnail_url": track.thumbnail_url,
         "has_file": bool(track.output_paths),
+        "has_raw": bool(
+            track.raw_path and Path(track.raw_path).exists()
+        ),
+        "file_missing": file_missing,
         "needs_update": bool(track.needs_update),
         "sync_error": track.sync_error or "",
         "smart_title": track.smart_title or "",
@@ -226,8 +240,10 @@ class Bridge(QObject):
     across; the window connects it to its own handler.
     """
 
-    # (rows, stages) - rows are TrackRow objects ready for BatchItem.
-    start_pipeline = Signal(object, object, bool)
+    # A job request for the GUI thread. It carries a request id that is
+    # answered through ``report_start``, so the panel can be told honestly
+    # whether the desktop accepted it.
+    start_pipeline = Signal(object)
 
     def __init__(
         self,
@@ -255,6 +271,8 @@ class Bridge(QObject):
         self._server: Optional[ThreadingHTTPServer] = None
         self._thread: Optional[threading.Thread] = None
         self._progress: dict = {}
+        self._start_waiters: dict[str, dict] = {}
+        self._start_lock = threading.Lock()
 
     # ------------------------------------------------------------- lifecycle
 
@@ -310,6 +328,77 @@ class Bridge(QObject):
         if missing:
             raise BridgeError(f"Unknown song ids: {missing}")
         return rows
+
+    # ----------------------------------------------------------- mutations
+
+    def _guard_idle(self) -> None:
+        """Refuse a change while the library is already being written.
+
+        The desktop blocks its own edit actions while a job runs; the
+        bridge had no such guard, so a metadata save could land between a
+        convert stage's read and its final write and then be erased, or
+        two writers could touch the same file at once. Refusing with 409
+        is honest: nothing was changed and the panel can retry.
+        """
+        if self.pipeline.is_running:
+            raise BridgeError(
+                "Music DLP is working on a job. Try again when it finishes.",
+                HTTPStatus.CONFLICT,
+            )
+        if self.jobs.has_running():
+            raise BridgeError(
+                "Another Music DLP request is still running. "
+                "Try again in a moment.",
+                HTTPStatus.CONFLICT,
+            )
+
+    def report_start(self, request_id: str, started: bool, reason: str = "") -> None:
+        """Answer a queued ``start_pipeline`` request from the GUI thread."""
+        with self._start_lock:
+            waiter = self._start_waiters.get(request_id)
+        if waiter is None:
+            return
+        waiter["started"] = bool(started)
+        waiter["reason"] = reason or ""
+        waiter["event"].set()
+
+    def _start_pipeline_now(
+        self,
+        rows: list[TrackRow],
+        stages: list[str],
+        *,
+        force: bool = False,
+        retag: bool = False,
+        only_synced: bool = False,
+    ) -> tuple[bool, str]:
+        """Ask the GUI thread to start a job and wait for its answer.
+
+        The pipeline may only be started from the GUI thread. Emitting the
+        signal queues the call; the waiter turns "the window refused"
+        into a real answer instead of the unconditional success the panel
+        used to be told.
+        """
+        request_id = uuid.uuid4().hex[:12]
+        waiter = {"event": threading.Event(), "started": False, "reason": ""}
+        with self._start_lock:
+            self._start_waiters[request_id] = waiter
+        try:
+            self.start_pipeline.emit(
+                {
+                    "rows": rows,
+                    "stages": stages,
+                    "force": force,
+                    "retag": retag,
+                    "only_synced": only_synced,
+                    "request_id": request_id,
+                }
+            )
+            if not waiter["event"].wait(5.0):
+                return False, "Music DLP did not answer. Open its window and try again."
+            return waiter["started"], waiter["reason"]
+        finally:
+            with self._start_lock:
+                self._start_waiters.pop(request_id, None)
 
     # ------------------------------------------------------------- the routes
 
@@ -404,6 +493,7 @@ class Bridge(QObject):
     # ------------------------------------------------------------ route bodies
 
     def _add_links(self, body: dict) -> dict:
+        self._guard_idle()
         urls = [str(url).strip() for url in (body.get("urls") or []) if url]
         if not urls:
             raise BridgeError("No links given")
@@ -420,29 +510,51 @@ class Bridge(QObject):
         return self.jobs.start("links", work).to_dict()
 
     def _start_job(self, body: dict) -> dict:
+        self._guard_idle()
         track_ids = [int(value) for value in (body.get("track_ids") or [])]
         stages = [str(stage) for stage in (body.get("stages") or [])]
         if not track_ids:
             raise BridgeError("No songs given")
         if not stages:
             raise BridgeError("No stages given")
+        valid = tuple(getattr(self.pipeline, "STAGES", ("download", "convert", "sync")))
+        unknown = [stage for stage in stages if stage not in valid]
+        if unknown:
+            # The panel used to be told "started" for a stage that does not
+            # exist, and of the old job for the rest of its polling.
+            raise BridgeError(
+                "Unknown step(s): " + ", ".join(unknown), HTTPStatus.BAD_REQUEST
+            )
 
         rows = self._rows_for(track_ids)
         force = bool(body.get("force"))
-        # Handed to the GUI thread; the pipeline is not thread-safe to start
-        # from here. The panel's "Update the audio file now" sends force,
-        # and dropping it here rewrote nothing while clearing the flag.
-        self.start_pipeline.emit(rows, stages, force)
-        return {"started": True, "tracks": len(rows), "stages": stages}
+        retag = bool(body.get("retag"))
+        started, reason = self._start_pipeline_now(
+            rows, stages, force=force, retag=retag
+        )
+        return {
+            "started": started,
+            "reason": reason,
+            "tracks": len(rows),
+            "stages": stages,
+            "retag": retag,
+        }
 
     def _sync_plan(self, body: dict) -> dict:
         folder_id = body.get("folder_id")
         if folder_id is None:
             raise BridgeError("folder_id is required")
         try:
-            rows = self.db.get_tracks_for_folder(int(folder_id))
-        except ValueError as exc:
+            folder_id = int(folder_id)
+        except (TypeError, ValueError) as exc:
             raise BridgeError("folder_id must be a number") from exc
+
+        folder = self.db.get_source(folder_id)
+        if folder is None or not folder.is_folder:
+            # An id the desktop no longer has used to plan the removal of
+            # every song in the playlist.
+            raise BridgeError("Unknown folder", HTTPStatus.NOT_FOUND)
+        rows = self.db.get_tracks_for_folder(folder_id)
 
         local = [
             LocalTrack.from_panel(item)
@@ -451,7 +563,12 @@ class Bridge(QObject):
         ]
         playlist = [str(uri) for uri in (body.get("playlist_uris") or []) if uri]
 
-        plan = build_plan(folder_tracks_from_rows(rows), local, playlist)
+        plan = build_plan(
+            folder_tracks_from_rows(rows),
+            local,
+            playlist,
+            local_files_complete=bool(body.get("local_files_complete")),
+        )
         return {
             "to_add": plan.to_add,
             "to_remove": plan.to_remove,
@@ -459,10 +576,14 @@ class Bridge(QObject):
                 {"id": track.track_id, "title": track.title, "artist": track.artist}
                 for track in plan.unmatched
             ],
+            "folder_track_count": plan.folder_track_count,
+            "safe_to_remove": plan.safe_to_remove,
+            "reason": plan.remove_blocked_reason,
             "summary": plan.summary(),
         }
 
     def _set_metadata(self, body: dict) -> dict:
+        self._guard_idle()
         track_id = body.get("track_id")
         if track_id is None:
             raise BridgeError("track_id is required")
@@ -470,21 +591,30 @@ class Bridge(QObject):
         if self.db.get_track(track_id) is None:
             raise BridgeError("Unknown song", HTTPStatus.NOT_FOUND)
 
-        self.library.set_metadata(
-            track_id,
-            title=str(body.get("title") or ""),
-            artist=str(body.get("artist") or ""),
-            album=str(body.get("album") or ""),
-            track_number=(
-                int(body["track_number"])
-                if body.get("track_number") not in (None, "")
-                else None
-            ),
-        )
+        # Only the fields the caller owns are written. A review dialog that
+        # changes a title must not erase the album and track number that a
+        # different dialog saved earlier.
+        fields: dict = {}
+        if "title" in body:
+            fields["title"] = str(body.get("title") or "")
+        if "artist" in body:
+            fields["artist"] = str(body.get("artist") or "")
+        if "album" in body:
+            fields["album"] = str(body.get("album") or "")
+        if "track_number" in body:
+            raw_number = body.get("track_number")
+            fields["track_number"] = (
+                None if raw_number in (None, "") else int(raw_number)
+            )
+        if not fields:
+            raise BridgeError("No song details were given")
+
+        self.library.set_metadata(track_id, **fields)
         track = self.db.get_track(track_id)
         return {"ok": True, "track": _track_dict(track) if track else None}
 
     def _cover(self, body: dict) -> dict:
+        self._guard_idle()
         track_id = body.get("track_id")
         if track_id is None:
             raise BridgeError("track_id is required")
@@ -507,6 +637,7 @@ class Bridge(QObject):
         Only the picture inside the file is replaced, so no audio is
         decoded or downloaded.
         """
+        self._guard_idle()
         track_ids = [int(value) for value in (body.get("track_ids") or [])]
         if not track_ids:
             raise BridgeError("No songs given")
@@ -517,7 +648,12 @@ class Bridge(QObject):
             errors: list[str] = []
             for row in rows:
                 try:
-                    status = self.library.refresh_cover(row.track.id)
+                    # The upload's own picture is the fallback when no
+                    # catalogue entry fits; without it those songs were
+                    # reported "unchanged" instead of getting their still.
+                    status = self.library.refresh_cover(
+                        row.track.id, thumbnails=self.thumbnails
+                    )
                     counts[status] = counts.get(status, 0) + 1
                 except Exception as exc:  # noqa: BLE001 - one song must not stop the rest
                     errors.append(f"{row.display_title}: {exc}")
@@ -580,7 +716,12 @@ class Bridge(QObject):
             raise BridgeError("No songs given")
         language = str(body.get("language") or self.settings.translate_language)
         style = str(body.get("style") or self.settings.translate_style)
-        translate_artist = bool(body.get("translate_artist", True))
+        # The panel may leave the artist choice out; the desktop setting is
+        # the one the user made, so it wins over a hard-coded default.
+        if "translate_artist" in body:
+            translate_artist = bool(body.get("translate_artist"))
+        else:
+            translate_artist = bool(self.settings.translate_artist)
 
         rows = self._rows_for(track_ids)
         ai_settings = AISettings(
@@ -685,6 +826,7 @@ class Bridge(QObject):
     def _gdrive(self, body: dict) -> dict:
         from musicdlp.services import gdrive
 
+        self._guard_idle()
         track_ids = [int(value) for value in (body.get("track_ids") or [])]
         if not track_ids:
             raise BridgeError("No songs given")
@@ -708,22 +850,52 @@ class Bridge(QObject):
         return self.jobs.start("gdrive", work).to_dict()
 
     def _rewrite(self, body: dict) -> dict:
-        from musicdlp.core import maintenance
+        """Rewrite the tags and names of the songs the panel selected.
 
+        This is the desktop's "Update files" action, so it goes through the
+        pipeline rather than retagging in place: the file is renamed, its
+        tags are rewritten, the Spotify copy is replaced under the same
+        rules as any other job, and "needs update" is cleared only once
+        that work is done.
+        """
+        self._guard_idle()
         track_ids = [int(value) for value in (body.get("track_ids") or [])]
         if not track_ids:
             raise BridgeError("No songs given")
-        self._rows_for(track_ids)
+        rows = self._rows_for(track_ids)
 
-        def work() -> dict:
-            # The panel sends the songs the user selected; rewriting the
-            # whole library would touch files they did not choose.
-            notes = maintenance.rewrite_tags(
-                self.db, self.settings, track_ids=track_ids
+        pending = [row for row in rows if row.track.needs_update]
+        if not pending:
+            return {
+                "started": False,
+                "reason": (
+                    "Nothing to rewrite — the ticked songs' files already "
+                    "match their details."
+                ),
+                "tracks": 0,
+            }
+
+        stages = ["convert"]
+        needs_download = [
+            row for row in pending
+            if not any(Path(path).exists() for path in row.track.output_paths)
+            and not (
+                row.track.raw_path and Path(row.track.raw_path).exists()
             )
-            return {"notes": list(notes)}
+        ]
+        if needs_download:
+            stages = ["download", "convert"]
+        if any(row.track.synced_at for row in pending):
+            stages.append("sync")
 
-        return self.jobs.start("rewrite", work).to_dict()
+        started, reason = self._start_pipeline_now(
+            pending,
+            stages,
+            force=True,
+            retag=True,
+            only_synced=True,
+        )
+        return {"started": started, "reason": reason, "tracks": len(pending)}
 
 
 def _make_handler(bridge: Bridge):

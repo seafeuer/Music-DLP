@@ -1,6 +1,7 @@
 """The loopback API the Music DLP panel inside Spotify calls."""
 
 import json
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -13,6 +14,8 @@ from musicdlp.core.db import Database
 from musicdlp.services.bridge import Bridge, sync_panel_config
 
 TOKEN = "test-token"
+# A field the bridge did not mention; mirrors LibraryService.set_metadata.
+_UNSET = object()
 
 
 class FakePipeline:
@@ -35,15 +38,26 @@ class FakeLibrary:
 
         return Result()
 
-    def set_metadata(self, track_id, *, title, artist="", album="", track_number=None):
+    def set_metadata(
+        self,
+        track_id,
+        *,
+        title=_UNSET,
+        artist=_UNSET,
+        album=_UNSET,
+        track_number=_UNSET,
+    ):
         self.calls.append(("set_metadata", track_id))
-        self.db.update_track(
-            track_id,
-            meta_title=title,
-            meta_artist=artist,
-            meta_album=album,
-            meta_track=track_number,
-        )
+        updates = {}
+        if title is not _UNSET:
+            updates["meta_title"] = title
+        if artist is not _UNSET:
+            updates["meta_artist"] = artist
+        if album is not _UNSET:
+            updates["meta_album"] = album
+        if track_number is not _UNSET:
+            updates["meta_track"] = track_number
+        self.db.update_track(track_id, **updates)
 
     def refresh_cover(self, track_id, **_kwargs):
         self.calls.append(("refresh_cover", track_id))
@@ -279,15 +293,27 @@ def test_a_cover_lookup_calls_the_library(env):
     assert ("refresh_cover", track_id) in library.calls
 
 
-def test_starting_a_job_asks_for_the_gui_thread(env):
-    bridge, _db, _library, _folder_id, track_id = env
+def _accept_jobs(bridge, started=True, reason=""):
+    """Stand in for the GUI thread answering a job request."""
     seen = []
+
+    def answer(request):
+        seen.append(request)
+        bridge.report_start(
+            request.get("request_id", ""), started, reason
+        )
+
     # Direct connection so the emission is observable without an event
     # loop; in the app the receiver lives on the GUI thread and Qt queues it.
     bridge.start_pipeline.connect(
-        lambda rows, stages, force: seen.append((rows, stages, force)),
-        Qt.ConnectionType.DirectConnection,
+        answer, Qt.ConnectionType.DirectConnection
     )
+    return seen
+
+
+def test_starting_a_job_asks_for_the_gui_thread(env):
+    bridge, _db, _library, _folder_id, track_id = env
+    seen = _accept_jobs(bridge)
 
     status, payload = _call(
         bridge,
@@ -298,17 +324,13 @@ def test_starting_a_job_asks_for_the_gui_thread(env):
 
     assert status == 200
     assert payload["started"] is True
-    assert seen and seen[0][1] == ["download"]
-    assert seen[0][2] is False
+    assert seen and seen[0]["stages"] == ["download"]
+    assert seen[0]["force"] is False
 
 
 def test_the_panel_can_ask_for_a_forced_rewrite(env):
     bridge, *_ = env
-    seen = []
-    bridge.start_pipeline.connect(
-        lambda rows, stages, force: seen.append((rows, stages, force)),
-        Qt.ConnectionType.DirectConnection,
-    )
+    seen = _accept_jobs(bridge)
 
     _call(
         bridge,
@@ -321,7 +343,39 @@ def test_the_panel_can_ask_for_a_forced_rewrite(env):
         },
     )
 
-    assert seen and seen[0][2] is True
+    assert seen and seen[0]["force"] is True
+
+
+def test_a_job_the_window_refuses_is_not_reported_as_started(env):
+    bridge, _db, _library, _folder_id, track_id = env
+    _accept_jobs(bridge, started=False, reason="Music DLP is busy.")
+
+    status, payload = _call(
+        bridge,
+        "/api/jobs",
+        method="POST",
+        body={"track_ids": [track_id], "stages": ["download"]},
+    )
+
+    assert status == 200
+    assert payload["started"] is False
+    assert "busy" in payload["reason"].lower()
+
+
+def test_a_job_with_an_unknown_stage_is_refused(env):
+    bridge, _db, _library, _folder_id, track_id = env
+    seen = _accept_jobs(bridge)
+
+    status, payload = _call(
+        bridge,
+        "/api/jobs",
+        method="POST",
+        body={"track_ids": [track_id], "stages": ["bogus"]},
+    )
+
+    assert status == 400
+    assert "bogus" in payload["error"]
+    assert seen == []
 
 
 def test_starting_a_job_for_an_unknown_song_is_a_400(env):
@@ -448,3 +502,232 @@ def test_an_isolated_run_never_rewrites_the_installed_panel(tmp_path, monkeypatc
 
     assert updated == []
     assert source.read_text(encoding="utf-8") == before
+
+
+# ------------------------------------------------------- data-safety fixes
+
+
+def test_a_title_only_change_keeps_the_album_and_track_number(env):
+    """The review dialogs own a title and an artist, not the album."""
+    bridge, db, _library, _folder_id, track_id = env
+    db.update_track(track_id, meta_album="Album X", meta_track=4)
+
+    status, payload = _call(
+        bridge,
+        "/api/metadata",
+        method="POST",
+        body={"track_id": track_id, "title": "New name", "artist": "Young Thug"},
+    )
+
+    assert status == 200
+    track = db.get_track(track_id)
+    assert track.display_title == "New name"
+    assert track.display_album == "Album X"
+    assert track.display_track == 4
+    assert payload["track"]["album"] == "Album X"
+
+
+def test_a_metadata_request_with_no_fields_is_refused(env):
+    bridge, _db, _library, _folder_id, track_id = env
+    status, _ = _call(
+        bridge, "/api/metadata", method="POST", body={"track_id": track_id}
+    )
+
+    assert status == 400
+
+
+def test_an_unknown_folder_is_a_404(env):
+    """An id the desktop no longer has must not plan removals."""
+    bridge, *_ = env
+    status, payload = _call(
+        bridge,
+        "/api/sync/plan",
+        method="POST",
+        body={
+            "folder_id": 999999,
+            "local_tracks": [],
+            "playlist_uris": ["spotify:track:abc"],
+        },
+    )
+
+    assert status == 404
+    assert "folder" in payload["error"].lower()
+
+
+def test_the_sync_plan_reports_whether_removals_are_safe(env):
+    bridge, db, _library, folder_id, track_id = env
+    db.update_track(track_id, meta_title="How Come", meta_artist="Young Thug")
+
+    status, payload = _call(
+        bridge,
+        "/api/sync/plan",
+        method="POST",
+        body={
+            "folder_id": folder_id,
+            "local_tracks": [],
+            "playlist_uris": ["spotify:track:hand-picked"],
+            "local_files_complete": True,
+        },
+    )
+
+    assert status == 200
+    assert payload["safe_to_remove"] is False
+    assert payload["to_remove"] == []
+    assert "incomplete" in payload["reason"].lower()
+    assert payload["folder_track_count"] == 1
+
+
+def test_an_empty_folder_never_plans_removals(env):
+    bridge, db, _library, _folder_id, _track_id = env
+    empty_id = db.add_folder("Empty")
+
+    status, payload = _call(
+        bridge,
+        "/api/sync/plan",
+        method="POST",
+        body={
+            "folder_id": empty_id,
+            "local_tracks": [
+                {"uri": "spotify:local:A:S:X:1", "name": "X", "duration": 1}
+            ],
+            "playlist_uris": ["spotify:track:hand-picked"],
+            "local_files_complete": True,
+        },
+    )
+
+    assert status == 200
+    assert payload["to_remove"] == []
+    assert payload["safe_to_remove"] is False
+
+
+def test_changes_are_refused_while_the_pipeline_runs(env):
+    bridge, _db, _library, _folder_id, track_id = env
+
+    class RunningPipeline:
+        is_running = True
+
+    bridge.pipeline = RunningPipeline()
+
+    for path, body in (
+        ("/api/metadata", {"track_id": track_id, "title": "x"}),
+        ("/api/cover", {"track_id": track_id, "action": "video"}),
+        ("/api/cover/bulk", {"track_ids": [track_id]}),
+        ("/api/rewrite", {"track_ids": [track_id]}),
+        ("/api/gdrive", {"track_ids": [track_id]}),
+        ("/api/links", {"urls": ["https://youtu.be/x"]}),
+        ("/api/jobs", {"track_ids": [track_id], "stages": ["convert"]}),
+    ):
+        status, payload = _call(bridge, path, method="POST", body=body)
+        assert status == 409, path
+        assert "working on a job" in payload["error"].lower()
+
+
+def test_changes_are_refused_while_a_bridge_job_runs(env):
+    bridge, _db, library, _folder_id, track_id = env
+    release = threading.Event()
+
+    def slow_add(urls, **_kwargs):
+        release.wait(2)
+
+        class Result:
+            sources = [1]
+            tracks_total = 0
+            tracks_new = 0
+            errors = []
+
+        return Result()
+
+    library.add_links = slow_add
+    _call(bridge, "/api/links", method="POST", body={"urls": ["https://youtu.be/x"]})
+
+    status, payload = _call(
+        bridge,
+        "/api/metadata",
+        method="POST",
+        body={"track_id": track_id, "title": "x"},
+    )
+
+    release.set()
+    assert status == 409
+    assert "still running" in payload["error"].lower()
+
+
+def test_rewrite_is_refused_when_nothing_needs_rewriting(env):
+    bridge, *_ = env
+    _accept_jobs(bridge)
+
+    status, payload = _call(
+        bridge, "/api/rewrite", method="POST", body={"track_ids": [env[4]]}
+    )
+
+    assert status == 200
+    assert payload["started"] is False
+    assert "nothing to rewrite" in payload["reason"].lower()
+
+
+def test_rewrite_goes_through_the_pipeline_like_the_desktop(env, tmp_path):
+    bridge, db, _library, _folder_id, track_id = env
+    song = tmp_path / "Song.mp3"
+    song.write_bytes(b"audio")
+    db.update_track(
+        track_id,
+        status="synced",
+        needs_update=1,
+        mp3_path=str(song),
+        synced_at="2026-01-01T00:00:00",
+    )
+    seen = _accept_jobs(bridge)
+
+    status, payload = _call(
+        bridge, "/api/rewrite", method="POST", body={"track_ids": [track_id]}
+    )
+
+    assert status == 200
+    assert payload["started"] is True
+    request = seen[0]
+    assert request["stages"] == ["convert", "sync"]
+    assert request["force"] is True
+    assert request["retag"] is True
+    assert request["only_synced"] is True
+
+
+def test_the_panel_sees_a_status_a_person_would_understand(env):
+    bridge, db, _library, folder_id, track_id = env
+    db.update_track(track_id, status="converted", needs_update=1)
+
+    status, payload = _call(bridge, f"/api/tracks?folder={folder_id}")
+
+    assert status == 200
+    assert payload[0]["status"] == "converted"
+    assert payload[0]["display_status"] == "needs_update"
+    assert payload[0]["has_raw"] is False
+
+
+def test_a_deleted_file_is_reported_as_missing(env, tmp_path):
+    bridge, db, _library, folder_id, track_id = env
+    gone = tmp_path / "gone.mp3"
+    db.update_track(track_id, status="converted", mp3_path=str(gone))
+
+    status, payload = _call(bridge, f"/api/tracks?folder={folder_id}")
+
+    assert status == 200
+    assert payload[0]["file_missing"] is True
+    assert payload[0]["display_status"] == "missing"
+
+
+def test_translation_follows_the_desktop_artist_setting(env, monkeypatch):
+    from musicdlp.services import translate as translate_service
+
+    bridge, db, _library, _folder_id, track_id = env
+    bridge.settings.translate_artist = False
+    captured = {}
+
+    def fake_translate_many(settings, items, **kwargs):
+        captured.update(kwargs)
+        return [], ""
+
+    monkeypatch.setattr(translate_service, "translate_many", fake_translate_many)
+
+    _call(bridge, "/api/translate", method="POST", body={"track_ids": [track_id]})
+
+    assert captured["translate_artist"] is False
