@@ -285,3 +285,62 @@ test("a folder deleted on the desktop stops being selected", () => {
   assert.equal(context.sameFolders(list, JSON.parse(JSON.stringify(list))), true);
   assert.equal(context.sameFolders(list, []), false);
 });
+
+test("duplicate groups tick every copy except the one to keep", () => {
+  const { context } = loadPanel();
+  const groups = [
+    { keep: 2, tracks: [{ id: 1 }, { id: 2 }, { id: 3 }] },
+    { keep: 9, tracks: [{ id: 8 }, { id: 9 }] }
+  ];
+
+  assert.deepEqual(Array.from(context.duplicateRemovalIds(groups)), [1, 3, 8]);
+  assert.deepEqual(Array.from(context.duplicateRemovalIds([])), []);
+  assert.equal(context.duplicateSummary(groups), "3 duplicate copies in 2 groups.");
+  assert.equal(
+    context.duplicateSummary([{ keep: 1, tracks: [{ id: 1 }, { id: 2 }] }]),
+    "1 duplicate copy in 1 group."
+  );
+  assert.equal(context.duplicateSummary([]), "No duplicate songs found.");
+});
+
+test("a chatbot reply becomes review rows and keeps unknown songs visible", () => {
+  const { context } = loadPanel();
+
+  const rows = context.chatbotRows([
+    {
+      track_id: 4, original_title: "Old", title: "New", artist: "A",
+      album: "Alb", confidence: 0.9, checked: true, error: ""
+    },
+    {
+      track_id: 9, original_title: "", title: "Ghost", artist: "",
+      album: "", confidence: 0.2, checked: false, error: "No song with this id."
+    }
+  ]);
+
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].title, "New");
+  assert.equal(rows[0].artist, "A");
+  assert.equal(rows[0].album, "Alb");
+  assert.equal(rows[0].checked, true);
+  assert.equal(rows[0].unsure, false);
+  assert.equal(rows[1].checked, false);
+  assert.equal(rows[1].unsure, true);
+  assert.match(rows[1].error, /No song/);
+});
+
+test("a chatbot review sends its album but the other reviews do not", () => {
+  const { context } = loadPanel();
+  const row = {
+    track_id: 4, title: "New title", artist: "New artist", album: "An album"
+  };
+
+  assert.deepEqual(
+    Array.from(Object.keys(context.reviewMetadataBody(row))).sort(),
+    ["artist", "title", "track_id"]
+  );
+  assert.equal(context.reviewMetadataBody(row, true).album, "An album");
+  assert.deepEqual(
+    Array.from(Object.keys(context.reviewMetadataBody({ ...row, album: "  " }, true))).sort(),
+    ["artist", "title", "track_id"]
+  );
+});

@@ -18,21 +18,8 @@ from PySide6.QtWidgets import (
 from musicdlp.ui.dialogs.footer import DialogFooter
 from musicdlp.ui.dialogs.sizing import fit_dialog
 
+from musicdlp.core.duplicates import copy_rank
 from musicdlp.core.models import TrackRow, status_label
-
-# Prefer keeping the copy that is furthest along.
-_STATUS_RANK = {
-    "synced": 5,
-    "converted": 4,
-    "downloaded": 3,
-    "needs_update": 3,
-    "missing": 1,
-}
-
-
-def _rank(row: TrackRow) -> tuple[int, int]:
-    """Higher is the better copy to keep."""
-    return (_STATUS_RANK.get(row.track.status, 0), -row.track.id)
 
 
 class DuplicateDialog(QDialog):
@@ -96,7 +83,7 @@ class DuplicateDialog(QDialog):
     # ------------------------------------------------------------------ rows
 
     def _add_group(self, group: list[TrackRow]) -> None:
-        group.sort(key=_rank, reverse=True)
+        group.sort(key=copy_rank, reverse=True)
         best = group[0]
 
         top = QTreeWidgetItem([

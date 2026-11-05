@@ -30,8 +30,14 @@ from PySide6.QtCore import QObject, Signal
 from musicdlp import __version__
 from musicdlp.core.config import Settings
 from musicdlp.core.db import Database
+from musicdlp.core.duplicates import best_copy
 from musicdlp.core.models import BatchItem, TrackRow, display_status
 from musicdlp.core.paths import is_isolated
+from musicdlp.services.ai_export import (
+    build_prompt,
+    parse_reply,
+    songs_needing_help,
+)
 from musicdlp.services.spotify_sync import (
     LocalTrack,
     build_plan,
@@ -443,6 +449,9 @@ class Bridge(QObject):
                 "version": __version__,
                 "pipeline_running": bool(self.pipeline.is_running),
                 "dlp_folder": self.settings.spotify_dlp_folder,
+                # The panel has no folder picker of its own. Reconnect
+                # starts from the folder the desktop writes songs into.
+                "output_dir": str(self.settings.output_path),
             }
 
         if method == "GET" and route == ["status"]:
@@ -513,6 +522,21 @@ class Bridge(QObject):
 
         if method == "POST" and route == ["rewrite"]:
             return self._rewrite(body)
+
+        if method == "GET" and route == ["duplicates"]:
+            return self._duplicates()
+
+        if method == "POST" and route == ["duplicates", "remove"]:
+            return self._remove_duplicates(body)
+
+        if method == "POST" and route == ["reconnect"]:
+            return self._reconnect(body)
+
+        if method == "GET" and route == ["export", "songs"]:
+            return self._export_songs(query)
+
+        if method == "POST" and route == ["import", "names"]:
+            return self._import_names(body)
 
         raise BridgeError("Not found", HTTPStatus.NOT_FOUND)
 
@@ -608,6 +632,129 @@ class Bridge(QObject):
             "duplicate_tags": plan.duplicate_tags,
             "summary": plan.summary(),
         }
+
+    def _duplicates(self) -> dict:
+        """Songs that look like the same recording added twice.
+
+        The same grouping the desktop's Duplicate songs dialog uses. The
+        copy to keep is chosen by the shared rule, so both surfaces offer
+        the same default.
+        """
+        groups = []
+        for group in self.db.find_duplicate_groups():
+            keep = best_copy(group)
+            groups.append({
+                "keep": keep.track.id,
+                "tracks": [_track_dict(row.track) for row in group],
+            })
+        return {
+            "groups": groups,
+            "count": sum(len(group["tracks"]) - 1 for group in groups),
+        }
+
+    def _remove_duplicates(self, body: dict) -> dict:
+        """Remove ticked copies. Only songs in a duplicate group qualify.
+
+        The panel shows a confirmation before calling this, and the files
+        are kept unless the caller explicitly asks for them to be deleted:
+        a wrong removal can then still be put back from disk.
+        """
+        self._guard_idle()
+        try:
+            track_ids = sorted({int(value) for value in (body.get("track_ids") or [])})
+        except (TypeError, ValueError) as exc:
+            raise BridgeError("track_ids must be numbers") from exc
+        if not track_ids:
+            raise BridgeError("No songs given")
+
+        duplicate_ids = {
+            row.track.id
+            for group in self.db.find_duplicate_groups()
+            for row in group
+        }
+        refused = [track_id for track_id in track_ids if track_id not in duplicate_ids]
+        if refused:
+            # Without this, a mistyped id could delete a song that has no
+            # duplicate at all.
+            raise BridgeError(
+                "These songs are not duplicates: "
+                + ", ".join(str(track_id) for track_id in refused),
+                HTTPStatus.BAD_REQUEST,
+            )
+
+        delete_files = bool(body.get("delete_files"))
+        for track_id in track_ids:
+            self.library.delete_track(
+                track_id, delete_files=delete_files, forget=True
+            )
+        return {
+            "removed": len(track_ids),
+            "files_deleted": delete_files,
+        }
+
+    def _reconnect(self, body: dict) -> dict:
+        """Point songs whose file is missing at a copy in this folder."""
+        self._guard_idle()
+        folder = str(body.get("folder") or "").strip()
+        if not folder:
+            raise BridgeError("folder is required")
+        path = Path(folder).expanduser()
+        if not path.is_dir():
+            raise BridgeError(
+                "That folder does not exist. Check the path and try again.",
+                HTTPStatus.NOT_FOUND,
+            )
+        counts = self.library.relink_from_folder(path)
+        return {"relinked": counts.get("relinked", 0),
+                "missing": counts.get("missing", 0)}
+
+    def _export_songs(self, query: dict) -> dict:
+        """The prompt the user can paste into any chatbot.
+
+        Songs that already have a confident name are left out, exactly as
+        the desktop's Export for AI does.
+        """
+        folder_id = query.get("folder")
+        if folder_id:
+            try:
+                rows = self.db.get_tracks_for_folder(int(folder_id))
+            except ValueError as exc:
+                raise BridgeError("folder must be a number") from exc
+        else:
+            rows = self.db.get_all_track_rows()
+        songs = songs_needing_help(rows)
+        return {
+            "count": len(songs),
+            "prompt": build_prompt(songs) if songs else "",
+        }
+
+    def _import_names(self, body: dict) -> dict:
+        """Read the chatbot's reply without saving anything.
+
+        The panel shows the result in its usual review dialog, where the
+        user ticks what to apply. Ids the library no longer has are
+        reported on their row instead of stopping the whole reply.
+        """
+        text = str(body.get("reply") or "")
+        try:
+            imported = parse_reply(text)
+        except ValueError as exc:
+            raise BridgeError(str(exc)) from exc
+
+        results = []
+        for item in imported:
+            track = self.db.get_track(item.id)
+            results.append({
+                "track_id": item.id,
+                "original_title": track.display_title if track else "",
+                "title": item.title,
+                "artist": item.artist,
+                "album": item.album,
+                "confidence": item.confidence,
+                "checked": track is not None and item.confidence >= 0.6,
+                "error": "" if track is not None else "No song with this id.",
+            })
+        return {"results": results}
 
     def _set_metadata(self, body: dict) -> dict:
         self._guard_idle()

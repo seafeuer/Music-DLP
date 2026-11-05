@@ -66,6 +66,14 @@ class FakeLibrary:
     def restore_video_cover(self, track_id):
         self.calls.append(("restore_video_cover", track_id))
 
+    def delete_track(self, track_id, *, delete_files=False, forget=False):
+        self.calls.append(("delete_track", track_id, delete_files, forget))
+        self.db.delete_track(track_id)
+
+    def relink_from_folder(self, folder):
+        self.calls.append(("relink_from_folder", str(folder)))
+        return {"relinked": 2, "missing": 1}
+
 
 @pytest.fixture
 def env(tmp_path):
@@ -769,3 +777,161 @@ def test_the_registry_forgets_finished_jobs_after_the_ttl():
     # A recent result and a job that is still working must survive.
     assert registry.get("fresh") is not None
     assert registry.get("running") is not None
+
+
+# ------------------------------------------ panel parity: duplicates and more
+
+
+def _add_duplicate(db, title="How Come (Prod. Pierre)", media_id="dup",
+                   status="converted"):
+    track_id = db.upsert_track(
+        platform="youtube",
+        media_id=media_id,
+        url=f"https://youtu.be/{media_id}",
+        title=title,
+        uploader="Young Thug",
+        duration=140,
+    )
+    db.update_track(track_id, status=status)
+    return track_id
+
+
+def test_duplicates_reports_groups_and_the_copy_to_keep(env):
+    bridge, db, _library, _folder_id, track_id = env
+    duplicate_id = _add_duplicate(db)
+    db.update_track(track_id, status="synced")
+
+    status, payload = _call(bridge, "/api/duplicates")
+
+    assert status == 200
+    assert payload["count"] == 1
+    group = payload["groups"][0]
+    # The synced copy has done more work, so it is the one to keep.
+    assert group["keep"] == track_id
+    assert {track["id"] for track in group["tracks"]} == {track_id, duplicate_id}
+    assert {track["display_status"] for track in group["tracks"]} == {
+        "synced", "converted"
+    }
+
+
+def test_removing_a_song_that_is_not_a_duplicate_is_refused(env):
+    bridge, db, library, _folder_id, track_id = env
+
+    status, payload = _call(
+        bridge,
+        "/api/duplicates/remove",
+        method="POST",
+        body={"track_ids": [track_id]},
+    )
+
+    assert status == 400
+    assert "not duplicates" in payload["error"]
+    assert db.get_track(track_id) is not None
+    assert not any(call[0] == "delete_track" for call in library.calls)
+
+
+def test_removing_duplicates_keeps_the_files_unless_asked(env):
+    bridge, db, library, _folder_id, _track_id = env
+    duplicate_id = _add_duplicate(db)
+
+    status, payload = _call(
+        bridge,
+        "/api/duplicates/remove",
+        method="POST",
+        body={"track_ids": [duplicate_id]},
+    )
+
+    assert status == 200
+    assert payload == {"removed": 1, "files_deleted": False}
+    assert db.get_track(duplicate_id) is None
+    assert ("delete_track", duplicate_id, False, True) in library.calls
+
+
+def test_reconnect_asks_the_library_to_relink_a_folder(env, tmp_path):
+    bridge, _db, library, _folder_id, _track_id = env
+    folder = tmp_path / "songs"
+    folder.mkdir()
+
+    status, payload = _call(
+        bridge, "/api/reconnect", method="POST", body={"folder": str(folder)}
+    )
+
+    assert status == 200
+    assert payload == {"relinked": 2, "missing": 1}
+    assert ("relink_from_folder", str(folder)) in library.calls
+
+
+def test_reconnect_refuses_a_folder_that_does_not_exist(env, tmp_path):
+    bridge, _db, library, *_ = env
+
+    status, payload = _call(
+        bridge,
+        "/api/reconnect",
+        method="POST",
+        body={"folder": str(tmp_path / "nowhere")},
+    )
+
+    assert status == 404
+    assert "does not exist" in payload["error"]
+    assert library.calls == []
+
+
+def test_export_for_a_chatbot_contains_the_songs_that_need_a_name(env):
+    bridge, db, _library, _folder_id, track_id = env
+    # A row the parser is already confident about is not exported.
+    db.update_track(track_id, smart_confidence=0.95)
+    _add_duplicate(db, title="Unnamed upload", media_id="other")
+
+    status, payload = _call(bridge, "/api/export/songs")
+
+    assert status == 200
+    assert payload["count"] == 1
+    assert "Unnamed upload" in payload["prompt"]
+    assert "How Come (Prod. Pierre)" not in payload["prompt"]
+    assert "JSON" in payload["prompt"]
+
+
+def test_importing_a_chatbot_reply_reports_unknown_songs(env):
+    bridge, _db, _library, _folder_id, track_id = env
+
+    status, payload = _call(
+        bridge,
+        "/api/import/names",
+        method="POST",
+        body={"reply": json.dumps([
+            {"id": str(track_id), "title": "How Come", "artist": "Young Thug",
+             "album": "Barter 6", "confidence": 0.9},
+            {"id": "99999", "title": "Ghost song", "artist": "",
+             "album": "", "confidence": 0.2},
+        ])},
+    )
+
+    assert status == 200
+    first, second = payload["results"]
+    assert first["track_id"] == track_id
+    assert first["original_title"] == "How Come (Prod. Pierre)"
+    assert first["album"] == "Barter 6"
+    assert first["checked"] is True and first["error"] == ""
+    assert second["track_id"] == 99999
+    assert second["checked"] is False
+    assert "No song" in second["error"]
+
+
+def test_importing_something_that_is_not_json_is_a_400(env):
+    bridge, *_ = env
+
+    status, payload = _call(
+        bridge, "/api/import/names", method="POST", body={"reply": "hello"}
+    )
+
+    assert status == 400
+    assert "JSON" in payload["error"]
+
+
+def test_health_gives_the_panel_a_folder_to_reconnect_from(env):
+    bridge, *_ = env
+
+    status, payload = _call(bridge, "/api/health")
+
+    assert status == 200
+    assert payload["output_dir"]

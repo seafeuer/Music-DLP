@@ -169,12 +169,88 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
    * track number belong to other dialogs, so they are not sent: the bridge
    * writes only the fields it receives.
    */
-  function reviewMetadataBody(row) {
-    return {
+  function reviewMetadataBody(row, includeAlbum) {
+    var body = {
       track_id: row.track_id,
       title: row.title,
       artist: row.artist
     };
+    // A chatbot reply also carries an album, but the translate and AI
+    // reviews do not. An empty album is left out: sending "" would erase
+    // one that is already known.
+    if (includeAlbum && typeof row.album === "string" && row.album.trim()) {
+      body.album = row.album.trim();
+    }
+    return body;
+  }
+
+  /* The copies the duplicate dialog ticks by default: every copy except
+   * the one the bridge says to keep. */
+  function duplicateRemovalIds(groups) {
+    var ids = [];
+    (groups || []).forEach(function (group) {
+      var keep = group.keep;
+      (group.tracks || []).forEach(function (track) {
+        if (track.id !== keep) ids.push(track.id);
+      });
+    });
+    return ids;
+  }
+
+  function duplicateSummary(groups) {
+    var list = groups || [];
+    if (!list.length) return "No duplicate songs found.";
+    var copies = 0;
+    list.forEach(function (group) {
+      copies += Math.max(0, (group.tracks || []).length - 1);
+    });
+    return copies + " duplicate cop" + (copies === 1 ? "y" : "ies")
+      + " in " + list.length + " group" + (list.length === 1 ? "" : "s") + ".";
+  }
+
+  /* The rows the review dialog shows after a chatbot reply is read.
+   * Songs the library no longer has stay visible, unchecked, with the
+   * reason on their row instead of failing the whole reply. */
+  function chatbotRows(results) {
+    return (results || []).map(function (item) {
+      return {
+        track_id: item.track_id,
+        original_title: item.original_title || "",
+        title: item.title || "",
+        artist: item.artist || "",
+        album: item.album || "",
+        checked: !!item.checked,
+        unsure: (item.confidence || 0) < 0.6,
+        error: item.error || ""
+      };
+    });
+  }
+
+  function copyText(text) {
+    if (typeof navigator !== "undefined" && navigator.clipboard
+        && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text);
+    }
+    // Older Spotify renderers have no clipboard API. A hidden textarea and
+    // execCommand still work there.
+    try {
+      var area = document.createElement("textarea");
+      area.value = text;
+      area.setAttribute("readonly", "");
+      area.style.position = "fixed";
+      area.style.opacity = "0";
+      document.body.appendChild(area);
+      area.select();
+      var copied = document.execCommand("copy");
+      document.body.removeChild(area);
+      if (copied) return Promise.resolve();
+    } catch (err) {
+      // fall through to the explanation below
+    }
+    return Promise.reject(new Error(
+      "This Spotify build does not allow copying. Select the text and copy "
+      + "it by hand."
+    ));
   }
 
   function albumMetadataBody(track, album, number) {
@@ -660,7 +736,8 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
       try {
         var chosen = rows.filter(function (row) { return row.checked; });
         for (var i = 0; i < chosen.length; i++) {
-          await api("POST", "/api/metadata", reviewMetadataBody(chosen[i]));
+          await api("POST", "/api/metadata",
+            reviewMetadataBody(chosen[i], props.includeAlbum));
         }
         props.onDone("Applied to " + chosen.length + " song(s).");
       } catch (err) {
@@ -769,6 +846,237 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
         h("button", { className: "mdlp-btn", onClick: props.onClose }, "Cancel"),
         h("button", { className: "mdlp-btn primary", disabled: busy, onClick: apply },
           busy ? "Applying…" : "Apply"))
+    );
+  }
+
+  /* The same duplicate groups the desktop dialog shows. The copy the
+   * bridge marks to keep is not ticked; the rest are. Removal needs a
+   * second, explicit press, and the audio files stay unless asked for. */
+  function DuplicatesDialog(props) {
+    var React = React_();
+    var groups = props.groups || [];
+    var selectedState = React.useState(new Set(duplicateRemovalIds(groups)));
+    var deleteState = React.useState(false);
+    var busyState = React.useState(false);
+    var selected = selectedState[0], setSelected = selectedState[1];
+    var deleteFiles = deleteState[0], setDeleteFiles = deleteState[1];
+    var busy = busyState[0], setBusy = busyState[1];
+
+    function toggle(id) {
+      var next = new Set(selected);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      setSelected(next);
+    }
+
+    async function remove() {
+      var ids = Array.from(selected);
+      if (!ids.length) return;
+      setBusy(true);
+      try {
+        var result = await api("POST", "/api/duplicates/remove", {
+          track_ids: ids,
+          delete_files: deleteFiles
+        });
+        props.onDone(
+          "Removed " + result.removed + " duplicate cop"
+          + (result.removed === 1 ? "y" : "ies") + "."
+          + (result.files_deleted ? " Their files were deleted." : "")
+        );
+      } catch (err) {
+        props.onError(err.message);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    return h(Modal, { title: "Duplicate songs", onClose: props.onClose },
+      h("p", { className: "mdlp-hint" },
+        duplicateSummary(groups)
+        + " The best copy is kept by default; tick any other copy to remove. "
+        + "Nothing is removed until you press Remove."),
+      h("table", { className: "mdlp-review-table" },
+        h("thead", null,
+          h("tr", null,
+            h("th", { style: { width: "30px" } }),
+            h("th", null, "Song"),
+            h("th", null, "Status"),
+            h("th", null, "Album"))),
+        h("tbody", null,
+          groups.reduce(function (all, group, groupIndex) {
+            var rows = all.concat([
+              h("tr", { key: "g" + groupIndex },
+                h("td", { colSpan: 4 },
+                  h("strong", null,
+                    (group.tracks[0] && group.tracks[0].title) || "Song"),
+                  " — " + group.tracks.length + " copies"))
+            ]);
+            (group.tracks || []).forEach(function (track) {
+              var kept = track.id === group.keep;
+              if (kept) return; // shown as the group heading's kept copy
+              rows.push(h("tr", { key: track.id },
+                h("td", null,
+                  h("input", {
+                    type: "checkbox",
+                    checked: selected.has(track.id),
+                    onChange: function () { toggle(track.id); }
+                  })),
+                h("td", null,
+                  h("div", null, track.title),
+                  h("div", { className: "mdlp-unsure" },
+                    (track.artist || "—")
+                    + (track.album ? " · " + track.album : ""))),
+                h("td", null,
+                  h("span", { className: "mdlp-status " + statusClass(trackStatus(track)) },
+                    statusLabel(trackStatus(track)))),
+                h("td", null, track.album || "—")));
+            });
+            var best = (group.tracks || []).filter(function (track) {
+              return track.id === group.keep;
+            })[0];
+            if (best) {
+              rows.push(h("tr", { key: "keep" + groupIndex },
+                h("td", null, "★"),
+                h("td", null,
+                  h("div", null, best.title),
+                  h("div", { className: "mdlp-hint" },
+                    "Kept — the copy that is furthest along")),
+                h("td", null,
+                  h("span", { className: "mdlp-status " + statusClass(trackStatus(best)) },
+                    statusLabel(trackStatus(best)))),
+                h("td", null, best.album || "—")));
+            }
+            return rows;
+          }, []))),
+      h("label", { className: "mdlp-check" },
+        h("input", { type: "checkbox", checked: deleteFiles,
+          onChange: function (e) { setDeleteFiles(e.target.checked); } }),
+        "Also delete their audio files (this cannot be undone)"),
+      h("div", { className: "mdlp-actions" },
+        h("button", { className: "mdlp-btn", onClick: props.onClose }, "Cancel"),
+        h("button", {
+          className: "mdlp-btn danger",
+          disabled: busy || !selected.size,
+          onClick: remove
+        }, busy ? "Removing…" : "Remove " + selected.size + " cop"
+          + (selected.size === 1 ? "y" : "ies")))
+    );
+  }
+
+  /* Point songs whose file is missing at a copy in a folder. The panel has
+   * no folder picker, so the path is typed; the bridge checks it exists. */
+  function ReconnectDialog(props) {
+    var React = React_();
+    var folderState = React.useState(props.startFolder || "");
+    var busyState = React.useState(false);
+    var folder = folderState[0], setFolder = folderState[1];
+    var busy = busyState[0], setBusy = busyState[1];
+
+    async function reconnect() {
+      if (!folder.trim()) return;
+      setBusy(true);
+      try {
+        var result = await api("POST", "/api/reconnect", {
+          folder: folder.trim()
+        });
+        var relinked = result.relinked || 0;
+        var missing = result.missing || 0;
+        var message;
+        if (relinked) {
+          message = "Reconnected " + relinked + " song"
+            + (relinked === 1 ? "" : "s") + " to the files in that folder.";
+          if (missing) message += " " + missing + " still have no file.";
+        } else {
+          message = "No matching files were found in that folder.";
+        }
+        props.onDone(message);
+      } catch (err) {
+        props.onError(err.message);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    return h(Modal, { title: "Reconnect missing files", onClose: props.onClose },
+      h("p", { className: "mdlp-hint" },
+        "Songs whose audio was moved to another folder keep a path that no "
+        + "longer exists. Choose the folder the files are in now and Music "
+        + "DLP will match them by file name. Nothing is downloaded."),
+      h("div", { className: "mdlp-field" },
+        h("label", null, "Folder with the songs"),
+        h("input", { className: "mdlp-input", value: folder,
+          placeholder: "C:\\Users\\you\\MusicDLP",
+          onChange: function (e) { setFolder(e.target.value); },
+          onKeyDown: function (e) { if (e.key === "Enter") reconnect(); } })),
+      h("div", { className: "mdlp-actions" },
+        h("button", { className: "mdlp-btn", onClick: props.onClose }, "Cancel"),
+        h("button", { className: "mdlp-btn primary", disabled: busy || !folder.trim(),
+          onClick: reconnect }, busy ? "Reconnecting…" : "Reconnect"))
+    );
+  }
+
+  /* The no-setup path to AI naming: copy a prompt into any chatbot, paste
+   * the answer back. Nothing is saved until the review dialog is applied. */
+  function ChatbotDialog(props) {
+    var React = React_();
+    var replyState = React.useState("");
+    var busyState = React.useState(false);
+    var reply = replyState[0], setReply = replyState[1];
+    var busy = busyState[0], setBusy = busyState[1];
+
+    async function copyPrompt() {
+      try {
+        await copyText(props.prompt);
+        props.onInfo("Copied. Paste it into any chatbot, then paste its reply below.");
+      } catch (err) {
+        props.onError(err.message);
+      }
+    }
+
+    async function readReply() {
+      if (!reply.trim()) return;
+      setBusy(true);
+      try {
+        var result = await api("POST", "/api/import/names", {
+          reply: reply
+        });
+        props.onImported(result.results || []);
+      } catch (err) {
+        props.onError(err.message);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    return h(Modal, { title: "Ask a chatbot for names", onClose: props.onClose },
+      props.count
+        ? h("p", { className: "mdlp-hint" },
+            props.count + " song" + (props.count === 1 ? " needs" : "s need")
+            + " a name. Copy the list, ask any chatbot, then paste its reply "
+            + "below. Nothing is saved until you review it.")
+        : h("p", { className: "mdlp-hint" },
+            "Every song already has a confident name. You can still paste a "
+            + "chatbot reply below."),
+      props.count ? h("textarea", {
+          className: "mdlp-input mdlp-prompt",
+          readOnly: true,
+          rows: 8,
+          value: props.prompt,
+          "aria-label": "The list to give the chatbot"
+        }) : null,
+      props.count
+        ? h("div", { className: "mdlp-row" },
+            h("button", { className: "mdlp-btn", onClick: copyPrompt },
+              "Copy the list"))
+        : null,
+      h("div", { className: "mdlp-field" },
+        h("label", null, "The chatbot's reply"),
+        h("textarea", { className: "mdlp-input mdlp-prompt", rows: 8,
+          value: reply, placeholder: "Paste the reply here…",
+          onChange: function (e) { setReply(e.target.value); } })),
+      h("div", { className: "mdlp-actions" },
+        h("button", { className: "mdlp-btn", onClick: props.onClose }, "Cancel"),
+        h("button", { className: "mdlp-btn primary", disabled: busy || !reply.trim(),
+          onClick: readReply }, busy ? "Reading…" : "Read the reply"))
     );
   }
 
@@ -1262,6 +1570,62 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
       }
     }
 
+    async function findDuplicates() {
+      setBusy("Looking for duplicate songs…");
+      try {
+        var data = await api("GET", "/api/duplicates");
+        var groups = (data && data.groups) || [];
+        if (!groups.length) {
+          notify("No duplicate songs found — every name appears once.");
+          return;
+        }
+        setDialog({ type: "duplicates", groups: groups });
+      } catch (err) {
+        notify(err.message, "error");
+      } finally {
+        setBusy("");
+      }
+    }
+
+    function reconnectFiles() {
+      setDialog({
+        type: "reconnect",
+        startFolder: (health && health.output_dir) || ""
+      });
+    }
+
+    async function exportForChatbot() {
+      setBusy("Preparing the list…");
+      try {
+        var data = await api("GET", "/api/export/songs");
+        setDialog({
+          type: "chatbot",
+          prompt: data.prompt || "",
+          count: data.count || 0
+        });
+      } catch (err) {
+        notify(err.message, "error");
+      } finally {
+        setBusy("");
+      }
+    }
+
+    function importedFromChatbot(results) {
+      var rows = chatbotRows(results);
+      if (!rows.length) {
+        notify("No usable song names were found in that reply.", "error");
+        return;
+      }
+      setDialog({
+        type: "review",
+        title: "Names from your chatbot",
+        rows: rows,
+        includeAlbum: true,
+        intro: "Review the names before applying. Songs the library no "
+          + "longer has are unchecked."
+      });
+    }
+
     async function rewriteFiles() {
       if (!selectedTracks.length) return notify("Tick the songs first.", "error");
       setBusy("Rewriting the files…");
@@ -1399,6 +1763,12 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
           "Fix covers"),
         h("button", { className: "mdlp-btn", disabled: !!busy, onClick: rewriteFiles },
           "Rewrite files"),
+        h("button", { className: "mdlp-btn", disabled: !!busy, onClick: findDuplicates },
+          "Find duplicates"),
+        h("button", { className: "mdlp-btn", disabled: !!busy, onClick: reconnectFiles },
+          "Reconnect files"),
+        h("button", { className: "mdlp-btn", disabled: !!busy, onClick: exportForChatbot },
+          "Ask a chatbot"),
         selectedTracks.length === 1
           ? h("button", { className: "mdlp-btn", disabled: !!busy,
               onClick: function () { setDialog({ type: "edit", track: selectedTracks[0] }); } },
@@ -1443,6 +1813,7 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
         ? h(ReviewDialog, {
             title: dialog.title,
             intro: dialog.intro,
+            includeAlbum: !!dialog.includeAlbum,
             rows: dialog.rows,
             onClose: closeDialog,
             onError: function (text) { notify(text, "error"); },
@@ -1467,6 +1838,35 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
             onClose: closeDialog,
             onError: function (text) { notify(text, "error"); },
             onDone: function (text, extra) { finish(text, extra); }
+          })
+        : null,
+
+      dialog && dialog.type === "duplicates"
+        ? h(DuplicatesDialog, {
+            groups: dialog.groups,
+            onClose: closeDialog,
+            onError: function (text) { notify(text, "error"); },
+            onDone: function (text) { finish(text); }
+          })
+        : null,
+
+      dialog && dialog.type === "reconnect"
+        ? h(ReconnectDialog, {
+            startFolder: dialog.startFolder,
+            onClose: closeDialog,
+            onError: function (text) { notify(text, "error"); },
+            onDone: function (text) { finish(text); }
+          })
+        : null,
+
+      dialog && dialog.type === "chatbot"
+        ? h(ChatbotDialog, {
+            prompt: dialog.prompt,
+            count: dialog.count,
+            onClose: closeDialog,
+            onInfo: function (text) { notify(text); },
+            onError: function (text) { notify(text, "error"); },
+            onImported: importedFromChatbot
           })
         : null,
 

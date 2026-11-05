@@ -321,6 +321,19 @@
   color: var(--spice-subtext, #b3b3b3);
 }
 
+/* The chatbot prompt and its reply are long and are copied by hand. A
+ * plain textarea keeps them selectable in every Spotify build. */
+.mdlp-prompt {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 120px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 8px 0;
+}
+
 .mdlp-review-table {
   width: 100%;
   border-collapse: collapse;
