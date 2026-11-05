@@ -3058,16 +3058,11 @@ class MainWindow(QMainWindow):
 
     def _update_theme_button(self) -> None:
         dark = self.settings.theme == "dark"
-        # The word is dropped before the button is: the switch stayed
-        # reachable in the View menu, but the visible control vanished at
-        # exactly the 1000-px minimum a user judges the app at.
-        width = self.width()
+        # The switch stayed reachable in the View menu, but the visible
+        # control vanished at exactly the 1000-px minimum. The word is
+        # short enough to keep at every size.
         self.theme_button.setVisible(True)
-        symbol = "☀" if dark else "☾"
-        self.theme_button.setText(
-            f"{symbol} {'Light' if dark else 'Dark'}" if width >= 1180
-            else symbol
-        )
+        self.theme_button.setText("Light" if dark else "Dark")
         self.theme_button.setToolTip(
             "Switch to the light theme" if dark else "Switch to the dark theme"
         )
