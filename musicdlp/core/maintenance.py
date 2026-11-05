@@ -315,6 +315,14 @@ def refresh_spotify_index(spotify_running_check=None) -> tuple[bool, str]:
     """
     import os
 
+    # Never touch the real Spotify cache from an isolated review run:
+    # MUSICDLP_HOME exists precisely to keep such a run self-contained.
+    if is_isolated():
+        return False, (
+            "Not changed: this is an isolated review run, so the real "
+            "Spotify cache was left alone."
+        )
+
     appdata = os.environ.get("APPDATA")
     if not appdata:
         return False, "Spotify's data folder could not be found."

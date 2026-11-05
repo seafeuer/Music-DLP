@@ -189,3 +189,22 @@ def test_rewrite_tags_can_be_limited_to_ticked_songs(tmp_path, monkeypatch):
 
     assert seen == ["one.mp3"]
     db.close()
+
+
+def test_an_isolated_run_does_not_touch_the_real_spotify_cache(
+    tmp_path, monkeypatch
+):
+    import musicdlp.core.maintenance as maintenance
+
+    appdata = tmp_path / "appdata"
+    cache = appdata / "Spotify" / "Users" / "someone" / "local-files.bnk"
+    cache.parent.mkdir(parents=True)
+    cache.write_bytes(b"spotify index")
+    monkeypatch.setenv("APPDATA", str(appdata))
+    monkeypatch.setattr(maintenance, "is_isolated", lambda: True)
+
+    ok, message = maintenance.refresh_spotify_index()
+
+    assert ok is False
+    assert "isolated" in message.lower()
+    assert cache.exists()
