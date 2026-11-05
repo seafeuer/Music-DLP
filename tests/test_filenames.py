@@ -133,3 +133,9 @@ def test_emoji_title_fits_a_windows_filename(tmp_path):
 def test_an_unpaired_surrogate_is_replaced_not_raised():
     assert sanitize_filename("bad \ud800 title") == "bad _ title"
     assert render_template("{title}", title="bad \ud800") == "bad _"
+
+
+def test_a_missing_track_number_does_not_erase_the_template():
+    assert render_template(
+        "{artist} - {track:02d} - {title}", artist="A", title="T"
+    ) == "A - - T"

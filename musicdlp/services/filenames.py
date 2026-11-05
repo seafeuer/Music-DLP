@@ -107,13 +107,28 @@ class _TrackNumber(int):
         return format(int(self), spec)
 
 
+class _EmptyTrack:
+    """A song with no track number.
+
+    It must accept any format spec and render nothing. Returning "" made
+    ``{track:02d}`` raise ValueError, and format_map then fell back to the
+    bare title, dropping the artist and every separator.
+    """
+
+    def __format__(self, spec: str) -> str:
+        return ""
+
+    def __str__(self) -> str:
+        return ""
+
+
 def _track_value(track: Optional[int]) -> object:
     if not track:
-        return ""
+        return _EmptyTrack()
     try:
         return _TrackNumber(track)
     except (TypeError, ValueError):
-        return ""
+        return _EmptyTrack()
 
 
 def render_template(
