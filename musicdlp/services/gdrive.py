@@ -207,6 +207,14 @@ def send(
         return 0, [f"Cannot create {target_dir}: {exc}"]
 
     manifest = _load_manifest()
+    # The manifest is keyed by the name in Drive. A song sent under a
+    # numbered name used to be looked up by its source name, missed, and
+    # sent again as "(2)", then "(3)" on every later send. Map the source
+    # path back to the name it was actually given.
+    by_source: dict[str, tuple[str, dict]] = {}
+    for target_name, record in manifest.items():
+        if isinstance(record, dict) and record.get("source"):
+            by_source[record["source"]] = (target_name, record)
     changed = False
     sent = 0
     errors: list[str] = []
@@ -225,11 +233,11 @@ def send(
             continue
 
         source_key = str(source.resolve())
-        record = manifest.get(source.name)
-        same_song = isinstance(record, dict) and \
-            record.get("source") == source_key
+        entry = by_source.get(source_key)
+        record = entry[1] if entry else None
+        same_song = entry is not None
 
-        target = target_dir / source.name
+        target = target_dir / (entry[0] if entry else source.name)
         if not same_song and target.exists():
             # A different song already has this name. Keep both.
             target = _free_name(target_dir, source.name)

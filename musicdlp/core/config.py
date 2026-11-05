@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import secrets
+import time
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
@@ -14,6 +16,8 @@ from musicdlp.core.paths import (
     default_output_dir,
     default_spotify_dir,
 )
+
+logger = logging.getLogger("musicdlp.config")
 
 THEMES = ("system", "dark", "light")
 MODES = ("easy", "pro")
@@ -175,7 +179,24 @@ class Settings:
             # often add one, and a plain utf-8 read then fails and silently
             # discards every setting.
             raw = json.loads(path.read_text(encoding="utf-8-sig"))
-        except (OSError, ValueError):
+        except (OSError, ValueError) as exc:
+            if isinstance(exc, ValueError):
+                # A damaged file used to be replaced by defaults on the
+                # next save, with no copy of what the user had. Keep it
+                # where they (or a later version) can recover it from.
+                stamp = time.strftime("%Y%m%d-%H%M%S")
+                backup = path.with_name(f"{path.name}.bad-{stamp}")
+                try:
+                    path.replace(backup)
+                    logger.warning(
+                        "config.json was not valid JSON; kept a copy at %s",
+                        backup,
+                    )
+                except OSError as move_error:
+                    logger.warning(
+                        "config.json was not valid JSON and could not be "
+                        "set aside: %s", move_error,
+                    )
             return cls()
 
         if not isinstance(raw, dict):

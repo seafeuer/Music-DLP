@@ -129,14 +129,19 @@ def test_same_title_with_a_very_different_length_is_not_a_duplicate(library):
     assert db.find_duplicate_groups() == []
 
 
-def test_same_artist_and_title_groups_even_when_lengths_differ(library):
+def test_a_shared_artist_does_not_override_a_different_length(library):
+    """Two songs by one artist can share a title and not be copies.
+
+    The old rule grouped on the artist alone, before looking at the
+    runtime, so an extended mix or a different track called "Intro"
+    could be offered for deletion as a duplicate.
+    """
     db, data = library
     db.update_track(
         data["duplicate"], meta_title="Same Song",
         meta_artist="Channel", duration=400,
     )
-    groups = db.find_duplicate_groups()
-    assert len(groups) == 1
+    assert db.find_duplicate_groups() == []
 
 
 def test_duplicate_dialog_keeps_the_best_copy(qapp, library):

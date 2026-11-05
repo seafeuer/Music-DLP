@@ -1052,6 +1052,12 @@ class Pipeline(QObject):
                 self.track_changed.emit(track.id)
 
         if files:
+            # "Sending to Spotify" was defined, styled and handled in the
+            # cancel and failure paths, but no stage ever set it, so the
+            # status never appeared while a copy was being made.
+            for _item, track, _path in pending:
+                self.db.update_track(track.id, status=SYNCING)
+                self.track_changed.emit(track.id)
             result = self.spotify.sync(
                 files, settings.spotify_path, settings.spotify_copy_mode
             )
@@ -1081,6 +1087,10 @@ class Pipeline(QObject):
                     # replace. The copy result is the only evidence.
                     self.db.update_track(
                         track.id,
+                        # The file is still converted; only the delivery
+                        # failed. Leaving it on "Sending to Spotify" would
+                        # look like a job that never finished.
+                        status=CONVERTED,
                         sync_error="Copying to the Spotify folder failed.",
                     )
                     _record_failure(

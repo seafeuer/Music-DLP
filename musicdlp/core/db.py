@@ -129,12 +129,18 @@ _LENGTH_TOLERANCE = 5
 
 
 def _cluster_copies(rows: list[TrackRow]) -> list[list[TrackRow]]:
-    """Split same-title songs into clusters that look like copies."""
+    """Split same-title songs into clusters that look like copies.
+
+    A song joins a cluster only when it matches *every* member. Matching
+    one member was enough before, so "artist X, 100 s" and "artist Y,
+    400 s" ended up in one group through a third song that matched each
+    of them separately.
+    """
     clusters: list[list[TrackRow]] = []
     for row in rows:
         placed = False
         for cluster in clusters:
-            if any(_same_recording(row, other) for other in cluster):
+            if all(_same_recording(row, other) for other in cluster):
                 cluster.append(row)
                 placed = True
                 break
@@ -146,16 +152,25 @@ def _cluster_copies(rows: list[TrackRow]) -> list[list[TrackRow]]:
 def _same_recording(left: TrackRow, right: TrackRow) -> bool:
     left_artist = _match_key(left.track.display_artist)
     right_artist = _match_key(right.track.display_artist)
-    if left_artist and left_artist == right_artist:
-        return True
-
     left_length = left.track.duration or 0
     right_length = right.track.duration or 0
-    if left_length > 0 and right_length > 0:
-        return abs(int(left_length) - int(right_length)) <= _LENGTH_TOLERANCE
-    # Without a length to compare, an artist match was the only evidence,
-    # and there was none.
-    return False
+    length_known = left_length > 0 and right_length > 0
+    length_close = (
+        length_known
+        and abs(int(left_length) - int(right_length)) <= _LENGTH_TOLERANCE
+    )
+
+    if left_artist and right_artist:
+        # Both artists are known. They have to agree, and a length that
+        # clearly disagrees is stronger evidence than the name: two
+        # different songs by one artist can share a title ("Intro").
+        if left_artist != right_artist:
+            return length_close
+        return length_close if length_known else True
+
+    # One side has no artist to compare, so the length is the only
+    # evidence there is.
+    return length_close
 
 
 def quarantine_database(path: str | Path) -> Optional[Path]:

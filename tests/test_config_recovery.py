@@ -89,3 +89,16 @@ def test_startup_moves_a_damaged_database_aside(tmp_path, monkeypatch):
     assert "damaged" in warned[0].lower()
     assert list(tmp_path.glob("library.db.damaged-*"))
     db.close()
+
+def test_an_unreadable_config_is_kept_beside_the_new_one(tmp_path):
+    """A damaged config used to be replaced on the next save, with no copy."""
+    path = tmp_path / "config.json"
+    path.write_text("{ this is not json", encoding="utf-8")
+
+    settings = Settings.load(path)
+
+    assert settings.output_dir  # defaults are usable
+    assert not path.exists()
+    backups = list(tmp_path.glob("config.json.bad-*"))
+    assert len(backups) == 1
+    assert "not json" in backups[0].read_text(encoding="utf-8")

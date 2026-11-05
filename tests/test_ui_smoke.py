@@ -941,3 +941,34 @@ def test_the_shortcut_list_matches_the_keys(qapp):
 def test_the_paste_button_keeps_its_ampersand(qapp, window):
     main, _db, _ids = window
     assert main.paste_button.text() == "Paste && add"
+
+
+def test_the_duplicates_dialog_caps_the_file_column(qapp, tmp_path):
+    """A full path in a ResizeToContents column forced a sideways scroll."""
+    from PySide6.QtWidgets import QHeaderView
+
+    from musicdlp.core.db import Database
+    from musicdlp.core.models import TrackRow
+    from musicdlp.ui.dialogs.duplicates import DuplicateDialog
+
+    db = Database(tmp_path / "d.db")
+    source = db.add_source(
+        url="u", kind="item", platform="youtube", external_id="a",
+        title="t", uploader="u", item_count=2, thumbnail_url=None,
+    )
+    ids = [
+        db.upsert_track(
+            platform="youtube", media_id=m, url="u", title="Song",
+            uploader="C", duration=100,
+        )
+        for m in ("a", "b")
+    ]
+    db.set_source_tracks(source, [(tid, i) for i, tid in enumerate(ids, 1)])
+    rows = db.get_track_rows_by_ids(ids)
+
+    dialog = DuplicateDialog([rows])
+
+    header = dialog.tree.header()
+    assert header.sectionResizeMode(4) == QHeaderView.Interactive
+    assert header.sectionSize(4) == 240
+    db.close()

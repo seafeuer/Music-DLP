@@ -997,3 +997,33 @@ def test_a_successful_delivery_removes_the_old_spotify_copy(env):
     assert summary["synced"] == 1
     assert not spotify_copy.exists()
     assert (Path(settings.spotify_dir) / "New Name.mp3").exists()
+
+
+def test_the_sync_stage_reports_that_it_is_sending(env):
+    """"Sending to Spotify" was defined but never shown."""
+    settings = env["settings"]
+    db = env["db"]
+    track_id = env["track_ids"][0]
+    out = Path(settings.output_dir) / "MP3"
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / "Song.mp3"
+    path.write_bytes(b"audio")
+    db.update_track(track_id, status="converted", mp3_path=str(path))
+
+    seen = {}
+    original = env["spotify"].sync
+
+    def spy(files, destination, mode="copy"):
+        seen["status"] = db.get_track(track_id).status
+        return original(files, destination, mode)
+
+    env["spotify"].sync = spy
+    item = BatchItem(
+        source=env["source"], track=db.get_track(track_id), position=1
+    )
+    env["pipeline"]._execute(
+        [item], ["sync"], False, settings, _summary()
+    )
+
+    assert seen["status"] == "syncing"
+    assert db.get_track(track_id).status == "synced"

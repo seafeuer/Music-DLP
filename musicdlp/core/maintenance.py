@@ -88,10 +88,12 @@ def _repair_folders(
         except OSError as exc:
             logger.warning("Could not save repaired settings: %s", exc)
 
-    # Remap stored paths that pointed into the old output folder.
+    # Remap stored paths that pointed into the old output folder. The
+    # kept download (raw_path) is remapped too: leaving it behind made the
+    # next run fetch the song again even though its audio was still there.
     for track in db.get_all_tracks():
         updates = {}
-        for field in ("mp3_path", "m4a_path"):
+        for field in ("mp3_path", "m4a_path", "raw_path"):
             value = getattr(track, field)
             if not value:
                 continue
@@ -108,8 +110,27 @@ def _repair_folders(
     return notes
 
 
+def _unique_destination(target: Path, name: str) -> Path:
+    """A name in ``target`` that does not overwrite an existing file."""
+    destination = target / name
+    if not destination.exists():
+        return destination
+    stem, suffix = destination.stem, destination.suffix
+    for index in range(2, 1000):
+        candidate = target / f"{stem} ({index}){suffix}"
+        if not candidate.exists():
+            return candidate
+    return target / f"{stem} (copy){suffix}"
+
+
 def _move_tree(source: Path, target: Path) -> None:
-    """Move a folder's contents into the target, merging where possible."""
+    """Move a folder's contents into the target, merging where possible.
+
+    A name that already exists in the target is kept, and the incoming
+    file is moved next to it with a numbered name. The old code silently
+    skipped the file and still switched the library to the new folder, so
+    the song pointed at a file that was never moved.
+    """
     if not source.exists() or source == target:
         return
     target.mkdir(parents=True, exist_ok=True)
@@ -121,7 +142,9 @@ def _move_tree(source: Path, target: Path) -> None:
                     _move_tree(item, destination)
                 else:
                     shutil.move(str(item), str(destination))
-            elif not destination.exists():
+            else:
+                if destination.exists():
+                    destination = _unique_destination(target, item.name)
                 shutil.move(str(item), str(destination))
         except OSError as exc:
             logger.warning("Could not move %s: %s", item, exc)

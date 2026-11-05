@@ -213,3 +213,45 @@ def test_relinking_keeps_a_pending_rewrite_pending(tmp_path, library):
     LibraryService(db, Settings(), None).relink_from_folder(elsewhere)
 
     assert db.get_track(tid).needs_update is True
+
+
+def test_a_colliding_file_is_kept_beside_the_moved_one(tmp_path, library):
+    """The merge skipped collisions and still switched folders."""
+    from musicdlp.core.maintenance import _move_tree
+
+    source = tmp_path / "source"
+    target = tmp_path / "target"
+    source.mkdir()
+    target.mkdir()
+    (source / "Song.mp3").write_bytes(b"new")
+    (target / "Song.mp3").write_bytes(b"old")
+
+    _move_tree(source, target)
+
+    assert (target / "Song.mp3").read_bytes() == b"old"
+    assert (target / "Song (2).mp3").read_bytes() == b"new"
+
+
+def test_a_kept_download_is_remapped_with_the_output_folder(
+    tmp_path, library, monkeypatch
+):
+    """The kept download stayed in the old tree and was fetched again."""
+    from musicdlp.core import maintenance
+
+    db, source = library
+    old = tmp_path / "old"
+    new = tmp_path / "new"
+    old.mkdir()
+    new.mkdir()
+    raw = old / "Song.webm"
+    raw.write_bytes(b"x" * 100)
+    tid = _track(db, source, "raw-1", raw_path=str(raw), status="converted")
+
+    settings = Settings(output_dir=str(old), spotify_dir=str(tmp_path / "sp"))
+    monkeypatch.setattr(maintenance, "is_temporary", lambda path: Path(path) == old)
+    monkeypatch.setattr(maintenance, "default_output_dir", lambda: new)
+
+    maintenance._repair_folders(db, settings, move=True)
+
+    assert settings.output_dir == str(new)
+    assert Path(db.get_track(tid).raw_path) == new / "Song.webm"

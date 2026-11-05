@@ -221,3 +221,34 @@ def test_an_old_library_gains_the_cover_source_column(tmp_path):
     db.update_track(track.id, cover_source="video")
     assert db.get_track(track.id).cover_source == "video"
     db.close()
+
+
+def test_duplicates_need_more_than_a_shared_artist(tmp_path):
+    """Artist X 100 s + artist X 400 s + artist Y 400 s became one group."""
+    from musicdlp.core.db import Database
+
+    db = Database(tmp_path / "dupes.db")
+    source = db.add_source(
+        url="u", kind="item", platform="youtube", external_id="a",
+        title="t", uploader="u", item_count=3, thumbnail_url=None,
+    )
+    ids = []
+    for media_id, artist, seconds in (
+        ("a", "X", 100), ("b", "X", 400), ("c", "Y", 400),
+    ):
+        tid = db.upsert_track(
+            platform="youtube", media_id=media_id, url="u",
+            title="Intro", uploader=artist, duration=seconds,
+        )
+        db.update_track(tid, meta_artist=artist)
+        ids.append(tid)
+    db.set_source_tracks(source, [(tid, i) for i, tid in enumerate(ids, 1)])
+
+    groups = db.find_duplicate_groups()
+
+    # b and c share a length; a matches neither on length and its artist
+    # match with b is contradicted by the runtime.
+    assert [sorted(row.track.id for row in group) for group in groups] == [
+        sorted([ids[1], ids[2]])
+    ]
+    db.close()

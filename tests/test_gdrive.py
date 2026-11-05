@@ -138,3 +138,29 @@ def test_the_backup_and_sync_container_is_not_mistaken_for_the_drive(
     )
     assert gdrive.find_drive() == real
     assert gdrive.destination("") == real / gdrive.SUBFOLDER
+
+
+def test_a_song_sent_under_a_numbered_name_is_not_sent_again(tmp_path):
+    """The manifest was looked up by source name, so every send made a copy."""
+    from musicdlp.services import gdrive
+
+    drive = tmp_path / "drive"
+    first = tmp_path / "one" / "Intro.mp3"
+    second = tmp_path / "two" / "Intro.mp3"
+    first.parent.mkdir()
+    second.parent.mkdir()
+    first.write_bytes(b"a" * 100)
+    second.write_bytes(b"b" * 100)
+
+    sent, errors = gdrive.send([first, second], str(drive))
+    assert sent == 2 and not errors
+    assert sorted(p.name for p in drive.iterdir()) == [
+        "Intro (2).mp3", "Intro.mp3",
+    ]
+
+    again, errors = gdrive.send([second, first], str(drive))
+
+    assert again == 0
+    assert sorted(p.name for p in drive.iterdir()) == [
+        "Intro (2).mp3", "Intro.mp3",
+    ]

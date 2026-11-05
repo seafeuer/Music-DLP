@@ -64,11 +64,18 @@ class DuplicateDialog(QDialog):
         )
         self.tree.setRootIsDecorated(True)
         self.tree.setUniformRowHeights(True)
+        self.tree.setTextElideMode(Qt.ElideMiddle)
         header = self.tree.header()
         header.setSectionResizeMode(0, QHeaderView.Stretch)
         header.setSectionResizeMode(1, QHeaderView.Stretch)
-        for column in (2, 3, 4):
+        for column in (2, 3):
             header.setSectionResizeMode(column, QHeaderView.ResizeToContents)
+        # The File column holds an absolute path. Sizing it to its contents
+        # made the whole dialog scroll sideways; a capped, elided column
+        # shows the start and end of the path and carries the full one in
+        # its tooltip.
+        header.setSectionResizeMode(4, QHeaderView.Interactive)
+        header.resizeSection(4, 240)
         layout.addWidget(self.tree, 1)
 
         for group in self.groups:
@@ -128,6 +135,8 @@ class DuplicateDialog(QDialog):
             )
             child.setData(0, Qt.UserRole, track.id)
             child.setToolTip(0, track.url)
+            if path:
+                child.setToolTip(4, path)
             if row is best:
                 child.setToolTip(
                     0, f"{track.url}\nKept by default: this copy is the "
