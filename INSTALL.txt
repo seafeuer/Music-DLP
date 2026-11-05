@@ -71,12 +71,17 @@ Pre-built app:
 FIRST RUN
 ---------
 
-The setup wizard asks for:
+"Set up Music DLP" walks through four pages:
 
-  - Easy or Pro mode
-  - Where to keep converted files (default: Music\MusicDLP)
-  - Which folder to use for Spotify (default: Music\MusicDLP\Spotify)
-  - Optional cookies
+  1. Install or locate FFmpeg ("Install it for me" can do it).
+  2. Check that the Spotify desktop app is installed.
+  3. Choose the folder Spotify will read songs from.
+     Default: C:\Users\<you>\MusicDLP\Spotify
+  4. Show that folder to Spotify once: Add a source -> Select Folder,
+     then click "Restart Spotify".
+
+Easy/Pro mode, the output folder, and cookies are changed later in
+Settings; the wizard does not ask for them.
 
 Cookies are only needed for age-restricted YouTube videos and protected
 X/Twitter posts. The easiest option is "Use cookies from a browser"; choose
@@ -108,8 +113,10 @@ Converted files:
      <output folder>\MP3
      <output folder>\M4A      (if enabled)
 
+The default output folder is C:\Users\<you>\MusicDLP.
+
 Files copied for Spotify:
-     <Spotify folder>
+     <Spotify folder>       (default: C:\Users\<you>\MusicDLP\Spotify)
 
 
 GETTING TRACKS INTO SPOTIFY
@@ -132,14 +139,14 @@ playlist inside Spotify if you want one.
 EDITING METADATA
 ----------------
 
-In Pro mode, select a track to open the Details panel:
+Select a track to see the Details panel (it is visible in both modes):
 
   - Title, Artist, Album, Track number
   - Apply metadata saves the values
   - Re-convert writes them into the audio file (and renames it)
 
 The filename template is in Settings -> Output. Default: {title}
-Other placeholders: {artist} {album} {track} {id} {source}
+Other placeholders: {artist} {album} {track} {id} {media_id} {source}
 
 
 TROUBLESHOOTING

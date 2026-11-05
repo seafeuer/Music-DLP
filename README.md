@@ -10,15 +10,16 @@ per song before converting.
 
 ## Status
 
-**Version 2.9.0 — working.** The base app is verified end to end against a
+**Version 2.10.0 — working.** The base app is verified end to end against a
 real library: adding and re-adding links, download, convert, Spotify delivery,
 the detail editor, album art, translation, AI naming, catalogue lookup,
 duplicates, folders, undo, and editing every part of a song after it has
 already been sent to Spotify.
 
-Last verified on 2026-11-02:
+Last verified on 2026-11-05:
 
-- Full test suite passes (594 tests, offscreen Qt included).
+- Full test suite passes (665 tests, offscreen Qt included), plus 16 headless
+  tests for the Spotify panel.
 - Editing title, artist, album, track number, and cover rewrites the tags and
   the file name, replaces the Spotify copy, and removes the stale one. The
   audio is not decoded or re-encoded: its stream is byte-for-byte the same
@@ -57,7 +58,7 @@ Last verified on 2026-11-02:
   keep going. One **Download to Spotify (n)** sends everything you ticked.
   **All songs** at the top of the library shows the whole collection, and
   Ctrl+Shift+A selects all of it.
-- **Library folders** — press **Folder** to create one, then drag songs (or a
+- **Library folders** — press **New folder** to create one, then drag songs (or a
   whole link) onto it. Dragging a song out of its own entry moves it and
   removes that entry; dragging it out of a playlist files just that song.
 - **Guided setup** — Help → Set up Music DLP installs FFmpeg for you and walks
@@ -79,7 +80,7 @@ Last verified on 2026-11-02:
 - **Browser cookies** — use Chrome/Edge/Firefox cookies directly, or a
   `cookies.txt` file, for sign-in checks and protected posts.
 - **Import old library** — brings sources, tracks, and output paths over from
-  the previous Music-DLP database.
+  the previous Music DLP database.
 
 ## Requirements
 
@@ -338,8 +339,9 @@ only featured on. When no catalogue entry really is the song, the video's own
 picture is used and enlarged to the cover size with a sharpening pass, which
 is the honest choice for something that has no official cover.
 
-Converted files go to `Music\MusicDLP\MP3` (and `M4A` if enabled). Files sent to
-Spotify are copied to `Music\MusicDLP\Spotify` by default.
+Converted files go to `C:\Users\<you>\MusicDLP\MP3` (and `M4A` if enabled).
+Files sent to Spotify are copied to `C:\Users\<you>\MusicDLP\Spotify` by
+default. Both can be changed in Settings → Output and Settings → Spotify.
 
 ### Listening on a phone (Google Drive)
 
@@ -385,7 +387,7 @@ You add them to a playlist inside Spotify; no external app can do that.
 | | Easy | Pro |
 |---|---|---|
 | Primary action | One button: download → convert → Spotify | Three separate buttons |
-| Details panel | Hidden | Metadata editing, paths, actions |
+| Details panel | Visible | Visible |
 | Format column | Hidden | Visible |
 | Retry | Automatic on next run | Per track |
 | Log | Drawer on error | Drawer on error |
@@ -418,7 +420,7 @@ the rest of the library stays `{title}`.
 
 Spotify will not let another program add local files to a playlist, but
 Spicetify runs inside the client, where it can. With the panel installed,
-Music DLP appears in Spotify's top bar: browse your folders, start a
+Music DLP appears in Spotify's left navigation bar: browse your folders, start a
 download without leaving Spotify, and mirror a folder into a playlist.
 
 ### Installing it
@@ -431,11 +433,13 @@ download without leaving Spotify, and mirror a folder into a playlist.
    .\spicetify\install-panel.ps1
    ```
 
-3. Start Music DLP, then Spotify. **Music DLP** appears in the top bar.
+3. Start Music DLP, then Spotify. **Music DLP** appears in the left nav.
 
-Run the installer again after changing the bridge port. It copies the panel
-into Spicetify's `CustomApps` folder, writes the port and token into it,
-registers it, and applies the theme.
+The installer copies the panel into Spicetify's `CustomApps` folder, writes
+the port and token into it, registers it, and applies the theme. Changing the
+port in **Settings → Spotify → Local port** takes effect after restarting
+Music DLP and reloading Spotify; the app rewrites the panel's settings line
+at startup, so the installer does not need to be run again.
 
 ### What a sync does
 
@@ -460,8 +464,9 @@ version of the same song is not mistaken for the original.
 The toolbar carries the same actions as the desktop app: download, convert,
 send to Spotify, edit details (with cover art and "update the audio file
 now"), AI naming, translation, album numbering, fixing covers, rewriting
-files, looking up album details, and sending to Google Drive. Anything that
-changes a song's name or album is shown for review first.
+files, looking up album details, and sending to Google Drive. AI naming,
+translation, cover fixes, and rewrites show what will change before they are
+applied; album numbering applies to the ticked songs immediately.
 
 Not in the panel yet: finding duplicates, reconnecting missing files, and
 the chatbot export/import. Use the desktop app for those.
@@ -472,6 +477,26 @@ The panel talks to the app over a small HTTP server on `127.0.0.1` (port
 8317 by default). It is off the network: it binds to loopback, requires a
 token stored in `config.json`, and only answers Spotify's own page. Turn it
 off in Settings, or by setting `bridge_enabled` to `false`.
+
+## Known limitations
+
+- **The window must stay open while a batch runs.** Closing it asks before
+  cancelling, and a queue does not resume after a restart; interrupted songs
+  continue when you retry them.
+- **The panel cannot do everything the desktop can.** Finding duplicates,
+  reconnecting missing files, and the chatbot export/import are desktop-only.
+- **Mirroring is exact.** **Sync playlist** removes songs you added to that
+  playlist by hand. The preview shows how many and asks before anything is
+  removed.
+- **A port change needs a restart.** Changing the panel's local port takes
+  effect after restarting Music DLP and reloading Spotify.
+- **Spotify matches local files by title, artist and length.** Two different
+  songs with identical tags appear as one playlist entry; the sync preview
+  names them before you sync.
+- **There is no persistent tray icon.** A Windows notification can announce a
+  finished batch, but the window is the app.
+- **The packaged build is unsigned.** Windows SmartScreen may warn the first
+  time it is run.
 
 ## Building a standalone app
 

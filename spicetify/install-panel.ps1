@@ -3,7 +3,9 @@
 # Copies the panel into Spicetify's CustomApps, bakes in the bridge port and
 # token from Music DLP's config, registers it, and applies.
 #
-# Run this again after changing the bridge port or token.
+# Run this once after installing. Music DLP rewrites the port and token in
+# the installed panel at every start, so a bridge change does not need a
+# reinstall - only a restart of Music DLP and a reload of Spotify.
 #
 # Usage:  .\install-panel.ps1
 
