@@ -261,3 +261,14 @@ test("the panel shows the derived status, not the raw one", () => {
   assert.equal(context.trackStatus({ status: "converted", display_status: "needs_update" }), "needs_update");
   assert.equal(context.trackStatus({ status: "converted" }), "converted");
 });
+
+test("identical tags are called out before a sync", () => {
+  const { context } = loadPanel();
+  const warning = context.duplicateTagsWarning({
+    duplicate_tags: [{ title: "Same Name", artist: "Same Artist", track_ids: [1, 2] }]
+  });
+  assert.match(warning, /identical title, artist and length/);
+  assert.match(warning, /Same Name/);
+  assert.equal(context.duplicateTagsWarning({ duplicate_tags: [] }), "");
+  assert.equal(context.duplicateTagsWarning({}), "");
+});

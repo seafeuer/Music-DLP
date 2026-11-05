@@ -100,6 +100,10 @@ class SyncPlan:
     folder_track_count: int = 0
     safe_to_remove: bool = False
     remove_blocked_reason: str = ""
+    # Songs whose tags are identical, so Spotify folds them into one local
+    # URI and shows only one entry. Each item is
+    # ``{"title", "artist", "track_ids": [...]}``.
+    duplicate_tags: list[dict] = field(default_factory=list)
 
     @property
     def is_empty(self) -> bool:
@@ -114,6 +118,7 @@ class SyncPlan:
             "folder_tracks": self.folder_track_count,
             "safe_to_remove": self.safe_to_remove,
             "reason": self.remove_blocked_reason,
+            "duplicate_tags": len(self.duplicate_tags),
         }
 
 
@@ -210,6 +215,22 @@ def build_plan(
         if match.uri not in seen:
             seen.add(match.uri)
             wanted.append(match.uri)
+
+    # Two different songs with the same title, artist and length produce one
+    # ``spotify:local:`` URI. Both were counted as matched, but Spotify can
+    # only show one of them, so the preview has to say so before syncing.
+    by_uri: dict[str, list[FolderTrack]] = {}
+    for folder_track, uri in plan.matched:
+        by_uri.setdefault(uri, []).append(folder_track)
+    plan.duplicate_tags = [
+        {
+            "title": group[0].title,
+            "artist": group[0].artist,
+            "track_ids": [item.track_id for item in group],
+        }
+        for group in by_uri.values()
+        if len(group) > 1
+    ]
 
     current = [uri for uri in playlist_uris if uri]
     current_set = set(current)

@@ -207,3 +207,38 @@ def test_folder_tracks_from_rows_reads_display_values():
 
     tracks = folder_tracks_from_rows([FakeRow()])
     assert tracks == [FolderTrack(4, "Song", "Artist", 90)]
+
+
+def test_two_songs_with_identical_tags_are_reported_before_syncing():
+    """M5: Spotify keys a local file by tags, so one entry would vanish."""
+    folder = [
+        FolderTrack(1, "Same Name", "Same Artist", 100),
+        FolderTrack(2, "Same Name", "Same Artist", 100),
+    ]
+    local = [
+        _local(
+            "spotify:local:Same+Artist:Singles:Same+Name:100",
+            "Same Name", "Same Artist", seconds=100,
+        )
+    ]
+    plan = build_plan(folder, local, [], local_files_complete=True)
+
+    assert len(plan.duplicate_tags) == 1
+    assert plan.duplicate_tags[0]["title"] == "Same Name"
+    assert plan.duplicate_tags[0]["track_ids"] == [1, 2]
+    assert plan.summary()["duplicate_tags"] == 1
+    # Only one URI can be added, which is exactly why the warning matters.
+    assert plan.to_add == ["spotify:local:Same+Artist:Singles:Same+Name:100"]
+
+
+def test_distinct_songs_do_not_raise_the_duplicate_warning():
+    folder = [
+        FolderTrack(1, "One", "Artist", 100),
+        FolderTrack(2, "Two", "Artist", 200),
+    ]
+    local = [
+        _local("spotify:local:Artist:S:One:100", "One", "Artist", seconds=100),
+        _local("spotify:local:Artist:S:Two:200", "Two", "Artist", seconds=200),
+    ]
+    plan = build_plan(folder, local, [], local_files_complete=True)
+    assert plan.duplicate_tags == []

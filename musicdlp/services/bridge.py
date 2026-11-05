@@ -605,6 +605,7 @@ class Bridge(QObject):
             "folder_track_count": plan.folder_track_count,
             "safe_to_remove": plan.safe_to_remove,
             "reason": plan.remove_blocked_reason,
+            "duplicate_tags": plan.duplicate_tags,
             "summary": plan.summary(),
         }
 

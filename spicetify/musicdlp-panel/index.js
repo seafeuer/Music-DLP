@@ -329,6 +329,24 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
     return { playlistUri: playlistUri, plan: plan };
   }
 
+  /* Songs that Spotify folds into a single local URI.
+   *
+   * Spotify keys a local file by title, artist and length, so two different
+   * files with the same final tags are one playlist entry. The plan counts
+   * both as matched; say so before the sync instead of silently losing one.
+   */
+  function duplicateTagsWarning(plan) {
+    var duplicates = plan && plan.duplicate_tags;
+    if (!duplicates || !duplicates.length) return "";
+    var names = duplicates.map(function (item) {
+      return "“" + item.title + "”"
+        + (item.artist ? " by " + item.artist : "");
+    });
+    return duplicates.length + " pair(s) of songs have identical title, "
+      + "artist and length, so Spotify will show only one of each: "
+      + names.join("; ") + ". Edit one song's details before syncing.";
+  }
+
   /* What to tell the user about a plan. */
   function describePlan(plan) {
     var summary = plan.summary || {};
@@ -409,6 +427,9 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
           removes + " song(s) will be removed from the playlist"),
         h("li", null, (summary.unmatched || 0) + " song(s) have no Local Files match")),
       plan.reason ? h("p", { className: "mdlp-unsure" }, plan.reason) : null,
+      duplicateTagsWarning(plan)
+        ? h("p", { className: "mdlp-unsure" }, duplicateTagsWarning(plan))
+        : null,
       removes
         ? h("p", { className: "mdlp-unsure" },
             "Songs you added to this playlist by hand are removed too. "
