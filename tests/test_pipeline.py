@@ -84,6 +84,12 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(
         pipeline_module, "embed_tags", lambda *args, **kwargs: True
     )
+    # The cover lookup is a live catalogue request. Every test that wants
+    # a found cover patches this itself; the default keeps the rest of the
+    # suite offline and fast.
+    monkeypatch.setattr(
+        pipeline_module, "find_cover", lambda *args, **kwargs: None
+    )
     settings = Settings(
         output_dir=str(tmp_path / "out"),
         spotify_dir=str(tmp_path / "spotify"),
@@ -863,3 +869,41 @@ def test_ffmpeg_progress_lines_become_percentages():
     assert code == 0
     assert values[0] == 50.0
     assert values[-1] == 100.0
+
+
+def test_a_pending_edit_is_written_on_the_next_normal_convert(
+    env, monkeypatch, no_lookups
+):
+    """Saving details without rewriting must not be forgotten by Convert."""
+    calls = []
+
+    def fake_embed(path, **kwargs):
+        calls.append(kwargs.get("title"))
+        return True
+
+    monkeypatch.setattr(pipeline_module, "embed_tags", fake_embed)
+    out = Path(env["settings"].output_dir) / "MP3"
+    out.mkdir(parents=True, exist_ok=True)
+    song = out / "Old Name.mp3"
+    song.write_bytes(b"audio-bytes")
+    track_id = env["track_ids"][0]
+    env["db"].update_track(
+        track_id, status="converted", mp3_path=str(song), raw_path=None,
+        meta_title="New Name", needs_update=1,
+    )
+    item = BatchItem(
+        source=env["source"], track=env["db"].get_track(track_id), position=1
+    )
+
+    summary = _summary()
+    env["pipeline"]._execute(
+        [item], ["convert"], False, env["settings"], summary
+    )
+
+    track = env["db"].get_track(track_id)
+    assert track.needs_update == 0
+    assert Path(track.mp3_path).name == "New Name.mp3"
+    assert calls == ["New Name"]
+    assert summary["converted"] == 1
+    # The audio was renamed, not re-encoded.
+    assert env["ffmpeg"].calls == []

@@ -768,8 +768,11 @@ class Pipeline(QObject):
             # Only the details changed. The audio in the existing file is
             # already right, so the tags and the name are rewritten and the
             # sound is left bit-for-bit alone: re-encoding a lossy file
-            # loses quality every time it is done.
-            if retag:
+            # loses quality every time it is done. A song whose edit was
+            # saved without rewriting takes this path on the next normal
+            # run too, rather than skipping its existing file and then
+            # clearing the "needs update" flag.
+            if retag or track.needs_update:
                 try:
                     retagged = self._retag_existing(
                         item, track, settings, summary
