@@ -57,3 +57,12 @@ def test_find_exe_returns_path_or_none():
     service = SpotifyService()
     exe = service.find_exe()
     assert exe is None or Path(exe).exists()
+
+
+def test_open_folder_reports_a_path_it_cannot_open(tmp_path):
+    # A file where a folder is expected used to raise FileExistsError from
+    # mkdir and reach the crash dialog. It must report, not raise.
+    not_a_folder = tmp_path / "song.mp3"
+    not_a_folder.write_bytes(b"audio")
+
+    assert SpotifyService.open_folder(not_a_folder) is False

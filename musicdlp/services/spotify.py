@@ -210,15 +210,25 @@ class SpotifyService:
             return False
 
     @staticmethod
-    def open_folder(path: Path) -> None:
+    def open_folder(path: Path) -> bool:
+        """Open a folder in the file manager. False if it cannot be opened.
+
+        A path that is a file, or a drive that went away, used to raise
+        FileExistsError from mkdir and reach the crash dialog.
+        """
         path = Path(path)
-        path.mkdir(parents=True, exist_ok=True)
-        if os.name == "nt":
-            os.startfile(str(path))  # type: ignore[attr-defined]
-        elif os.uname().sysname == "Darwin":  # type: ignore[attr-defined]
-            subprocess.Popen(["open", str(path)])
-        else:
-            subprocess.Popen(["xdg-open", str(path)])
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            if os.name == "nt":
+                os.startfile(str(path))  # type: ignore[attr-defined]
+            elif os.uname().sysname == "Darwin":  # type: ignore[attr-defined]
+                subprocess.Popen(["open", str(path)])
+            else:
+                subprocess.Popen(["xdg-open", str(path)])
+        except OSError as exc:
+            logger.warning("Could not open %s: %s", path, exc)
+            return False
+        return True
 
     def open_spotify(self) -> bool:
         return self.start()

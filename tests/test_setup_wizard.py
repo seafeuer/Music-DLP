@@ -177,3 +177,13 @@ def test_a_bad_folder_path_explains_itself(dialog, tmp_path):
     assert dialog.stack.currentIndex() == 2
     assert dialog.folder_error.text()
     assert "cannot be created" in dialog.folder_error.text().lower()
+
+
+def test_a_relative_folder_path_is_refused(dialog):
+    dialog._show_step(2)
+    dialog.folder_edit.setText("relative_songs")
+
+    dialog._next()
+
+    assert dialog.stack.currentIndex() == 2
+    assert "full path" in dialog.folder_error.text().lower()

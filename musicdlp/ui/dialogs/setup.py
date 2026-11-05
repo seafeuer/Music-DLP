@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 from pathlib import Path
 from typing import Optional
@@ -535,7 +536,15 @@ class SetupDialog(QDialog):
         if not text:
             self._show_folder_error("Choose a folder for your songs.")
             return False
-        path = Path(text).expanduser()
+        path = Path(os.path.expandvars(text)).expanduser()
+        if not path.is_absolute():
+            # A relative path points somewhere different depending on how
+            # the app was launched; Spotify would be given the other one.
+            self._show_folder_error(
+                "Use a full path, such as "
+                r"C:\Users\you\MusicDLP\Spotify."
+            )
+            return False
         try:
             path.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
@@ -571,7 +580,11 @@ class SetupDialog(QDialog):
         return is_writable(path)
 
     def _open_folder(self) -> None:
-        SpotifyService.open_folder(Path(self.folder_edit.text()))
+        if not SpotifyService.open_folder(Path(self.folder_edit.text())):
+            self._show_folder_error(
+                "That folder cannot be opened. Check that the path is a "
+                "folder and the drive is connected."
+            )
 
     def _copy_path(self) -> None:
         QApplication.clipboard().setText(self.folder_edit.text())
