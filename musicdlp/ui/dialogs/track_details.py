@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox,
     QVBoxLayout, QWidget,
 )
+from musicdlp.ui.dialogs.accessibility import pair_form_labels
 from musicdlp.ui.dialogs.footer import DialogFooter
 
 from musicdlp.core.models import COVER_CUSTOM, Track, is_converted
@@ -123,6 +124,7 @@ class TrackDetailsDialog(QDialog):
         self.preview.setObjectName("mutedSmall")
         self.preview.setWordWrap(True)
         fields.addRow("File name", self.preview)
+        pair_form_labels(fields)
 
         body.addLayout(fields, 1)
         layout.addLayout(body)

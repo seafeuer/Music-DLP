@@ -1943,3 +1943,24 @@ def test_both_template_hints_list_every_placeholder(qapp, window, monkeypatch):
     )
     for placeholder in placeholders:
         assert placeholder in labels
+
+
+def test_settings_labels_are_paired_with_their_fields(qapp, window):
+    """Accessibility: a form label must name and focus its field."""
+    from PySide6.QtWidgets import QLabel
+
+    main, _db, _data = window
+    dialog = SettingsDialog(
+        main.settings, main.ctx.ffmpeg, main.ctx.ytdlp, main.ctx.spotify, main
+    )
+
+    assert dialog.theme_combo.accessibleName() == "Theme"
+    assert dialog.copy_mode.accessibleName() == "When sending"
+    assert dialog.bridge_port_spin.accessibleName() == "Local port"
+
+    buddies = {
+        label.text(): label.buddy()
+        for label in dialog.findChildren(QLabel)
+    }
+    assert buddies["Theme"] is dialog.theme_combo
+    assert buddies["Format sent to Spotify"] is dialog.spotify_format

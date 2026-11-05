@@ -444,3 +444,11 @@ def test_the_dialog_translates_from_the_upload_title(qapp, monkeypatch):
 
     assert seen["items"][0][1] == "オーバーライド - 重音テトSV[吉田夜世]"
     assert seen["current"][1] == "重音テトsv[吉田夜世]"
+
+
+def test_translate_options_have_screen_reader_names(qapp):
+    dialog = TranslationDialog([_row()], ai_settings=SETTINGS)
+    assert dialog.language_combo.accessibleName() == "Translate into"
+    assert dialog.style_combo.accessibleName() == "Written as"
+    assert dialog.artist_check.accessibleName() == "Translate artist names too"
+    assert dialog.table.accessibleName() == "Translation results"

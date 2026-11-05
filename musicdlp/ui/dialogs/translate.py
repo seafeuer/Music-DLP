@@ -89,6 +89,7 @@ class TranslationDialog(QDialog):
         layout.addWidget(self._build_options())
 
         self.table = QTableWidget(len(self.rows), 6)
+        self.table.setAccessibleName("Translation results")
         self.table.setMinimumWidth(360)
         self.table.setHorizontalHeaderLabels(
             ["Use", "Current title", "Current artist", "New title",
@@ -157,6 +158,7 @@ class TranslationDialog(QDialog):
 
         row.addWidget(QLabel("Translate into"))
         self.language_combo = QComboBox()
+        self.language_combo.setAccessibleName("Translate into")
         self.language_combo.setEditable(True)
         self.language_combo.addItems(list(LANGUAGES))
         self.language_combo.setCurrentText("Japanese")
@@ -172,6 +174,7 @@ class TranslationDialog(QDialog):
 
         row.addWidget(QLabel("Written as"))
         self.style_combo = QComboBox()
+        self.style_combo.setAccessibleName("Written as")
         for value in (STYLE_BOTH, STYLE_TRANSLATED, STYLE_TRANSLITERATED):
             self.style_combo.addItem(STYLE_LABELS[value], value)
         self.style_combo.setMinimumContentsLength(8)
@@ -186,6 +189,7 @@ class TranslationDialog(QDialog):
         row.addWidget(self.style_combo, 1)
 
         self.artist_check = QCheckBox("Artists too")
+        self.artist_check.setAccessibleName("Translate artist names too")
         self.artist_check.setChecked(True)
         self.artist_check.setToolTip(
             "Leave this off to keep artist names exactly as they are"

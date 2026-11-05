@@ -988,3 +988,14 @@ def test_open_output_says_when_the_folder_cannot_be_opened(window, monkeypatch):
     text = main.status.status_label.text()
     assert "Could not open" in text
     assert str(main.settings.output_path) in text
+
+
+def test_details_fields_are_paired_with_their_labels(qapp, tmp_path):
+    """Accessibility: the edit fields must be named by their labels."""
+    _db, dialog = _details_dialog(
+        tmp_path, cover=None, thumbnail_url=None
+    )
+    assert dialog.title_edit.accessibleName() == "Song title"
+    assert dialog.artist_edit.accessibleName() == "Artist"
+    assert dialog.album_edit.accessibleName() == "Album"
+    assert dialog.track_spin.accessibleName() == "Track number"

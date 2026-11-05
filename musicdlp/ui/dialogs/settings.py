@@ -56,6 +56,7 @@ from musicdlp.services.ffmpeg import FFmpegService
 from musicdlp.services import gdrive
 from musicdlp.services.spotify import SpotifyService
 from musicdlp.services.ytdlp import YtDlpService
+from musicdlp.ui.dialogs.accessibility import pair_form_labels
 from musicdlp.ui.dialogs.footer import DialogFooter
 from musicdlp.ui.dialogs.sizing import fit_dialog
 from musicdlp.ui.plural import counted
@@ -110,6 +111,9 @@ class SettingsDialog(QDialog):
         scroll.setFrameShape(QScrollArea.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setWidget(tab)
+        # Every labelled row in this tab becomes reachable by its label.
+        for form in tab.findChildren(QFormLayout):
+            pair_form_labels(form)
         self.tabs.addTab(scroll, name)
 
     def _build_general(self) -> None:
