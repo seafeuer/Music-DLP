@@ -9,11 +9,7 @@ from musicdlp.ui.dialogs.footer import DialogFooter
 
 SHORTCUTS: tuple[tuple[str, str], ...] = (
     ("Ctrl+N", "Put the cursor in the link box"),
-    (
-        "Enter",
-        "Add the link in the box (Shift+Enter starts a new line when "
-        "adding several)",
-    ),
+    ("Enter", "Add the link in the box"),
     ("Ctrl+Shift+V", "Add several links at once"),
     ("F5", "Read the selected link again"),
     ("Ctrl+F", "Search every song in the library"),
@@ -23,7 +19,7 @@ SHORTCUTS: tuple[tuple[str, str], ...] = (
     ("Ctrl+Enter", "Run the main action (download, convert, or send)"),
     ("Space", "Tick or untick the highlighted song"),
     ("F2  /  Enter", "Edit the highlighted song's details"),
-    ("Delete", "Remove the highlighted songs from the library"),
+    ("Delete  /  Backspace", "Remove the highlighted songs from the library"),
     ("Ctrl+Z", "Undo the last rename, move, or removal"),
     ("Ctrl+T", "Translate the ticked songs"),
     ("Ctrl+Shift+R", "Rewrite the files of the ticked songs"),
@@ -64,7 +60,11 @@ class ShortcutsDialog(QDialog):
             key_label.setStyleSheet("font-weight: 600;")
             key_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
             grid.addWidget(key_label, row, column)
-            grid.addWidget(QLabel(description), row, column + 1)
+            label = QLabel(description)
+            # A long description was clipped rather than wrapped at
+            # the dialog's minimum width.
+            label.setWordWrap(True)
+            grid.addWidget(label, row, column + 1)
         grid.setColumnStretch(3, 1)
         layout.addLayout(grid)
 

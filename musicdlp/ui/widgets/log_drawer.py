@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 from PySide6.QtCore import Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
@@ -18,7 +20,7 @@ class LogDrawer(QWidget):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.lines: list[tuple[str, str]] = []
+        self.lines: list[tuple[str, str, str]] = []
         self.max_lines = 3000
 
         layout = QVBoxLayout(self)
@@ -69,13 +71,17 @@ class LogDrawer(QWidget):
 
     def append(self, level: str, message: str) -> None:
         level = (level or "INFO").upper()
-        self.lines.append((level, message))
+        stamp = time.strftime("%H:%M:%S")
+        self.lines.append((level, stamp, message))
         if len(self.lines) > self.max_lines:
             self.lines = self.lines[-self.max_lines:]
         if self._passes(level):
-            self.text.appendPlainText(message)
-            scroll = self.text.verticalScrollBar()
-            scroll.setValue(scroll.maximum())
+            was_at_bottom = self._at_bottom()
+            self.text.appendPlainText(self._format(level, stamp, message))
+            # Reading back through the log used to be impossible: every
+            # new line dragged the view to the bottom.
+            if was_at_bottom:
+                self._scroll_to_bottom()
 
     def clear(self) -> None:
         self.lines.clear()
@@ -87,11 +93,23 @@ class LogDrawer(QWidget):
     def _passes(self, level: str) -> bool:
         return LEVEL_ORDER.get(level, 1) >= self._threshold()
 
+    def _at_bottom(self) -> bool:
+        scroll = self.text.verticalScrollBar()
+        return scroll.value() >= scroll.maximum() - 4
+
+    def _scroll_to_bottom(self) -> None:
+        scroll = self.text.verticalScrollBar()
+        scroll.setValue(scroll.maximum())
+
+    @staticmethod
+    def _format(level: str, stamp: str, message: str) -> str:
+        return f"{stamp}  {level:<7}  {message}"
+
     def _rerender(self) -> None:
+        keep = self._at_bottom()
         self.text.clear()
-        for level, message in self.lines:
+        for level, stamp, message in self.lines:
             if self._passes(level):
-                self.text.appendPlainText(message)
-        self.text.verticalScrollBar().setValue(
-            self.text.verticalScrollBar().maximum()
-        )
+                self.text.appendPlainText(self._format(level, stamp, message))
+        if keep:
+            self._scroll_to_bottom()

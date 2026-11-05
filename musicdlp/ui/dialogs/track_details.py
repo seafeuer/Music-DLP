@@ -150,8 +150,16 @@ class TrackDetailsDialog(QDialog):
         # What happens on save ------------------------------------------
         converted = is_converted(track.status)
         self.update_check = QCheckBox("Write these details into the audio file now")
-        self.update_check.setChecked(converted)
+        # Not pre-ticked. The dialog opens with the primary button as the
+        # default, so one Enter used to start a rewrite (and a Spotify
+        # resend) before the user had looked at anything. The box ticks
+        # itself as soon as a field is actually edited.
+        self.update_check.setChecked(False)
         self.update_check.setEnabled(converted)
+        self._auto_ticking = False
+        self._user_touched_update = False
+        self._ready = False
+        self.update_check.toggled.connect(self._on_update_toggled)
         self.update_check.setToolTip(
             "The file's tags and name change; the sound itself is left "
             "exactly as it is, so nothing is re-encoded"
@@ -186,6 +194,25 @@ class TrackDetailsDialog(QDialog):
 
         self._update_preview()
         self._refresh_artwork()
+        self._ready = True
+        # Put the cursor where the user is going to type. The primary
+        # button used to hold focus, so Return meant "Save" before the
+        # dialog had been read.
+        self.title_edit.setFocus()
+        self.title_edit.selectAll()
+
+    def _on_update_toggled(self, checked: bool) -> None:
+        if self._ready and not self._auto_ticking:
+            self._user_touched_update = True
+
+    def _field_changed(self) -> None:
+        """Tick "write into the file" once the user actually edits."""
+        if not self._ready or self._user_touched_update:
+            return
+        if self.update_check.isEnabled() and not self.update_check.isChecked():
+            self._auto_ticking = True
+            self.update_check.setChecked(True)
+            self._auto_ticking = False
 
     # ------------------------------------------------------------------ art
 
@@ -237,6 +264,7 @@ class TrackDetailsDialog(QDialog):
             return
         self.cover_path = filename
         self.cover_changed = True
+        self._field_changed()
         self._refresh_artwork()
 
     def _find_art(self) -> None:
@@ -277,6 +305,7 @@ class TrackDetailsDialog(QDialog):
         self.find_art_button.setText("Find cover art")
         self.cover_path = str(found)
         self.cover_changed = True
+        self._field_changed()
         self._refresh_artwork()
 
     def _show_art_status(self) -> None:
@@ -295,6 +324,7 @@ class TrackDetailsDialog(QDialog):
         else:
             self.cover_path = None
         self.cover_changed = True
+        self._field_changed()
         self.artwork.setText(
             "The video's picture will be used when the file is written."
         )
@@ -345,6 +375,7 @@ class TrackDetailsDialog(QDialog):
             self.artist_edit.setText(artist)
 
     def _update_preview(self) -> None:
+        self._field_changed()
         stem = render_template(
             self.filename_template,
             title=self.title_edit.text().strip() or "Untitled",

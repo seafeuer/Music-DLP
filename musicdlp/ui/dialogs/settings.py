@@ -1062,47 +1062,52 @@ class SettingsDialog(QDialog):
             )
             return
 
+        # A folder that cannot be used must not hold the rest of the
+        # settings hostage: changing the theme or the log level while a
+        # drive is disconnected used to fail with no way forward. The bad
+        # folder is kept as it was, everything else is saved, and the user
+        # is told exactly what was not applied.
+        folder_problem = ""
+        folder_tab = 2
         spotify_dir = self.spotify_edit.text().strip()
         if not spotify_dir:
-            QMessageBox.warning(
-                self, "No Spotify folder",
-                "Choose the folder Spotify should read your songs from.",
+            folder_problem = (
+                "No Spotify folder was chosen, so that setting was left as "
+                "it was."
             )
-            return
-        try:
-            Path(spotify_dir).expanduser().mkdir(parents=True, exist_ok=True)
-        except OSError as exc:
-            QMessageBox.critical(
-                self, "Folder cannot be used",
-                f"That folder cannot be created:\n{spotify_dir}\n\n{exc}",
-            )
-            return
-        if not is_writable(Path(spotify_dir).expanduser()):
-            QMessageBox.critical(
-                self, "Folder cannot be used",
-                f"Music DLP cannot write to:\n{spotify_dir}\n\nChoose a "
-                "folder you own, such as one under your user folder.",
-            )
-            return
+            folder_tab = 3
+        else:
+            try:
+                Path(spotify_dir).expanduser().mkdir(parents=True, exist_ok=True)
+                writable = is_writable(Path(spotify_dir).expanduser())
+            except OSError:
+                writable = False
+            if not writable:
+                folder_problem = (
+                    f"The Spotify folder could not be used:\n{spotify_dir}\n\n"
+                    "That setting was left as it was. Choose a folder you "
+                    "own, such as one under your user folder."
+                )
+                folder_tab = 3
 
         output_dir = self.output_edit.text().strip()
-        if not output_dir:
-            QMessageBox.warning(
-                self, "No output folder",
-                "Choose the folder Music DLP should keep downloaded songs in.",
+        if not folder_problem and not output_dir:
+            folder_problem = (
+                "No output folder was chosen, so that setting was left as "
+                "it was."
             )
-            return
-        if not is_writable(Path(output_dir).expanduser()):
-            # A path that is a file, on a disconnected drive, or read-only
-            # let the first download fail halfway with the song stuck on
-            # "Converting". Refuse it while the user is looking at it.
-            QMessageBox.critical(
-                self, "Folder cannot be used",
+            folder_tab = 2
+        elif not folder_problem and not is_writable(Path(output_dir).expanduser()):
+            folder_problem = (
                 f"Music DLP cannot save downloads there:\n{output_dir}\n\n"
-                "Choose a different folder, or check that the drive is "
-                "connected and not read-only.",
+                "That setting was left as it was. Choose a different folder, "
+                "or check that the drive is connected and not read-only."
             )
-            return
+            folder_tab = 2
+
+        if folder_problem:
+            spotify_dir = self.settings.spotify_dir
+            output_dir = self.settings.output_dir
 
         settings = Settings(
             theme=self.theme_combo.currentData(),
@@ -1186,4 +1191,12 @@ class SettingsDialog(QDialog):
             )
 
         self.result_settings = settings
+        if folder_problem:
+            self.tabs.setCurrentIndex(folder_tab)
+            self.folder_problem = folder_problem
+            QMessageBox.warning(
+                self,
+                "Other settings saved",
+                "Your other changes were saved.\n\n" + folder_problem,
+            )
         self.accept()

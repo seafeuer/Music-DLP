@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 class SetupBanner(QFrame):
     """Shows one actionable setup prompt at a time."""
 
-    action_clicked = Signal()
+    action_clicked = Signal(str)
     dismissed = Signal(str)  # the kind that was dismissed
 
     def __init__(self, parent=None) -> None:
@@ -41,7 +41,9 @@ class SetupBanner(QFrame):
         layout.addWidget(self.message, 1)
 
         self.button = QPushButton("Fix")
-        self.button.clicked.connect(self.action_clicked)
+        self.button.clicked.connect(
+            lambda: self.action_clicked.emit(self._kind or "")
+        )
         layout.addWidget(self.button)
 
         self.close_button = QToolButton()

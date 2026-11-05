@@ -59,6 +59,7 @@ class SetupDialog(QDialog):
         ffmpeg: FFmpegService,
         spotify: SpotifyService,
         parent=None,
+        start_step: int = 0,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Set up Music DLP")
@@ -289,7 +290,7 @@ class SetupDialog(QDialog):
         # instead of closing the wizard the way "Save and close" did.
         self.footer.set_primary("Next", self._next)
         outer.addWidget(self.footer)
-        self._show_step(0)
+        self._show_step(start_step)
 
         self.refresh()
 
