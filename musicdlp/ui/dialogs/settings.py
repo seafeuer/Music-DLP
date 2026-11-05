@@ -307,7 +307,7 @@ class SettingsDialog(QDialog):
 
         note = QLabel(
             "Placeholders: {title}, {artist}, {album}, {track}, {id}, "
-            "{source}. The default keeps the published title."
+            "{media_id}, {source}. The default keeps the published title."
         )
         note.setWordWrap(True)
         note.setObjectName("muted")

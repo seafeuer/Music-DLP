@@ -1910,3 +1910,36 @@ def test_settings_can_switch_the_spotify_panel_off_and_change_its_port(
     assert saved.bridge_port == 9001
     # The token is not shown in the dialog and must survive a save.
     assert saved.bridge_token == main.settings.bridge_token
+
+
+def test_both_template_hints_list_every_placeholder(qapp, window, monkeypatch):
+    """M30: {media_id} was missing from Settings and {id}/{source} were
+    missing from the folder pattern prompt."""
+    from PySide6.QtWidgets import QInputDialog, QLabel
+
+    main, db, _data = window
+    folder_id = db.add_folder("Album")
+    captured = {}
+
+    def fake_get_text(*args, **kwargs):
+        captured["label"] = args[2]
+        return "", False
+
+    monkeypatch.setattr(QInputDialog, "getText", fake_get_text)
+    main._folder_template(folder_id)
+
+    placeholders = (
+        "{title}", "{artist}", "{album}", "{track}", "{id}",
+        "{media_id}", "{source}",
+    )
+    for placeholder in placeholders:
+        assert placeholder in captured["label"]
+
+    dialog = SettingsDialog(
+        main.settings, main.ctx.ffmpeg, main.ctx.ytdlp, main.ctx.spotify, main
+    )
+    labels = " ".join(
+        label.text() for label in dialog.findChildren(QLabel)
+    )
+    for placeholder in placeholders:
+        assert placeholder in labels

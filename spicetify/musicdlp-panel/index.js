@@ -329,6 +329,30 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
     return { playlistUri: playlistUri, plan: plan };
   }
 
+  /* Which folder to show after a fresh folder list arrives.
+   *
+   * The desktop can delete or rename folders while this panel is open, so
+   * a folder that used to be selected may be gone. Fall back to the first
+   * folder instead of keeping a stale id whose sync would 404.
+   */
+  function activeFolderAfterRefresh(list, currentId) {
+    var items = list || [];
+    if (currentId !== null && currentId !== undefined) {
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].id === currentId) return currentId;
+      }
+    }
+    return items.length ? items[0].id : null;
+  }
+
+  function sameFolders(left, right) {
+    try {
+      return JSON.stringify(left || []) === JSON.stringify(right || []);
+    } catch (err) {
+      return false;
+    }
+  }
+
   /* Songs that Spotify folds into a single local URI.
    *
    * Spotify keys a local file by title, artist and length, so two different
@@ -865,8 +889,20 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
 
     async function refreshFolders() {
       var list = await api("GET", "/api/folders");
-      setFolders(list);
+      setFolders(function (previous) {
+        return sameFolders(previous, list) ? previous : list;
+      });
       return list;
+    }
+
+    /* Follow a changed folder list: switch away from a folder that the
+     * desktop deleted or renamed. */
+    function adoptFolders(list) {
+      var id = activeFolderAfterRefresh(list, activeRef.current);
+      if (id === activeRef.current) return;
+      setActiveFolder(id);
+      activeRef.current = id;
+      loadTracks(id).catch(function () {});
     }
 
     async function loadTracks(folderId) {
@@ -929,6 +965,38 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
       return function () { alive = false; clearInterval(timer); };
     }, []);
 
+    // The folder list used to be a snapshot: a folder added, renamed or
+    // deleted in the desktop app stayed invisible here until the panel was
+    // reloaded. Poll quietly while the panel is visible, and follow a
+    // folder that disappeared.
+    React.useEffect(function () {
+      function refreshQuietly() {
+        refreshFolders().then(adoptFolders).catch(function () {});
+      }
+      var timer = setInterval(function () {
+        if (typeof document !== "undefined" && document.visibilityState
+            && document.visibilityState !== "visible") {
+          return;
+        }
+        refreshQuietly();
+      }, 20000);
+      function onVisible() {
+        if (typeof document === "undefined"
+            || document.visibilityState === "visible") {
+          refreshQuietly();
+        }
+      }
+      if (typeof document !== "undefined" && document.addEventListener) {
+        document.addEventListener("visibilitychange", onVisible);
+      }
+      return function () {
+        clearInterval(timer);
+        if (typeof document !== "undefined" && document.removeEventListener) {
+          document.removeEventListener("visibilitychange", onVisible);
+        }
+      };
+    }, []);
+
     // A toast left on screen forever hid the panel and stacked errors.
     React.useEffect(function () {
       if (!toast) return;
@@ -940,10 +1008,10 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
       setLoading(true);
       try {
         var list = await refreshFolders();
-        var id = activeRef.current;
-        if (id !== null && !list.filter(function (f) { return f.id === id; }).length) {
-          id = list.length ? list[0].id : null;
+        var id = activeFolderAfterRefresh(list, activeRef.current);
+        if (id !== activeRef.current) {
           setActiveFolder(id);
+          activeRef.current = id;
         }
         await loadTracks(id);
       } catch (err) {

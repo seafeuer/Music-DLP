@@ -1186,7 +1186,8 @@ class MainWindow(QMainWindow):
             self,
             "File name pattern",
             "How should files in this folder be named?\n\n"
-            "Use {title}, {artist}, {album}, {track}, or {media_id}.\n"
+            "Use {title}, {artist}, {album}, {track}, {id}, {media_id}, "
+            "or {source}.\n"
             "For example: {track:02d} - {title}",
             text=current,
         )

@@ -272,3 +272,16 @@ test("identical tags are called out before a sync", () => {
   assert.equal(context.duplicateTagsWarning({ duplicate_tags: [] }), "");
   assert.equal(context.duplicateTagsWarning({}), "");
 });
+
+test("a folder deleted on the desktop stops being selected", () => {
+  /* M32: the panel's folder list was a snapshot. When a poll returns a
+   * list without the open folder, the panel must move to a real one. */
+  const { context } = loadPanel();
+  const list = [{ id: 1, title: "A" }, { id: 2, title: "B" }];
+  assert.equal(context.activeFolderAfterRefresh(list, 2), 2);
+  assert.equal(context.activeFolderAfterRefresh([{ id: 1, title: "A" }], 2), 1);
+  assert.equal(context.activeFolderAfterRefresh([], 2), null);
+  assert.equal(context.activeFolderAfterRefresh(list, null), 1);
+  assert.equal(context.sameFolders(list, JSON.parse(JSON.stringify(list))), true);
+  assert.equal(context.sameFolders(list, []), false);
+});
