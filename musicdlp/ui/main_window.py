@@ -158,18 +158,26 @@ class FixCoversTask(QRunnable):
         thumbnails,
         track_ids: list[int],
         signals: FixCoversSignals,
+        cancel: Optional[threading.Event] = None,
     ) -> None:
         super().__init__()
         self.library = library
         self.thumbnails = thumbnails
         self.track_ids = track_ids
         self.signals = signals
+        self.cancel = cancel or threading.Event()
 
     def run(self) -> None:
         counts = {"updated": 0, "unchanged": 0, "skipped": 0, "error": 0}
         try:
             total = len(self.track_ids)
             for index, track_id in enumerate(self.track_ids, start=1):
+                if self.cancel.is_set():
+                    # Cancel was dead during Fix covers: the status bar
+                    # offered it, the click did nothing, and closing could
+                    # then close the database under this worker.
+                    counts["cancelled"] = 1
+                    break
                 try:
                     outcome = self.library.refresh_cover(
                         track_id, thumbnails=self.thumbnails
@@ -365,7 +373,7 @@ class MainWindow(QMainWindow):
         self.link_edit.returnPressed.connect(self._add_from_input)
         add_row.addWidget(self.link_edit, 1)
 
-        self.paste_button = QPushButton("Paste & add")
+        self.paste_button = QPushButton("Paste && add")
         self.paste_button.setToolTip(
             "Read the link on the clipboard and add it"
         )
@@ -498,9 +506,13 @@ class MainWindow(QMainWindow):
         select_failed.triggered.connect(self.track_table.model.check_problems)
         edit_menu.addAction(select_failed)
 
-        clear_selection = QAction("Clear selection", self)
-        clear_selection.triggered.connect(self.track_table.model.clear_checks)
-        edit_menu.addAction(clear_selection)
+        clear_view = QAction("Clear selection in this view", self)
+        clear_view.triggered.connect(self.track_table.model.clear_checks)
+        edit_menu.addAction(clear_view)
+
+        clear_all = QAction("Clear every ticked song", self)
+        clear_all.triggered.connect(self._clear_all_checks)
+        edit_menu.addAction(clear_all)
 
         edit_menu.addSeparator()
         self.undo_action = QAction("Undo", self)
@@ -658,7 +670,7 @@ class MainWindow(QMainWindow):
         more_menu.addAction(self.logs_action)
 
     def _connect_signals(self) -> None:
-        self.sidebar.source_selected.connect(self._load_source)
+        self.sidebar.source_selected.connect(self._select_source)
         self.sidebar.refresh_requested.connect(self._refresh_source)
         self.sidebar.delete_requested.connect(self._remove_source)
         self.sidebar.add_requested.connect(lambda: self.link_edit.setFocus())
@@ -672,6 +684,7 @@ class MainWindow(QMainWindow):
         self.sidebar.folder_template_requested.connect(self._folder_template)
 
         self.track_table.checked_changed.connect(self._on_checked_changed)
+        self.track_table.clear_all_requested.connect(self._clear_all_checks)
         self.track_table.edit_details_requested.connect(self._open_details)
         self.track_table.suggestions_requested.connect(self._open_suggestions)
         self.track_table.retry_requested.connect(self._retry_track)
@@ -790,6 +803,23 @@ class MainWindow(QMainWindow):
         else:
             self._load_source(target)
 
+    def _select_source(self, source_id: int) -> None:
+        """Open a link because the user clicked it.
+
+        Moving to another view ends the library-wide search: the table's
+        filter is cleared by ``set_source``, so leaving the query in the top
+        box would advertise a filter that is not applied. Reloads of the
+        same view never come through here, which is what keeps a search
+        alive while a job finishes.
+        """
+        if self.search_edit.text() and not self._search_guard:
+            self._search_guard = True
+            self.search_edit.clear()
+            self.track_table.search.clear()
+            self._search_guard = False
+            self._search_from = None
+        self._load_source(source_id)
+
     def _load_source(self, source_id: int) -> None:
         if source_id == ALL_SONGS_ID:
             source = self._all_source
@@ -856,14 +886,12 @@ class MainWindow(QMainWindow):
             self.inspector.set_row(row, self._is_row_checked(row))
         self._update_actions()
 
-        # Leaving the library search for a specific link clears the box, so
-        # the two searches do not fight each other. The search box's own
-        # switch is guarded, so typing does not clear what was just typed.
-        if not self._search_guard and self.search_edit.text():
-            self._search_guard = True
-            self.search_edit.clear()
-            self._search_guard = False
-            self._search_from = None
+        # The search box owns its own state. A reload — after a job, an
+        # edit, or a refresh — used to clear it while the table's hidden
+        # filter kept the query, so the list was narrowed with an empty box
+        # and no way back to the link the search started from. Only a user
+        # click on another link (see _select_source) or clearing the box
+        # itself changes it.
 
     def _clear_every_search(self) -> None:
         """Clear the library search as well as the list's own filter."""
@@ -1332,6 +1360,20 @@ class MainWindow(QMainWindow):
         self._reload_current_source()
         self._update_actions()
 
+    def _clear_all_checks(self) -> None:
+        """Untick every song, in every view.
+
+        "Clear selection" only clears the list on screen, because ticks are
+        kept per link; the action button kept counting the others, which
+        looked like the clear had failed.
+        """
+        self._checked.clear()
+        self._auto_checked.clear()
+        self.track_table.model.clear_checks()
+        self._update_actions()
+        self._update_steps()
+        self.status.set_idle("Every song is unticked.")
+
     def _reload_current_source(self) -> None:
         if self._current_source_id is not None:
             self._load_source(self._current_source_id)
@@ -1363,6 +1405,14 @@ class MainWindow(QMainWindow):
         text = self.link_edit.text().strip()
         if not text:
             self.link_edit.setFocus()
+            return
+        if self._is_busy():
+            # The box used to be cleared before the refusal, so the pasted
+            # link was gone and the only copy was an internal variable.
+            self.status.set_idle(
+                "Wait for the current job to finish — your link is still "
+                "in the box."
+            )
             return
         # The box is cleared so the next paste has room, but a failed read
         # then leaves the user with an error and nothing to correct. Keep
@@ -1547,6 +1597,12 @@ class MainWindow(QMainWindow):
 
     def _refresh_source(self, source_id: int) -> None:
         if source_id == ALL_SONGS_ID:
+            # F5 and the Refresh control used to do nothing here and leave
+            # the previous status in place, which read as a broken button.
+            self.status.set_idle(
+                "All songs shows every link. Open a link and refresh that, "
+                "or press Refresh in the library list."
+            )
             return
         if self._is_busy():
             self.status.set_idle("Wait for the current job to finish.")
@@ -1556,7 +1612,7 @@ class MainWindow(QMainWindow):
         generation = self._add_generation
         self._add_cancel = threading.Event()
         self._set_controls_enabled(False)
-        self.status.set_busy("Refreshing source…")
+        self.status.set_busy("Refreshing the link…")
 
         signals = LibrarySignals()
         signals.finished.connect(
@@ -1834,6 +1890,9 @@ class MainWindow(QMainWindow):
     def _set_controls_enabled(self, enabled: bool) -> None:
         self.add_button.setEnabled(enabled)
         self.paste_button.setEnabled(enabled)
+        # The link box stayed live during a job, so Enter in it cleared the
+        # text and then refused to add it. Disabling it keeps the link.
+        self.link_edit.setEnabled(enabled)
         self.mode_combo.setEnabled(enabled)
         self.settings_action.setEnabled(enabled)
         self.sidebar.set_busy(not enabled)
@@ -1994,6 +2053,14 @@ class MainWindow(QMainWindow):
         track = self.db.get_track(track_id)
         if track is not None:
             self.track_table.update_track(track)
+        # The details panel was left saying "Not downloaded" while the row
+        # next to it said "Downloading", because only the table row was
+        # refreshed during a job.
+        current = self.track_table.current_row()
+        if current is not None and current.track.id == track_id:
+            row = self.track_table.model.row_for_id(track_id)
+            if row is not None:
+                self.inspector.set_row(row, self._is_row_checked(row))
 
     def _on_progress(self, data: dict) -> None:
         self.status.set_progress(data)
@@ -2046,14 +2113,16 @@ class MainWindow(QMainWindow):
             )
         elif summary.get("failed"):
             self.status.set_idle(f"{message} — press Logs for details.")
-        elif not self.ctx.ffmpeg.available:
-            self.status.set_idle(
-                "Songs downloaded. FFmpeg is needed to convert them — "
-                "press “Set up FFmpeg” at the top."
-            )
         elif summary.get("synced"):
             self.status.set_idle(
                 message + " · In Spotify: Your Library → Local Files."
+            )
+        elif not self.ctx.ffmpeg.available and summary.get("downloaded"):
+            # Only a download that still needs converting. A sync-only run
+            # was reported as "FFmpeg is needed" even when it succeeded.
+            self.status.set_idle(
+                "Songs downloaded. FFmpeg is needed to convert them — "
+                "press “Set up FFmpeg” at the top."
             )
         else:
             self.status.set_idle(message)
@@ -2082,6 +2151,11 @@ class MainWindow(QMainWindow):
         if self.ctx.pipeline.is_running:
             self.ctx.pipeline.cancel()
             self.status.set_busy("Cancelling…")
+        elif getattr(self, "_covers_running", False):
+            cancel = getattr(self, "_covers_cancel", None)
+            if cancel is not None:
+                cancel.set()
+            self.status.set_busy("Cancelling… this stops after the current song.")
         elif self._add_running:
             self._add_cancel.set()
             self._stop_add_ticker()
@@ -2569,6 +2643,20 @@ class MainWindow(QMainWindow):
             return
 
         values = dialog.result_values
+        # Pressing Return on a dialog that was just opened must not count as
+        # an edit: there is nothing to save and nothing should be flagged
+        # for a rewrite. An explicit "write the file now" still runs.
+        changed = (
+            values["title"] != (row.track.display_title or "")
+            or values["artist"] != (row.track.display_artist or "")
+            or values["album"] != (row.track.display_album or "")
+            or (values["track_number"] or None)
+            != (row.track.display_track or None)
+            or values["cover_changed"]
+        )
+        if not changed and not values["update_file"]:
+            return
+
         self._push_metadata_undo("Editing song details", [track_id])
         self.ctx.library.set_metadata(
             track_id,
@@ -2752,6 +2840,7 @@ class MainWindow(QMainWindow):
             return
 
         self._covers_running = True
+        self._covers_cancel = threading.Event()
         self._set_controls_enabled(False)
         self.status.set_busy(
             f"Fixing covers for {counted(len(track_ids), 'song')}…"
@@ -2768,7 +2857,8 @@ class MainWindow(QMainWindow):
         self._cover_signals = signals
 
         task = FixCoversTask(
-            self.ctx.library, self.ctx.thumbnails, track_ids, signals
+            self.ctx.library, self.ctx.thumbnails, track_ids, signals,
+            cancel=self._covers_cancel,
         )
         QThreadPool.globalInstance().start(task)
 
@@ -2776,6 +2866,9 @@ class MainWindow(QMainWindow):
         self._covers_running = False
         self._set_controls_enabled(True)
         self._reload_current_source()
+        if counts.get("cancelled"):
+            self.status.set_idle("Fixing covers cancelled.")
+            return
         updated = counts.get("updated", 0)
         failed = counts.get("error", 0)
         skipped = counts.get("skipped", 0)
@@ -3072,6 +3165,11 @@ class MainWindow(QMainWindow):
 
     def _open_log_folder(self) -> None:
         from musicdlp.core.paths import log_dir
+        log_file = log_dir() / "musicdlp.log"
+        if log_file.exists():
+            # The button says "Open log file"; it used to open the folder.
+            self._reveal_path(log_file)
+            return
         SpotifyService.open_folder(log_dir())
 
     # -------------------------------------------------------------- settings
@@ -3096,25 +3194,49 @@ class MainWindow(QMainWindow):
 
     def _toggle_theme(self) -> None:
         self.settings.theme = "light" if self.settings.theme == "dark" else "dark"
+        saved = True
         try:
             self.settings.save()
-        except OSError:
-            pass
+        except OSError as exc:
+            saved = False
+            self.logger.warning("Could not save the theme: %s", exc)
         apply_theme(QApplication.instance(), self.settings.theme)
         self._update_theme_button()
-        self.status.set_idle(
-            f"{self.settings.theme.title()} theme on."
-        )
+        if saved:
+            self.status.set_idle(f"{self.settings.theme.title()} theme on.")
+        else:
+            self.status.set_idle(
+                f"{self.settings.theme.title()} theme on for this session; "
+                "the choice could not be saved."
+            )
 
-    def _open_setup(self) -> None:
-        """Open the guided setup checklist."""
+    def _open_setup(self, kind: str = "") -> None:
+        """Open the guided setup checklist, at the page that needs work.
+
+        The banner's mouse button always opened step 1, so a user sent to
+        the Spotify folder instructions had to press Next two or three
+        times to reach them.
+        """
+        if not isinstance(kind, str):
+            kind = ""
         if self._is_busy():
             self.status.set_idle("Wait for the current job to finish.")
             return
+        start_step = {
+            "ffmpeg": 0,
+            "spotify": 1,
+            "folder": 2,
+            "show": 3,
+        }.get(kind, 0)
         dialog = SetupDialog(
-            self.settings, self.ctx.ffmpeg, self.ctx.spotify, self
+            self.settings, self.ctx.ffmpeg, self.ctx.spotify, self,
+            start_step=start_step,
         )
-        dialog.exec()
+        accepted = dialog.exec() == QDialog.Accepted
+        if not accepted:
+            # Closing the dialog is not saving it.
+            self.status.set_idle("Setup closed. Nothing was changed.")
+            return
 
         # The dialog may have changed the FFmpeg path or the Spotify folder.
         self.settings = Settings.load()
@@ -3124,6 +3246,13 @@ class MainWindow(QMainWindow):
         self._update_spotify_state()
         self._refresh_setup_banner()
         self._update_actions()
+        try:
+            self.settings.save()
+        except OSError as exc:
+            self.status.set_idle(
+                f"Setup changed but could not be saved: {exc}"
+            )
+            return
         self.status.set_idle("Setup saved.")
 
     def _refresh_setup_banner(self) -> None:
@@ -3232,8 +3361,11 @@ class MainWindow(QMainWindow):
         self.settings.mode = mode
         try:
             self.settings.save()
-        except OSError:
-            pass
+        except OSError as exc:
+            self.logger.warning("Could not save the mode: %s", exc)
+            self.status.set_idle(
+                "The mode is on for this session; the choice could not be saved."
+            )
         self._apply_mode()
         self._update_actions()
 
@@ -3254,8 +3386,13 @@ class MainWindow(QMainWindow):
             self.settings.spotify_dir = dialog.selected_dir
             try:
                 self.settings.save()
-            except OSError:
-                pass
+            except OSError as exc:
+                # Saying "saved" after a failed write sends the user away
+                # believing the next start will use this folder.
+                self.status.set_idle(
+                    f"The Spotify folder could not be saved: {exc}"
+                )
+                return
             self._update_spotify_state()
             self.status.set_idle("Spotify folder saved.")
 
@@ -3351,7 +3488,11 @@ class MainWindow(QMainWindow):
 
     def _about(self) -> None:
         from musicdlp import __version__
+        from PySide6.QtGui import QPalette
 
+        # Qt's rich text does not understand palette() colour names, so the
+        # muted line silently rendered in the normal colour.
+        muted = self.palette().color(QPalette.PlaceholderText).name()
         box = QMessageBox(self)
         box.setWindowTitle("About Music DLP")
         box.setIconPixmap(
@@ -3364,7 +3505,7 @@ class MainWindow(QMainWindow):
             "Downloads audio from YouTube, X, and other sites, converts it "
             "to tagged MP3/M4A files, and puts them where Spotify can find "
             "them.<br><br>"
-            "<span style='color:palette(placeholder-text)'>"
+            f"<span style='color:{muted}'>"
             f"yt-dlp {self.ctx.ytdlp.version()} · "
             f"FFmpeg {'ready' if self.ctx.ffmpeg.available else 'not found'}"
             "</span>"
@@ -3530,9 +3671,20 @@ class MainWindow(QMainWindow):
             # shutdown turns into a "Database is closed" traceback, so
             # give them a bounded moment to stop.
             if not QThreadPool.globalInstance().waitForDone(8000):
+                # Closing the database under a worker turns the shutdown
+                # into a traceback. Refuse this attempt instead; the window
+                # is still open and the user can close it again.
                 self.logger.warning(
                     "A background task was still running at exit"
                 )
+                event.ignore()
+                QMessageBox.information(
+                    self,
+                    "Still finishing",
+                    "Music DLP is still stopping a background task. "
+                    "Try closing again in a moment.",
+                )
+                return
 
         self._save_window_state()
         self.logger.removeHandler(self.log_handler)

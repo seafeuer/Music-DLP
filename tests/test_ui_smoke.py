@@ -792,3 +792,152 @@ def test_the_theme_switch_stays_visible_at_the_minimum_size(window):
 
     assert main.theme_button.isVisible()
     assert main.theme_button.text()
+
+
+def test_the_details_dialog_opens_in_the_title_field(qapp, tmp_path):
+    """Focus sat on Save, so Return rewrote the file before it was read."""
+    db, dialog = _details_dialog(
+        tmp_path, cover=None, thumbnail_url="https://i1.sndcdn.com/x.jpg"
+    )
+    dialog.show()
+    qapp.processEvents()
+
+    assert dialog.update_check.isChecked() is False
+    assert dialog.focusWidget() is dialog.title_edit
+    dialog.close()
+    db.close()
+
+
+def test_editing_a_field_opts_into_rewriting_the_file(qapp, tmp_path):
+    from PIL import Image
+
+    db, dialog = _details_dialog(
+        tmp_path, cover=None, thumbnail_url="https://i1.sndcdn.com/x.jpg"
+    )
+    # A converted song: rewriting is possible but not assumed.
+    db.update_track(1, status="converted", mp3_path=str(tmp_path / "a.mp3"))
+    dialog = __import__(
+        "musicdlp.ui.dialogs.track_details", fromlist=["TrackDetailsDialog"]
+    ).TrackDetailsDialog(
+        db.get_track(1), album_default="Singles", track_default=1,
+        filename_template="{title}",
+    )
+    assert dialog.update_check.isChecked() is False
+
+    dialog.title_edit.setText("A Better Name")
+
+    assert dialog.update_check.isChecked() is True
+    dialog.close()
+    db.close()
+
+
+def test_the_confirmation_says_a_successful_sync_was_a_sync(
+    qapp, window, monkeypatch
+):
+    """A sync-only run on a machine without FFmpeg said "FFmpeg is needed"."""
+    main, _db, _ids = window
+    monkeypatch.setattr(
+        type(main.ctx.ffmpeg), "available", property(lambda self: False)
+    )
+    main._on_pipeline_finished({
+        "downloaded": 0,
+        "converted": 0,
+        "synced": 1,
+        "failed": 0,
+        "skipped": 0,
+        "errors": [],
+        "cancelled": False,
+        "stages": ["sync"],
+    })
+
+    text = main.status.status_label.text()
+    assert "In Spotify" in text
+    assert "FFmpeg" not in text
+
+
+def test_the_details_panel_follows_a_running_job(window):
+    """The inspector said "Not downloaded" while the row said "Downloading"."""
+    main, db, ids = window
+    main._load_source(main.db.get_sources()[0].id)
+    main.track_table.table.selectRow(0)
+    row = main.track_table.current_row()
+    assert row is not None
+
+    db.update_track(row.track.id, status="downloading")
+    main._on_track_changed(row.track.id)
+
+    assert "Downloading" in main.inspector.status_label.text()
+
+
+def test_fixing_covers_can_be_cancelled(qapp, tmp_path):
+    import threading
+
+    from musicdlp.ui.main_window import FixCoversSignals, FixCoversTask
+
+    calls = []
+
+    class Library:
+        def refresh_cover(self, track_id, **_kwargs):
+            calls.append(track_id)
+            return "updated"
+
+    signals = FixCoversSignals()
+    results = []
+    signals.finished.connect(results.append)
+    cancel = threading.Event()
+    cancel.set()
+
+    task = FixCoversTask(Library(), None, [1, 2, 3], signals, cancel=cancel)
+    task.run()
+
+    assert calls == []
+    assert results and results[0].get("cancelled") == 1
+
+
+def test_a_dismissed_setup_dialog_does_not_claim_to_have_saved(qapp, window):
+    main, _db, _ids = window
+
+    class FakeDialog:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def exec(self):
+            from PySide6.QtWidgets import QDialog
+            return QDialog.Rejected
+
+    import musicdlp.ui.main_window as module
+
+    original = module.SetupDialog
+    module.SetupDialog = FakeDialog
+    try:
+        main._open_setup()
+    finally:
+        module.SetupDialog = original
+
+    assert "nothing was changed" in main.status.status_label.text().lower()
+
+
+def test_the_log_drawer_shows_time_and_level(qapp):
+    from musicdlp.ui.widgets.log_drawer import LogDrawer
+
+    drawer = LogDrawer()
+    drawer.append("warning", "something happened")
+
+    text = drawer.text.toPlainText()
+    assert "WARNING" in text
+    assert "something happened" in text
+    # HH:MM:SS at the start of the line.
+    assert text[:2].isdigit() and text[2] == ":"
+
+
+def test_the_shortcut_list_matches_the_keys(qapp):
+    from musicdlp.ui.dialogs.shortcuts import SHORTCUTS
+
+    text = " ".join(f"{keys} {description}" for keys, description in SHORTCUTS)
+    assert "Backspace" in text
+    assert "Shift+Enter" not in text
+
+
+def test_the_paste_button_keeps_its_ampersand(qapp, window):
+    main, _db, _ids = window
+    assert main.paste_button.text() == "Paste && add"

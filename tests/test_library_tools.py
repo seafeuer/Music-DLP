@@ -631,11 +631,16 @@ def test_clearing_the_search_returns_to_the_previous_link(window, qtbot):
 
 
 def test_opening_a_link_clears_the_library_search(window, qtbot):
+    """A user click on another link ends the search; a reload does not.
+
+    Only a click can clear the box, because a reload (a finished job, an
+    edit, a refresh) must keep the search the user was watching.
+    """
     main, _db, data = window
     main.search_edit.setText("song")
     qtbot.wait(30)
 
-    main._load_source(data["playlist"])
+    main._select_source(data["playlist"])
 
     assert main.search_edit.text() == ""
 
@@ -1506,10 +1511,17 @@ def test_cancel_while_reading_a_link_does_not_add_it(tmp_path):
 def test_settings_refuse_an_output_folder_that_is_a_file(
     qapp, tmp_path, monkeypatch
 ):
+    """A folder that cannot be used is not applied, but nothing else is lost.
+
+    Refusing the whole dialog meant a disconnected drive blocked every
+    unrelated setting, including the theme.
+    """
     blocker = tmp_path / "blocker"
     blocker.write_text("I am a file", encoding="utf-8")
+    output = tmp_path / "out"
+    output.mkdir(exist_ok=True)
     settings = Settings(
-        output_dir=str(tmp_path / "out"),
+        output_dir=str(output),
         spotify_dir=str(tmp_path / "spotify"),
     )
     dialog = SettingsDialog(
@@ -1521,14 +1533,23 @@ def test_settings_refuse_an_output_folder_that_is_a_file(
     dialog.output_edit.setText(str(blocker))
     messages = []
     monkeypatch.setattr(
-        QMessageBox, "critical",
+        QMessageBox, "warning",
         staticmethod(lambda *args, **kwargs: messages.append(args[2])),
+    )
+    saved = {}
+    monkeypatch.setattr(
+        Settings, "save", lambda self, path=None: saved.update(
+            {"output_dir": self.output_dir}
+        )
     )
 
     dialog._save_now()
 
     assert messages
-    assert dialog.result_settings is None
+    assert "cannot save downloads" in messages[0].lower()
+    # The unusable folder was not adopted; the previous one was kept.
+    assert dialog.result_settings.output_dir == str(output)
+    assert saved["output_dir"] == str(output)
 
 
 def test_renaming_a_folder_to_an_existing_name_is_refused(window, monkeypatch):
@@ -1657,12 +1678,173 @@ def test_settings_refuse_an_unwritable_spotify_folder(
         "musicdlp.ui.dialogs.settings.is_writable", lambda path: False
     )
     monkeypatch.setattr(
-        QMessageBox, "critical",
+        QMessageBox, "warning",
         staticmethod(lambda *args, **kwargs: messages.append(args[2])),
     )
+    monkeypatch.setattr(Settings, "save", lambda self, path=None: None)
 
     dialog._save_now()
 
     assert messages
-    assert "cannot write" in messages[0].lower()
-    assert dialog.result_settings is None
+    assert "spotify folder could not be used" in messages[0].lower()
+    # The bad folder is not adopted; the rest of the settings still saved.
+    assert dialog.result_settings is not None
+    assert dialog.result_settings.spotify_dir != str(folder)
+
+
+# --------------------------------------------------- layout and search state
+
+
+def test_the_song_title_keeps_room_at_the_minimum_window_size(window, qtbot):
+    """At 1000 px the title column was 44 px wide: "DRAK…" and "夜…"."""
+    from musicdlp.ui.models.track_model import COL_TITLE
+
+    main, _db, data = window
+    main.resize(1000, 620)
+    qtbot.wait(50)
+    main.track_table._apply_column_visibility()
+
+    width = main.track_table.table.columnWidth(COL_TITLE)
+    assert width >= 220, f"title column was only {width} px"
+
+
+def test_a_reload_does_not_clear_the_library_search(window, qtbot):
+    """The box emptied while the list stayed filtered, with no way back."""
+    main, _db, _data = window
+    main.search_edit.setText("playlist")
+    qtbot.wait(30)
+
+    main._reload_current_source()  # what a job or an edit does
+
+    assert main.search_edit.text() == "playlist"
+    assert main.track_table.search.text() == "playlist"
+
+    # Clearing the box returns to the view the search started from.
+    main.search_edit.clear()
+    assert main.search_edit.text() == ""
+
+
+def test_clicking_another_link_leaves_the_library_search(window, qtbot):
+    main, _db, data = window
+    main.search_edit.setText("playlist")
+    qtbot.wait(30)
+
+    main._select_source(data["playlist"])
+
+    assert main.search_edit.text() == ""
+    assert main.track_table.search.text() == ""
+
+
+def test_a_link_pasted_during_a_job_stays_in_the_box(window, qtbot):
+    main, _db, _data = window
+    main.link_edit.setText("https://youtu.be/kept")
+    main._add_running = True  # a job is in progress
+    try:
+        main._add_from_input()
+        assert main.link_edit.text() == "https://youtu.be/kept"
+        assert "still in the box" in main.status.status_label.text().lower()
+    finally:
+        # Otherwise the window's close handler asks about the fake job.
+        main._add_running = False
+
+
+def test_clearing_every_selection_clears_the_count(window, qtbot):
+    """Clear selection only cleared the view, so the button kept counting."""
+    main, _db, data = window
+    main._checked = set(data["tracks"])
+    main.track_table.model.set_checked(data["tracks"])
+    main._update_actions()
+
+    main._clear_all_checks()
+
+    assert main._checked == set()
+    assert main.track_table.model.checked_ids() == set()
+    assert main.track_table.checked_count() == 0
+
+
+def test_sorting_survives_a_reload(window, qtbot):
+    from PySide6.QtCore import Qt
+
+    from musicdlp.ui.models.track_model import COL_TITLE
+
+    main, _db, data = window
+    table = main.track_table
+    table.table.sortByColumn(COL_TITLE, Qt.DescendingOrder)
+    qtbot.wait(20)
+
+    main._load_source(data["playlist"])
+    qtbot.wait(20)
+
+    header = table.table.horizontalHeader()
+    assert header.sortIndicatorSection() == COL_TITLE
+    assert header.sortIndicatorOrder() == Qt.DescendingOrder
+
+
+def test_the_row_number_follows_the_visible_order(window, qtbot):
+    """Sorting by title left each song's old position in the "#" column."""
+    from PySide6.QtCore import Qt
+
+    from musicdlp.ui.models.track_model import COL_POSITION, COL_TITLE
+
+    main, db, data = window
+    # Make the sorted order differ from the link's positions: "Apple" is
+    # the second song, so sorting by title puts it first.
+    db.update_track(data["tracks"][0], meta_title="Zebra")
+    db.update_track(data["tracks"][1], meta_title="Apple")
+    main._load_source(data["playlist"])
+
+    table = main.track_table
+    table.table.sortByColumn(COL_TITLE, Qt.AscendingOrder)
+    qtbot.wait(20)
+
+    proxy = table.proxy
+    numbers = [
+        proxy.index(row, COL_POSITION).data() for row in range(proxy.rowCount())
+    ]
+    assert numbers == [str(i + 1) for i in range(proxy.rowCount())]
+    assert proxy.index(0, COL_TITLE).data() == "Apple"
+
+
+def test_refreshing_all_songs_says_what_to_do(window):
+    main, _db, _data = window
+    main._refresh_source(0)
+
+    assert "open a link" in main.status.status_label.text().lower()
+
+
+def test_a_bad_folder_does_not_block_the_other_settings(
+    qapp, window, tmp_path, monkeypatch
+):
+    """Changing the theme used to fail because a drive was disconnected."""
+    from PySide6.QtWidgets import QMessageBox
+
+    from musicdlp.core.config import Settings as SettingsClass
+
+    main, _db, _data = window
+    output = tmp_path / "out"
+    spotify = tmp_path / "spotify"
+    output.mkdir(exist_ok=True)
+    spotify.mkdir(exist_ok=True)
+    settings = SettingsClass(
+        theme="dark", mode="easy", output_dir=str(output),
+        spotify_dir=str(spotify), first_run_done=True,
+    )
+    dialog = SettingsDialog(
+        settings, main.ctx.ffmpeg, main.ctx.ytdlp, main.ctx.spotify
+    )
+    light = dialog.theme_combo.findData("light")
+    dialog.theme_combo.setCurrentIndex(light)
+    dialog.output_edit.setText("Z:\no-such-drive\songs")
+
+    saved = {}
+    monkeypatch.setattr(
+        SettingsClass, "save",
+        lambda self, path=None: saved.update(self.__dict__),
+    )
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
+
+    dialog._save_now()
+
+    assert saved.get("theme") == "light"
+    assert saved.get("output_dir") == str(output)
+    assert "cannot save downloads" in dialog.folder_problem.lower()
