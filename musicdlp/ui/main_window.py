@@ -15,12 +15,13 @@ from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, QUrl, Qt, Si
 from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QDialog, QFileDialog, QHBoxLayout, QInputDialog,
-    QLabel, QLineEdit, QMainWindow, QMessageBox, QPushButton, QScrollArea,
-    QSizePolicy, QSplitter, QStyle, QSystemTrayIcon, QToolButton,
+    QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton,
+    QScrollArea, QSizePolicy, QSplitter, QStyle, QSystemTrayIcon, QToolButton,
     QVBoxLayout, QWidget,
 )
 
 from musicdlp import __version__
+from musicdlp.core import pending
 from musicdlp.core.config import Settings
 from musicdlp.core.db import Database
 from musicdlp.core.errors import AppError, Cancelled
@@ -28,7 +29,7 @@ from musicdlp.core.logging import LogEmitter, QtLogHandler
 from musicdlp.core.models import (
     ALL_SONGS_ID, BatchItem, Source, TrackRow, is_converted,
 )
-from musicdlp.core.paths import art_cache_dir, is_writable
+from musicdlp.core.paths import art_cache_dir, is_writable, pending_job_path
 from musicdlp.services.ffmpeg import FFmpegService
 from musicdlp.services.filenames import choose_template, render_template
 from musicdlp.services.ai import AISettings
@@ -244,6 +245,10 @@ class MainWindow(QMainWindow):
         self._add_label = ""
         self._add_timer: Optional[QTimer] = None
         self._active_signals: Optional[LibrarySignals] = None
+        # A tray icon shown only while a running job keeps the window
+        # hidden. The separate ``_tray`` is a transient notification icon.
+        self._window_tray: Optional[QSystemTrayIcon] = None
+        self._quitting = False
         self._tray: Optional[QSystemTrayIcon] = None
         # The link the library search jumped away from, so clearing the
         # search box can go back to it.
@@ -2034,6 +2039,13 @@ class MainWindow(QMainWindow):
             self.status.set_idle("Could not start the job.")
             return False, "The job could not be started."
 
+        # A crash or a forced shutdown must leave enough behind to offer
+        # the same batch again. The marker is removed when the pipeline
+        # reports that it finished, however it ended.
+        self._remember_pending_job(
+            items, stages, force=force, only_synced=only_synced, retag=retag
+        )
+
         self.track_table.clear_progress()
         self.status.set_busy(f"Starting {' → '.join(stages)}…")
         index_by_stage = {"download": 0, "convert": 1, "sync": 2}
@@ -2047,6 +2059,139 @@ class MainWindow(QMainWindow):
         )
         self._update_actions()
         return True, ""
+
+    # ------------------------------------------------- pending job and tray
+
+    def _remember_pending_job(
+        self,
+        items: list[BatchItem],
+        stages: list[str],
+        *,
+        force: bool,
+        only_synced: bool,
+        retag: bool,
+    ) -> None:
+        job = pending.new_job(
+            [item.track.id for item in items],
+            stages,
+            force=force,
+            only_synced=only_synced,
+            retag=retag,
+        )
+        pending.save(pending_job_path(), job)
+
+    def _clear_pending_job(self) -> None:
+        pending.clear(pending_job_path())
+
+    def resume_pending_job(self) -> bool:
+        """Offer the batch a previous run never finished.
+
+        Called once at startup. A marker whose songs are all gone (or
+        whose steps are unknown) is dropped instead of asking a question
+        that cannot be answered usefully.
+        """
+        job = pending.load(pending_job_path())
+        if job is None:
+            return False
+
+        rows = self.db.get_track_rows_by_ids(job.track_ids)
+        if not rows or not job.stages:
+            self._clear_pending_job()
+            return False
+
+        reply = QMessageBox.question(
+            self,
+            "Resume the last job?",
+            f"Music DLP stopped while working on {counted(len(rows), 'song')}. "
+            "Resume it now?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if reply != QMessageBox.Yes:
+            self._clear_pending_job()
+            return False
+
+        started, reason = self._start_pipeline(
+            rows,
+            job.stages,
+            force=job.force,
+            only_synced=job.only_synced,
+            retag=job.retag,
+        )
+        if not started:
+            self.status.set_idle(reason or "The last job could not be resumed.")
+            self._clear_pending_job()
+            return False
+        return True
+
+    def _ensure_window_tray(self) -> bool:
+        """Show the tray icon that keeps a running job reachable."""
+        if self._window_tray is not None:
+            return True
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return False
+
+        tray = QSystemTrayIcon(self.windowIcon(), self)
+        tray.setToolTip("Music DLP is still working")
+        menu = QMenu(self)
+        show_action = menu.addAction("Show Music DLP")
+        show_action.triggered.connect(self._restore_from_tray)
+        menu.addSeparator()
+        quit_action = menu.addAction("Quit Music DLP")
+        quit_action.triggered.connect(self._quit_from_tray)
+        tray.setContextMenu(menu)
+        tray.activated.connect(self._on_tray_activated)
+        tray.show()
+        self._window_tray = tray
+        return True
+
+    def _on_tray_activated(self, reason) -> None:
+        if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
+            self._restore_from_tray()
+
+    def _restore_from_tray(self) -> None:
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+        tray, self._window_tray = self._window_tray, None
+        if tray is not None:
+            tray.hide()
+            tray.deleteLater()
+
+    def _quit_from_tray(self) -> None:
+        # Quitting from the tray is a real exit: closeEvent must not offer
+        # to hide the window again.
+        self._quitting = True
+        self.close()
+
+    def _ask_close_action(self) -> str:
+        """Ask what closing during a job should do.
+
+        Returns ``tray``, ``cancel`` or ``back``. The default is Go back,
+        so pressing Enter cannot stop a download by accident.
+        """
+        box = QMessageBox(self)
+        box.setWindowTitle("Still working")
+        box.setText("Music DLP is still working on a job.")
+        box.setInformativeText(
+            "Keep it running in the tray and close this window, or stop "
+            "the job and exit?"
+        )
+        keep = box.addButton(
+            "Keep working in the tray", QMessageBox.AcceptRole
+        )
+        stop = box.addButton(
+            "Stop the job and exit", QMessageBox.DestructiveRole
+        )
+        back = box.addButton("Go back", QMessageBox.RejectRole)
+        box.setDefaultButton(back)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is keep:
+            return "tray"
+        if clicked is stop:
+            return "cancel"
+        return "back"
 
     # -------------------------------------------------------------- pipeline
 
@@ -2084,6 +2229,9 @@ class MainWindow(QMainWindow):
         )
 
     def _on_pipeline_finished(self, summary: dict) -> None:
+        # The job is over, however it ended: a marker left now would offer
+        # to resume work that is already done.
+        self._clear_pending_job()
         self.track_table.clear_progress()
         self._reload_current_source()
         self._refresh_sources(self._current_source_id)
@@ -3665,16 +3813,30 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         if self._is_busy():
-            reply = QMessageBox.question(
-                self,
-                "Job running",
-                "A download or conversion is still running. Cancel it and exit?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if reply != QMessageBox.Yes:
-                event.ignore()
-                return
+            if not self._quitting and QSystemTrayIcon.isSystemTrayAvailable():
+                action = self._ask_close_action()
+                if action == "tray" and self._ensure_window_tray():
+                    # The job keeps running and the tray icon brings the
+                    # window back when the user wants it.
+                    self.hide()
+                    event.ignore()
+                    return
+                if action == "back":
+                    event.ignore()
+                    return
+                # "cancel", or a tray that could not be created after all.
+            else:
+                reply = QMessageBox.question(
+                    self,
+                    "Job running",
+                    "A download or conversion is still running. "
+                    "Cancel it and exit?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No,
+                )
+                if reply != QMessageBox.Yes:
+                    event.ignore()
+                    return
             self._cancel()
             self.ctx.pipeline.wait(10)
             self._add_cancel.set()
@@ -3698,6 +3860,14 @@ class MainWindow(QMainWindow):
                 )
                 return
 
+        # The user chose to stop here, so there is nothing to offer next time.
+        # A crash never reaches this point, which is exactly when the
+        # marker should survive.
+        self._clear_pending_job()
+        tray, self._window_tray = self._window_tray, None
+        if tray is not None:
+            tray.hide()
+            tray.deleteLater()
         self._save_window_state()
         self.logger.removeHandler(self.log_handler)
         self.db.close()

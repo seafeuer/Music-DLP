@@ -203,6 +203,12 @@ def main() -> int:
     window = MainWindow(ctx)
     server = _listen_for_show(window)
     window.show()
+    # A batch that was interrupted by a crash, a power cut or a forced
+    # shutdown is offered again instead of disappearing silently.
+    try:
+        window.resume_pending_job()
+    except Exception as exc:
+        logger.warning("Could not resume the last job: %s", exc)
 
     # The panel inside Spotify talks to the library through this. It is
     # optional: a port already in use only means the panel stays offline.

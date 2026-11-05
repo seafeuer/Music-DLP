@@ -80,6 +80,15 @@ def db_path() -> Path:
     return data_dir() / "library.db"
 
 
+def pending_job_path() -> Path:
+    """The batch that was running when the app last stopped.
+
+    Kept next to the library so a restart can offer to resume it. It is
+    rewritten atomically and removed the moment the job really finishes.
+    """
+    return data_dir() / "pending-job.json"
+
+
 def log_dir() -> Path:
     return local_dir() / "logs"
 
