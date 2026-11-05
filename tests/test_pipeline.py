@@ -935,3 +935,65 @@ def test_a_cancelled_conversion_leaves_no_temp_file(tmp_path, monkeypatch):
         service.convert(raw, output, fmt="mp3", normalize=False)
 
     assert list(output.parent.iterdir()) == []
+
+
+def test_a_failed_delivery_keeps_the_old_spotify_copy(env):
+    """The old copy is the only thing keeping the song in Spotify."""
+    settings = env["settings"]
+    db = env["db"]
+    track_id = env["track_ids"][0]
+    out = Path(settings.output_dir) / "MP3"
+    out.mkdir(parents=True, exist_ok=True)
+    old = out / "Old Name.mp3"
+    old.write_bytes(b"audio-bytes")
+    spotify_copy = Path(settings.spotify_dir) / "Old Name.mp3"
+    spotify_copy.parent.mkdir(parents=True, exist_ok=True)
+    spotify_copy.write_bytes(b"audio-bytes")
+    db.update_track(
+        track_id, status="converted", mp3_path=str(old), raw_path=None,
+        meta_title="New Name", needs_update=1,
+    )
+
+    def failing_sync(files, destination, mode="copy"):
+        result = SyncResult()
+        result.failed = len(list(files))
+        result.errors.append("The Spotify folder could not be written.")
+        return result
+
+    env["spotify"].sync = failing_sync
+    item = BatchItem(
+        source=env["source"], track=db.get_track(track_id), position=1
+    )
+    summary = _summary()
+    env["pipeline"]._execute([item], ["convert", "sync"], False, settings, summary)
+
+    assert summary["synced"] == 0
+    assert spotify_copy.exists(), "the old copy was deleted although the new one never arrived"
+    assert (out / "New Name.mp3").exists()
+
+
+def test_a_successful_delivery_removes_the_old_spotify_copy(env):
+    settings = env["settings"]
+    db = env["db"]
+    track_id = env["track_ids"][0]
+    out = Path(settings.output_dir) / "MP3"
+    out.mkdir(parents=True, exist_ok=True)
+    old = out / "Old Name.mp3"
+    old.write_bytes(b"audio-bytes")
+    spotify_copy = Path(settings.spotify_dir) / "Old Name.mp3"
+    spotify_copy.parent.mkdir(parents=True, exist_ok=True)
+    spotify_copy.write_bytes(b"audio-bytes")
+    db.update_track(
+        track_id, status="converted", mp3_path=str(old), raw_path=None,
+        meta_title="New Name", needs_update=1,
+    )
+
+    item = BatchItem(
+        source=env["source"], track=db.get_track(track_id), position=1
+    )
+    summary = _summary()
+    env["pipeline"]._execute([item], ["convert", "sync"], False, settings, summary)
+
+    assert summary["synced"] == 1
+    assert not spotify_copy.exists()
+    assert (Path(settings.spotify_dir) / "New Name.mp3").exists()

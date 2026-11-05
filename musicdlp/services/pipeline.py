@@ -588,9 +588,11 @@ class Pipeline(QObject):
                     logger.warning("Could not rename %s: %s", old_path, exc)
                     output = old_path
                 else:
-                    summary.setdefault("_stale_spotify", []).append(
+                    # Remember which song left this name behind, so the old
+                    # Spotify copy is only removed if the new one arrives.
+                    summary.setdefault("_stale_spotify", {})[
                         old_path.name
-                    )
+                    ] = track.id
 
             self.db.update_track(
                 track.id,
@@ -963,10 +965,9 @@ class Pipeline(QObject):
                         # has been copied, in the sync stage. Deleting it here
                         # made songs disappear from Spotify when the run did
                         # not include a sync.
-                        stale_copies = summary.setdefault(
-                            "_stale_spotify", []
-                        )
-                        stale_copies.append(old_output.name)
+                        summary.setdefault("_stale_spotify", {})[
+                            old_output.name
+                        ] = track.id
 
                 except Cancelled:
                     raise
@@ -1073,6 +1074,7 @@ class Pipeline(QObject):
                             update["m4a_path"] = str(target)
                     self.db.update_track(track.id, **update)
                     summary["synced"] += 1
+                    summary.setdefault("_synced_ids", set()).add(track.id)
                 else:
                     # A file with this name being present is not success:
                     # it may be the stale copy the new one failed to
@@ -1093,9 +1095,15 @@ class Pipeline(QObject):
             self.message.emit("INFO" if ok else "WARNING", message)
 
         # Remove Spotify copies left behind by renamed files, now that the
-        # replacements have been copied in.
-        for stale_name in summary.get("_stale_spotify", []):
-            if stale_name in {path.name for path in files}:
+        # replacements have been copied in. Only a song whose new copy was
+        # actually delivered loses its old one: when the copy failed, the
+        # old file is the only thing keeping the song in Spotify.
+        synced_ids = summary.get("_synced_ids", set())
+        delivered_names = {path.name for path in files}
+        for stale_name, track_id in summary.get("_stale_spotify", {}).items():
+            if track_id not in synced_ids:
+                continue
+            if stale_name in delivered_names:
                 continue
             stale = settings.spotify_path / stale_name
             try:
