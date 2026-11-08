@@ -15,8 +15,31 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $panel = Join-Path $here 'musicdlp-panel'
 $spicetifyRoot = Join-Path $env:APPDATA 'spicetify'
 $dest = Join-Path $spicetifyRoot 'CustomApps\musicdlp'
-$spicetify = 'C:\Users\seafe\Tools\spicetify-cli-2.46.4\bin\spicetify.exe'
-$applyScript = 'C:\Users\seafe\Tools\spicetify-cli-2.46.4\spicetify-apply.ps1'
+# ------------------------------------------------------------- find the CLI
+#
+# Spicetify has no fixed install location, so look on PATH first and then in
+# the places it is commonly unpacked. The last entry is this machine's copy;
+# keeping it lets the installer work without Spicetify on PATH.
+
+function Find-Spicetify {
+    $command = Get-Command spicetify -ErrorAction SilentlyContinue
+    if ($command) { return $command.Source }
+    $candidates = @(
+        (Join-Path $env:LOCALAPPDATA 'spicetify\spicetify.exe'),
+        (Join-Path $env:USERPROFILE 'spicetify-cli\spicetify.exe'),
+        (Join-Path $env:USERPROFILE 'spicetify\spicetify.exe'),
+        'C:\Users\seafe\Tools\spicetify-cli-2.46.4\bin\spicetify.exe'
+    )
+    foreach ($path in $candidates) {
+        if ($path -and (Test-Path $path)) { return $path }
+    }
+    return $null
+}
+
+$spicetify = Find-Spicetify
+if (-not $spicetify) {
+    throw "spicetify.exe was not found. Install Spicetify from https://spicetify.app, then run this again."
+}
 
 # ---------------------------------------------------------------- find config
 
@@ -108,7 +131,18 @@ if (-not $match.Success -or $match.Value -ne $wanted) {
 # --------------------------------------------------------------- apply it all
 
 Write-Host 'Applying Spicetify (this closes Spotify)...'
-& powershell -NoProfile -ExecutionPolicy Bypass -File $applyScript
+Get-Process Spotify -ErrorAction SilentlyContinue | Stop-Process -Force
+Start-Sleep -Seconds 2
+
+# A "spicetify-apply.ps1" beside the CLI applies and then re-runs a local
+# wrapper patch some Spotify/Spicetify pairs need. When it is absent (a
+# stock install), run the CLI's own apply.
+$applyScript = Join-Path (Split-Path -Parent $spicetify) '..\spicetify-apply.ps1'
+if (Test-Path $applyScript) {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Resolve-Path $applyScript)
+} else {
+    & $spicetify apply -a
+}
 if ($LASTEXITCODE -ne 0) { throw "Apply failed with exit code $LASTEXITCODE" }
 
 Write-Host ''

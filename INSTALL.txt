@@ -136,6 +136,23 @@ Your tracks then appear under Your Library -> Local Files. Drag them into a
 playlist inside Spotify if you want one.
 
 
+THE PANEL INSIDE SPOTIFY (optional)
+-----------------------------------
+
+Spotify will not let another program add local files to a playlist, but
+Spicetify runs inside the client and can. The "spicetify" folder next to
+this file holds the panel and its installer.
+
+  1. Install Spicetify (https://spicetify.app) and Marketplace.
+  2. Start Music DLP once, so it writes its settings.
+  3. In PowerShell, from this folder:
+       .\spicetify\install-panel.ps1
+  4. Start Spotify. "Music DLP" appears in the left navigation bar.
+
+The installer closes Spotify while it applies the theme. The panel talks to
+the running Music DLP over 127.0.0.1 only.
+
+
 EDITING METADATA
 ----------------
 

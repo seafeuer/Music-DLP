@@ -121,6 +121,31 @@ def _add_ffmpeg(app_dir: Path) -> None:
         )
 
 
+def copy_extras(app_dir: Path, root: Path | None = None) -> list[str]:
+    """Copy what a release download needs beside the executable.
+
+    The Spotify panel is installed by a script, not by the exe, so the
+    release has to carry its sources and the installer; otherwise a
+    download has no way to get the panel.
+    """
+    root = Path(root) if root is not None else ROOT
+    copied: list[str] = []
+    for name in ("README.md", "INSTALL.txt"):
+        source = root / name
+        if source.exists():
+            shutil.copy2(source, app_dir / name)
+            copied.append(name)
+
+    panel = root / "spicetify"
+    if panel.is_dir():
+        destination = app_dir / "spicetify"
+        if destination.exists():
+            shutil.rmtree(destination)
+        shutil.copytree(panel, destination)
+        copied.append("spicetify")
+    return copied
+
+
 def build(onefile: bool = False) -> Path:
     try:
         import PyInstaller  # noqa: F401
@@ -140,10 +165,7 @@ def build(onefile: bool = False) -> Path:
         return DIST / (NAME + ".exe")
 
     _add_ffmpeg(app_dir)
-    for name in ("README.md", "INSTALL.txt"):
-        source = ROOT / name
-        if source.exists():
-            shutil.copy2(source, app_dir / name)
+    copy_extras(app_dir)
 
     print(f"\nBuilt: {app_dir}")
     return app_dir
