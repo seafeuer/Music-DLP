@@ -18,7 +18,7 @@ already been sent to Spotify.
 
 Last verified on 2026-11-08:
 
-- Full test suite passes (718 tests, offscreen Qt included), plus 20 headless
+- Full test suite passes (735 tests, offscreen Qt included), plus 21 headless
   tests for the Spotify panel and a contract test that checks every bridge
   field the panel reads.
 - The panel was loaded in Spotify 1.3.8.620 on this machine: it reports the
@@ -94,6 +94,8 @@ Last verified on 2026-11-08:
   the next start and keeps the previous library beside it.
 - **Check song files** — Edit → Check song files… finds two songs that ended
   up sharing one file, and files that changed outside Music DLP.
+- **Retry everything that failed** — Edit → Retry everything that failed runs
+  every failed song again in one job, with the steps its batch needs.
 
 ## Requirements
 
@@ -489,7 +491,9 @@ stay on disk unless you tick the delete box. **Reconnect files** asks for the
 folder the songs are in now and matches them by file name. **Ask a chatbot**
 copies a prompt you can paste into any chatbot and reads its reply back into
 the usual review dialog. **Check files** reports two songs sharing one file
-and files changed outside Music DLP.
+and files changed outside Music DLP. **Folders** creates, renames and deletes
+library folders, and a running job can be stopped with **Cancel** beside its
+progress line.
 
 ### The bridge
 

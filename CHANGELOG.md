@@ -19,6 +19,9 @@ Additions from §4 of the 2026-11-05 audit.
   the reply back into the review dialog, including the album.
 - **Check files** reports two songs sharing one file and files changed
   outside Music DLP.
+- **Folders** creates, renames and deletes library folders without leaving
+  Spotify. Deleting a folder keeps its songs, as on the desktop.
+- **Cancel** stops a pipeline job from the progress line.
 
 ### Desktop
 
@@ -32,6 +35,8 @@ Additions from §4 of the 2026-11-05 audit.
   Restore is applied at the next start and keeps the previous library.
 - **Edit → Check song files…** compares each output with the fingerprint
   Music DLP recorded when it wrote the file.
+- **Edit → Retry everything that failed** runs every failed song again in
+  one job, choosing the download, conversion or send each batch needs.
 
 ### Tests
 
