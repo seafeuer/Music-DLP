@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import copy
 import logging
-import shutil
 import threading
 from pathlib import Path
 from typing import Callable, Optional
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+    QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QInputDialog,
     QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton,
     QScrollArea, QSpinBox, QTabWidget, QToolButton, QVBoxLayout, QWidget,
@@ -46,9 +45,7 @@ def _clean_key(text: str) -> str:
 from musicdlp.core import backup
 from musicdlp.core.config import Settings
 
-from musicdlp.core.paths import (
-    config_path, db_path, is_writable, log_dir, start_directory,
-)
+from musicdlp.core.paths import is_writable, log_dir, start_directory
 from musicdlp.services.ai import (
     AIError, AISettings, friendly_error, list_models, test_connection,
 )
@@ -58,6 +55,7 @@ from musicdlp.services import gdrive
 from musicdlp.services.spotify import SpotifyService
 from musicdlp.services.ytdlp import YtDlpService
 from musicdlp.ui.dialogs.accessibility import pair_form_labels
+from musicdlp.ui.dialogs.diagnostics import DiagnosticsDialog
 from musicdlp.ui.dialogs.footer import DialogFooter
 from musicdlp.ui.dialogs.sizing import fit_dialog
 from musicdlp.ui.plural import counted
@@ -73,6 +71,7 @@ class SettingsDialog(QDialog):
         spotify: SpotifyService,
         parent=None,
         start_tab: str = "",
+        bridge=None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Settings")
@@ -81,6 +80,7 @@ class SettingsDialog(QDialog):
         self._ffmpeg = ffmpeg
         self._ytdlp = ytdlp
         self._spotify = spotify
+        self._bridge = bridge
         self.settings = copy.deepcopy(settings)
         self._start_tab = start_tab
 
@@ -880,34 +880,27 @@ class SettingsDialog(QDialog):
         ffmpeg_widget.setLayout(ffmpeg_row)
         form.addRow("FFmpeg path", ffmpeg_widget)
 
-        node = shutil.which("node") or "not found"
-        spotify_exe = self._spotify.find_exe()
-        diagnostics = (
-            f"yt-dlp: {self._ytdlp.version()}\n"
-            f"FFmpeg: {self._ffmpeg.version()}\n"
-            f"Node: {node}\n"
-            f"Spotify: {spotify_exe or 'not found'}\n"
-            f"Config: {config_path()}\n"
-            f"Database: {db_path()}\n"
-            f"Logs: {log_dir()}"
-        )
-        label = QLabel(diagnostics)
-        label.setWordWrap(True)
-        label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        label.setObjectName("muted")
-        form.addRow("Diagnostics", label)
-
         buttons = QHBoxLayout()
-        copy_button = QPushButton("Copy diagnostics")
-        copy_button.clicked.connect(
-            lambda: QApplication.clipboard().setText(diagnostics)
+        run_diagnostics = QPushButton("Run diagnostics…")
+        run_diagnostics.setToolTip(
+            "Check FFmpeg, yt-dlp, the folders, Spotify, the bridge, the "
+            "panel and the AI connection, and copy one report"
         )
+        run_diagnostics.clicked.connect(self._open_diagnostics)
         open_logs = QPushButton("Open log folder")
         open_logs.clicked.connect(lambda: self._open_folder(log_dir()))
-        buttons.addWidget(copy_button)
+        buttons.addWidget(run_diagnostics)
         buttons.addWidget(open_logs)
         buttons.addStretch(1)
-        form.addRow("", self._wrap(buttons))
+        form.addRow("Diagnostics", self._wrap(buttons))
+
+        reset_button = QPushButton("Reset settings…")
+        reset_button.setToolTip(
+            "Put every setting back to its default. The bridge token is "
+            "kept, so the panel inside Spotify keeps working."
+        )
+        reset_button.clicked.connect(self._reset_settings)
+        form.addRow("Reset", reset_button)
 
         backup_buttons = QHBoxLayout()
         back_up_now = QPushButton("Back up now")
@@ -1167,6 +1160,51 @@ class SettingsDialog(QDialog):
                 "Check that the path is a folder and the drive is connected.",
             )
 
+    def _open_diagnostics(self) -> None:
+        """Open the full self-test, using the settings as they are now.
+
+        The dialog is intentionally not blocked on the Save button: the
+        most common time to need it is while something is wrong, and
+        losing an unrelated edit is not required to look.
+        """
+        DiagnosticsDialog(
+            self.settings,
+            self._ffmpeg,
+            self._ytdlp,
+            self._spotify,
+            self._bridge,
+            self,
+        ).exec()
+
+    def _reset_settings(self) -> None:
+        reply = QMessageBox.question(
+            self,
+            "Reset settings?",
+            "Put every setting back to its default?\n\n"
+            "Your library, songs and files are not touched. The bridge "
+            "token is kept so the Spotify panel keeps working.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        fresh = self.settings.reset_keeping_token()
+        fresh.validate()
+        try:
+            fresh.save()
+        except OSError as exc:
+            QMessageBox.critical(
+                self, "Could not reset", f"The settings could not be saved:\n{exc}"
+            )
+            return
+        self.result_settings = fresh
+        QMessageBox.information(
+            self, "Settings reset",
+            "Every setting is back to its default. Restart Music DLP if a "
+            "folder or the Spotify panel does not look right yet.",
+        )
+        self.accept()
+
     def _open_spotify_folder(self) -> None:
         self._open_folder(Path(self.spotify_edit.text()).expanduser())
 
@@ -1303,6 +1341,8 @@ class SettingsDialog(QDialog):
             translate_language=self.settings.translate_language,
             translate_style=self.settings.translate_style,
             translate_artist=self.settings.translate_artist,
+            # Saved filters are managed from the View menu, not this dialog.
+            saved_filters=list(self.settings.saved_filters),
             # The token is not shown here; dropping it would reset it and
             # the panel inside Spotify would fail its token check on the
             # next start. The switch and port are the panel section above.

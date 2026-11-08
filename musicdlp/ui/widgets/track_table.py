@@ -137,6 +137,8 @@ class TrackTableWidget(QWidget):
     remove_requested = Signal(int)
     remove_selected_requested = Signal(list)
     open_source_requested = Signal(str)
+    open_spotify_requested = Signal(int)
+    copy_spotify_requested = Signal(int)
     clear_search_requested = Signal()
     # "Clear selection" only clears this view, because ticks are kept per
     # link. The library-wide clear is a separate action.
@@ -698,6 +700,15 @@ class TrackTableWidget(QWidget):
             "Open source link",
             lambda: self.open_source_requested.emit(track.url),
         )
+        menu.addAction(
+            "Open in Spotify",
+            lambda: self.open_spotify_requested.emit(track.id),
+        )
+        menu.addAction(
+            "Copy Spotify link",
+            lambda: self.copy_spotify_requested.emit(track.id),
+        )
+        menu.addSeparator()
         menu.addAction("Retry", lambda: self.retry_requested.emit(track.id))
         menu.addAction(
             "Re-convert",

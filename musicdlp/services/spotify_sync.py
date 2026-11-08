@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Iterable, Optional
+from urllib.parse import quote
 
 from musicdlp.services.artwork import _norm
 
@@ -258,6 +259,85 @@ def build_plan(
         if plan.safe_to_remove else []
     )
     return plan
+
+
+def _uri_part(text: str) -> str:
+    """One colon-separated part of a Spotify local URI.
+
+    Spotify writes spaces as ``+`` (the form the client itself produces)
+    and percent-encodes the rest, so a colon inside a song name becomes
+    ``%3A`` or the URI is read as more fields than it has. A literal plus
+    is encoded first, so it is not confused with a space.
+    """
+    return quote(str(text or ""), safe="").replace("%20", "+")
+
+
+def local_uri(
+    title: str,
+    artist: str = "",
+    album: str = "",
+    seconds: Optional[int] = None,
+) -> str:
+    """The link Spotify uses for one local file.
+
+    The duration is whole seconds and is part of the identity: Spotify
+    treats two files with the same tags but a different length as different
+    songs.
+    """
+    try:
+        length = max(0, int(seconds or 0))
+    except (TypeError, ValueError):
+        length = 0
+    return (
+        "spotify:local:"
+        f"{_uri_part(artist or 'Unknown')}:"
+        f"{_uri_part(album)}:"
+        f"{_uri_part(title)}:"
+        f"{length}"
+    )
+
+
+def track_local_uri(
+    track,
+    source=None,
+    *,
+    album: Optional[str] = None,
+    title: Optional[str] = None,
+    artist: Optional[str] = None,
+    seconds: Optional[int] = None,
+) -> str:
+    """``local_uri`` for a ``Track``, using the values written into the file.
+
+    Spotify indexes the tags it read from the file, so every part of the
+    URI has to come from there when the file exists. A song edited in the
+    database but not yet written to the file has different display values;
+    the ``album``/``title``/``artist``/``seconds`` overrides are the tag
+    values read back from disk. Missing fields fall back to the derived
+    values, which is what a song that was never converted has.
+    """
+    if title is None:
+        title = getattr(track, "display_title", "") or getattr(track, "title", "")
+    if artist is None:
+        artist = (
+            getattr(track, "display_artist", "")
+            or getattr(track, "uploader", "")
+        )
+    if album is None:
+        album = getattr(track, "display_album", "") or ""
+        if not album:
+            kind = getattr(source, "kind", "") if source is not None else ""
+            source_title = (
+                getattr(source, "title", "") if source is not None else ""
+            )
+            album = source_title if kind == "playlist" and source_title else "Singles"
+    if seconds is None:
+        seconds = getattr(track, "duration", None)
+    return local_uri(title, artist, album, seconds)
+
+
+def search_uri(text: str) -> str:
+    """A Spotify search link, for a song that is not in Local Files yet."""
+    return "spotify:search:" + quote(str(text or ""), safe="")
 
 
 def folder_tracks_from_rows(rows: Iterable) -> list[FolderTrack]:

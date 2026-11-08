@@ -1103,3 +1103,121 @@ def test_deleting_an_unknown_folder_is_a_404(env):
     )
 
     assert status == 404
+
+
+def test_health_reports_a_library_version_that_moves_on_a_change(env):
+    """The panel refreshes on this number instead of polling blindly."""
+    bridge, db, _library, folder_id, track_id = env
+
+    first = _call(bridge, "/api/health")[1]["library_version"]
+    db.update_track(track_id, meta_title="New name")
+    second = _call(bridge, "/api/health")[1]["library_version"]
+
+    assert second > first
+
+
+def test_a_desktop_sync_request_waits_for_the_panel_and_can_be_acknowledged(env):
+    bridge, _db, _library, folder_id, track_id = env
+
+    request = bridge.request_sync(folder_id)
+    pending = _call(bridge, "/api/sync/requests")[1]["requests"]
+    assert [item["id"] for item in pending] == [request["id"]]
+
+    status, payload = _call(
+        bridge,
+        "/api/sync/ack",
+        method="POST",
+        body={
+            "id": request["id"],
+            "folder_id": folder_id,
+            "applied": True,
+            "message": "Playlist updated.",
+        },
+    )
+
+    assert status == 200
+    assert payload == {"ok": True}
+    assert _call(bridge, "/api/sync/requests")[1]["requests"] == []
+
+
+def test_pressing_sync_twice_on_the_desktop_queues_one_request(env):
+    bridge, _db, _library, folder_id, _track_id = env
+
+    bridge.request_sync(folder_id)
+    first = bridge.request_sync(folder_id)
+
+    pending = bridge.pending_sync_requests()
+    assert len(pending) == 1
+    assert pending[0]["folder_id"] == folder_id
+    assert first["id"] == pending[0]["id"], "a second press must not replace it"
+
+
+def test_acknowledging_an_unknown_sync_is_reported(env):
+    bridge, _db, _library, folder_id, _track_id = env
+
+    status, _ = _call(
+        bridge, "/api/sync/ack", method="POST",
+        body={"folder_id": folder_id, "applied": True},
+    )
+
+    assert status == 400
+
+
+def test_panel_installed_checks_the_real_spicetify_folders(tmp_path):
+    from musicdlp.services.bridge import panel_installed
+
+    assert panel_installed(tmp_path) is False
+
+    target = tmp_path / "spicetify" / "CustomApps" / "musicdlp" / "index.js"
+    target.parent.mkdir(parents=True)
+    target.write_text("// panel", encoding="utf-8")
+
+    assert panel_installed(tmp_path) is True
+
+
+def test_a_sync_request_made_while_spotify_was_closed_expires(env, monkeypatch):
+    bridge, _db, _library, folder_id, _track_id = env
+    seen = []
+    bridge.sync_finished.connect(
+        lambda folder, applied, message: seen.append((folder, applied, message))
+    )
+
+    bridge.request_sync(folder_id)
+    with bridge._sync_lock:
+        bridge._sync_requests[0]["last_seen"] -= 3600
+
+    assert bridge.pending_sync_requests() == []
+    assert seen and seen[0][0] == folder_id and seen[0][1] is False
+    assert "did not answer" in seen[0][2]
+
+
+def test_a_second_acknowledgement_for_one_request_is_ignored(env):
+    bridge, _db, _library, folder_id, _track_id = env
+    seen = []
+    bridge.sync_finished.connect(
+        lambda folder, applied, message: seen.append((applied, message))
+    )
+    request = bridge.request_sync(folder_id)
+
+    bridge.acknowledge_sync(request["id"], folder_id, False, "The real error")
+    bridge.acknowledge_sync(request["id"], folder_id, False, "Cancelled")
+
+    assert seen == [(False, "The real error")]
+
+
+def test_a_live_panel_keeps_a_queued_request_alive_until_it_can_answer(env):
+    bridge, _db, _library, folder_id, _track_id = env
+    bridge.request_sync(folder_id)
+    with bridge._sync_lock:
+        bridge._sync_requests[0]["last_seen"] -= 3600
+
+    # Health runs every five seconds, even while a dialog is open or a
+    # long job is running. It must keep the request alive, not prune it.
+    _call(bridge, "/api/health")
+    assert bridge.sync_request_count() == 1
+    assert len(bridge.pending_sync_requests()) == 1
+
+    # If the panel then goes away for good, the request does expire.
+    with bridge._sync_lock:
+        bridge._sync_requests[0]["last_seen"] -= 3600
+    assert bridge.pending_sync_requests() == []

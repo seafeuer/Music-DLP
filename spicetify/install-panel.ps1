@@ -8,6 +8,12 @@
 # reinstall - only a restart of Music DLP and a reload of Spotify.
 #
 # Usage:  .\install-panel.ps1
+#         .\install-panel.ps1 -SkipApply   (register only; does not restart
+#                                          Spotify, for a dry run or a test)
+
+param(
+    [switch]$SkipApply
+)
 
 $ErrorActionPreference = 'Stop'
 
@@ -17,28 +23,51 @@ $spicetifyRoot = Join-Path $env:APPDATA 'spicetify'
 $dest = Join-Path $spicetifyRoot 'CustomApps\musicdlp'
 # ------------------------------------------------------------- find the CLI
 #
-# Spicetify has no fixed install location, so look on PATH first and then in
-# the places it is commonly unpacked. The last entry is this machine's copy;
-# keeping it lets the installer work without Spicetify on PATH.
+# Spicetify has no fixed install location. Look on PATH first, then in the
+# folders its installer and package managers use, and finally for an
+# unpacked spicetify-cli build under the user's profile. Nothing here names
+# a specific computer: a fresh download must work for everyone.
 
 function Find-Spicetify {
     $command = Get-Command spicetify -ErrorAction SilentlyContinue
     if ($command) { return $command.Source }
+
     $candidates = @(
         (Join-Path $env:LOCALAPPDATA 'spicetify\spicetify.exe'),
+        (Join-Path $env:LOCALAPPDATA 'Programs\spicetify\spicetify.exe'),
         (Join-Path $env:USERPROFILE 'spicetify-cli\spicetify.exe'),
-        (Join-Path $env:USERPROFILE 'spicetify\spicetify.exe'),
-        'C:\Users\seafe\Tools\spicetify-cli-2.46.4\bin\spicetify.exe'
+        (Join-Path $env:USERPROFILE 'spicetify\spicetify.exe')
     )
+    if ($env:PROGRAMFILES) {
+        $candidates += Join-Path $env:PROGRAMFILES 'Spicetify\spicetify.exe'
+    }
+    if (${env:PROGRAMFILES(X86)}) {
+        $candidates += Join-Path ${env:PROGRAMFILES(X86)} 'Spicetify\spicetify.exe'
+    }
     foreach ($path in $candidates) {
         if ($path -and (Test-Path $path)) { return $path }
+    }
+
+    # An unpacked release (spicetify-cli-<version>\bin\spicetify.exe) or a
+    # winget/scoop install that is not on PATH yet.
+    $globs = @(
+        (Join-Path $env:USERPROFILE 'spicetify-cli*\bin\spicetify.exe'),
+        (Join-Path $env:LOCALAPPDATA 'spicetify-cli*\bin\spicetify.exe'),
+        (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages\Spicetify*\spicetify.exe'),
+        (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages\Spicetify*\bin\spicetify.exe'),
+        (Join-Path $env:USERPROFILE 'scoop\shims\spicetify.exe')
+    )
+    foreach ($pattern in $globs) {
+        $found = Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if ($found) { return $found.FullName }
     }
     return $null
 }
 
 $spicetify = Find-Spicetify
 if (-not $spicetify) {
-    throw "spicetify.exe was not found. Install Spicetify from https://spicetify.app, then run this again."
+    throw "spicetify.exe was not found. Install Spicetify from https://spicetify.app, then run this again. If it is installed somewhere unusual, add its folder to PATH."
 }
 
 # ---------------------------------------------------------------- find config
@@ -73,6 +102,12 @@ function New-Token {
     return ([Convert]::ToBase64String($bytes) -replace '\+', '-' -replace '/', '_' -replace '=', '')
 }
 
+# A config written by an older build, or a minimal one, may not have the
+# key yet. Windows PowerShell's PSCustomObject refuses to set a property
+# that does not exist, so add it before reading or writing it.
+if (-not ($config.PSObject.Properties.Name -contains 'bridge_token')) {
+    $config | Add-Member -NotePropertyName bridge_token -NotePropertyValue '' -Force
+}
 if (-not $config.bridge_token) {
     $config.bridge_token = New-Token
     Write-Host 'Generated a bridge token and saved it to the Music DLP config.'
@@ -130,15 +165,30 @@ if (-not $match.Success -or $match.Value -ne $wanted) {
 
 # --------------------------------------------------------------- apply it all
 
+if ($SkipApply) {
+    Write-Host ''
+    Write-Host 'Skipped applying Spicetify (-SkipApply). Start Spotify after running this again without the switch.'
+    exit 0
+}
+
 Write-Host 'Applying Spicetify (this closes Spotify)...'
 Get-Process Spotify -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Seconds 2
 
-# A "spicetify-apply.ps1" beside the CLI applies and then re-runs a local
+# A "spicetify-apply.ps1" near the CLI applies and then re-runs a local
 # wrapper patch some Spotify/Spicetify pairs need. When it is absent (a
-# stock install), run the CLI's own apply.
-$applyScript = Join-Path (Split-Path -Parent $spicetify) '..\spicetify-apply.ps1'
-if (Test-Path $applyScript) {
+# stock install), run the CLI's own apply. Both the CLI's own folder and
+# its parent are checked, because an unpacked release keeps the binary in
+# bin\ while a custom wrapper sits in the release root.
+$cli_dir = Split-Path -Parent $spicetify
+$applyScript = $null
+foreach ($candidate in @(
+    (Join-Path $cli_dir 'spicetify-apply.ps1'),
+    (Join-Path (Split-Path -Parent $cli_dir) 'spicetify-apply.ps1')
+)) {
+    if ($candidate -and (Test-Path $candidate)) { $applyScript = $candidate; break }
+}
+if ($applyScript) {
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Resolve-Path $applyScript)
 } else {
     & $spicetify apply -a

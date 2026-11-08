@@ -158,6 +158,10 @@ class Settings:
     window_geometry: str = ""
     last_source_id: int | None = None
     first_run_done: bool = False
+    # Named filter combinations for the song list: a status and a search
+    # text. A large library otherwise needs the same two controls set by
+    # hand every time.
+    saved_filters: list[dict] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.output_dir:
@@ -274,6 +278,25 @@ class Settings:
         else:
             self.formats = list(self.formats)
 
+        # A hand-edited config can contain anything here. Keep only entries
+        # with a name, and a status/search that are strings.
+        if not isinstance(self.saved_filters, (list, tuple)):
+            self.saved_filters = []
+        else:
+            cleaned = []
+            for item in self.saved_filters:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name") or "").strip()
+                if not name:
+                    continue
+                cleaned.append({
+                    "name": name,
+                    "status": str(item.get("status") or "all"),
+                    "search": str(item.get("search") or ""),
+                })
+            self.saved_filters = cleaned
+
         self.settings_version = _as_int(self.settings_version, 2)
         self.max_retries = _as_int(self.max_retries, 3)
         self.bridge_port = _as_int(self.bridge_port, 8317)
@@ -365,6 +388,19 @@ class Settings:
             except OSError:
                 pass
         return self.bridge_token
+
+    def reset_keeping_token(self) -> "Settings":
+        """A fresh set of defaults that the installed panel still trusts.
+
+        Resetting everything would generate a new bridge token on the next
+        start, and the panel inside Spotify would answer 403 until it was
+        reinstalled. The token (and the fact that the first-run wizard has
+        been seen) survive; every other preference goes back to default.
+        """
+        fresh = Settings()
+        fresh.bridge_token = self.bridge_token
+        fresh.first_run_done = True
+        return fresh
 
     # ------------------------------------------------------------- accessors
 

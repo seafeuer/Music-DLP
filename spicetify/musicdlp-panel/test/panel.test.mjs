@@ -380,3 +380,54 @@ test("a folder name is refused when it is empty or already used", () => {
   assert.equal(context.folderNameError("rap", folders, 1), "");
   assert.match(context.folderNameError("Remixes", folders, 1), /Remixes/);
 });
+
+test("a desktop sync request is taken only when the panel is free", () => {
+  const { context } = loadPanel();
+  const request = { id: "r1", folder_id: 4 };
+
+  assert.equal(context.nextSyncRequest([request], "", null), request);
+  assert.equal(context.nextSyncRequest([], "", null), null);
+  assert.equal(context.nextSyncRequest([request], "Working…", null), null);
+  assert.equal(context.nextSyncRequest([request], "", { type: "sync" }), null);
+});
+
+test("a playlist write is retried before the sync gives up", async () => {
+  const { context } = loadPanel();
+  let tries = 0;
+
+  const result = await context.retryWrite(async () => {
+    tries += 1;
+    if (tries < 3) throw new Error("Spotify is busy");
+    return "ok";
+  }, 3);
+
+  assert.equal(result, "ok");
+  assert.equal(tries, 3);
+});
+
+test("an acknowledged sync that was cancelled is not reported as applied", async () => {
+  const { context, calls } = loadPanel({
+    responses: [{ body: { ok: true } }]
+  });
+
+  await context.acknowledgeSync("r1", 4, false, "Cancelled.");
+
+  assert.equal(calls.fetch.length, 1);
+  assert.equal(calls.fetch[0].method, "POST");
+  assert.match(calls.fetch[0].url, /\/api\/sync\/ack$/);
+  assert.equal(calls.fetch[0].body.id, "r1");
+  assert.equal(calls.fetch[0].body.applied, false);
+  assert.equal(calls.fetch[0].body.folder_id, 4);
+});
+
+test("one desktop request is acknowledged only once", async () => {
+  const { context, calls } = loadPanel({
+    responses: [{ body: { ok: true } }]
+  });
+
+  await context.acknowledgeSync("r9", 4, false, "The real error");
+  await context.acknowledgeSync("r9", 4, false, "Cancelled");
+
+  assert.equal(calls.fetch.length, 1);
+  assert.equal(calls.fetch[0].body.message, "The real error");
+});

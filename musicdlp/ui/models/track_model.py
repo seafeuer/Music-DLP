@@ -441,7 +441,10 @@ class TrackFilterProxy(QSortFilterProxyModel):
             return False
 
         if self.search:
-            haystack = f"{row.display_title} {row.display_artist}".lower()
+            haystack = (
+                f"{row.display_title} {row.display_artist} "
+                f"{row.track.display_album}"
+            ).lower()
             if self.search not in haystack:
                 return False
         return True

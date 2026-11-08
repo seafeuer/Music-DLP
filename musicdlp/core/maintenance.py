@@ -271,7 +271,9 @@ def rewrite_tags(
     their picture. No audio is converted; only the tag block is replaced.
     ``track_ids`` limits the work to the songs the user ticked.
     """
-    from musicdlp.services.tagging import embed_tags
+    # Tag writes never leave a half-written real file; the name is kept
+    # because tests and callers patch the tag writer here.
+    from musicdlp.services.tagging import embed_tags_atomic as embed_tags
 
     notes: list[str] = []
     rewritten = 0

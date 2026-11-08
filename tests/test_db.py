@@ -274,3 +274,29 @@ def test_duplicates_need_more_than_a_shared_artist(tmp_path):
         sorted([ids[1], ids[2]])
     ]
     db.close()
+
+
+def test_undo_and_unlink_moves_reach_the_panel_live_update(tmp_path):
+    db = Database(tmp_path / "library.db")
+    source_id = db.add_source(
+        url="https://example.test/list", kind="playlist", platform="youtube",
+        external_id="list", title="A list", uploader="Artist",
+        item_count=1, thumbnail_url=None,
+    )
+    track_id = db.upsert_track(
+        platform="youtube", media_id="a", url="https://youtu.be/a",
+        title="One",
+    )
+    db.set_source_tracks(source_id, [(track_id, 1)])
+    track = db.get_track(track_id)
+
+    db.delete_track(track_id)
+    after_delete = db.revision
+    db.restore_track(track)
+    assert db.revision > after_delete
+
+    db.restore_track_links(track_id, [(source_id, 1)])
+    after_link = db.revision
+    db.unlink_track_everywhere(track_id)
+    assert db.revision > after_link
+    db.close()

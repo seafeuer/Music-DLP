@@ -3,10 +3,85 @@
 from __future__ import annotations
 
 import logging
+import os
+import shutil
 from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger("musicdlp.tagging")
+
+
+def _temp_beside(path: Path) -> Path:
+    """A hidden temp name in the same folder, with the same suffix.
+
+    ``os.replace`` is atomic only within one filesystem, and mutagen picks
+    the writer from the suffix, so both have to stay beside the original.
+    """
+    return path.with_name(f".{path.stem}.mdlp-tmp{path.suffix}")
+
+
+def _fsync(path: Path) -> None:
+    """Flush a written file before it replaces the good one.
+
+    A power cut between the write and the rename must leave the old file
+    intact, not a half-written one under the real name.
+    """
+    try:
+        with open(path, "rb") as handle:
+            os.fsync(handle.fileno())
+    except OSError:
+        # Some filesystems refuse fsync on a read handle; the rename is
+        # still safer than writing the original in place.
+        logger.debug("Could not flush %s", path, exc_info=True)
+
+
+def _atomic_replace(original: Path, work) -> bool:
+    """Run ``work`` on a copy, then swap it in only when it succeeded."""
+    temp = _temp_beside(original)
+    temp.unlink(missing_ok=True)
+    try:
+        shutil.copy2(original, temp)
+        if not work(temp):
+            return False
+        _fsync(temp)
+        os.replace(temp, original)
+        return True
+    except OSError as exc:
+        logger.error("Could not replace %s safely: %s", original.name, exc)
+        return False
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def embed_tags_atomic(
+    path: Path,
+    *,
+    title: str,
+    artist: str = "",
+    album: str = "",
+    track: Optional[int] = None,
+    cover_path: Optional[Path] = None,
+) -> bool:
+    """``embed_tags`` without ever leaving a half-tagged real file.
+
+    The tags are written into a copy; the original is replaced only after
+    the copy is complete and flushed. A failure leaves the song exactly as
+    it was, which matters when the old file is the only copy of its tags.
+    """
+    path = Path(path)
+    if not path.is_file():
+        return False
+    return _atomic_replace(
+        path,
+        lambda temp: embed_tags(
+            temp,
+            title=title,
+            artist=artist,
+            album=album,
+            track=track,
+            cover_path=cover_path,
+        ),
+    )
 
 
 def embed_tags(
@@ -163,6 +238,16 @@ def replace_cover(path: Path, cover_path: Path) -> bool:
     return False
 
 
+def replace_cover_atomic(path: Path, cover_path: Path) -> bool:
+    """Replace just the picture, with the original kept until it works."""
+    path = Path(path)
+    if not path.is_file():
+        return False
+    return _atomic_replace(
+        path, lambda temp: replace_cover(temp, cover_path)
+    )
+
+
 def embedded_cover_size(path: Path) -> Optional[tuple[int, int]]:
     """The pixel size of the picture inside a file, if it has one."""
     from io import BytesIO
@@ -191,7 +276,12 @@ def embedded_cover_size(path: Path) -> Optional[tuple[int, int]]:
 
 
 def read_tags(path: Path) -> dict[str, object]:
-    """Small helper used by tests and diagnostics."""
+    """Small helper used by tests, diagnostics, and Spotify links.
+
+    ``length`` is the file's own duration in whole seconds. Spotify puts
+    that value in a local-file URI, so a link built from the database's
+    duration can miss by a second.
+    """
     path = Path(path)
     result: dict[str, object] = {}
     if path.suffix.lower() == ".mp3":
@@ -213,4 +303,12 @@ def read_tags(path: Path) -> dict[str, object]:
         result["album"] = (tags.get("\xa9alb") or [""])[0]
         result["track"] = (tags.get("trkn") or [(0, 0)])[0][0]
         result["has_cover"] = bool(tags.get("covr"))
+    try:
+        from mutagen import File as MutagenFile
+
+        audio = MutagenFile(str(path))
+        if audio is not None and audio.info is not None and audio.info.length:
+            result["length"] = int(round(audio.info.length))
+    except Exception:
+        result["length"] = None
     return result

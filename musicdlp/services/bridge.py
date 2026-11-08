@@ -88,6 +88,13 @@ class Job:
 # registry without bound.
 FINISHED_JOB_TTL = 3600.0
 
+# A sync the desktop asked for goes stale after this long. Without an
+# expiry, a request made while Spotify was closed fired the next time the
+# panel was opened - possibly a day later - and the desktop waited
+# forever. A panel that is actively showing the preview keeps polling, so
+# it is not pruned while the user is deciding.
+SYNC_REQUEST_TTL = 1800.0
+
 
 @dataclass
 class JobRegistry:
@@ -204,6 +211,22 @@ def sync_panel_config(
     return updated
 
 
+def panel_installed(appdata: Optional[Path] = None) -> bool:
+    """True when the panel source or the applied copy exists.
+
+    Used by the desktop before it queues a sync: a request nobody is
+    listening for would sit in the queue with no way to explain why. An
+    isolated run never sees the real install, for the same reason it never
+    rewrites the real panel's settings.
+    """
+    if appdata is None and is_isolated():
+        return False
+    root = Path(appdata) if appdata else Path(os.environ.get("APPDATA") or "")
+    if not str(root):
+        return False
+    return any(root.joinpath(*parts).is_file() for parts in PANEL_TARGETS)
+
+
 def _jsonable(value: Any) -> Any:
     """Turn service return values into something json.dumps accepts."""
     if value is None or isinstance(value, (bool, int, float, str)):
@@ -277,6 +300,15 @@ class Bridge(QObject):
     # whether the desktop accepted it.
     start_pipeline = Signal(object)
 
+    # A sync the desktop asked the panel to show. The panel runs the same
+    # preview it uses for its own Sync button, so a desktop click and a
+    # panel click take exactly the same safe path.
+    sync_requested = Signal(int)
+
+    # The panel's answer to a desktop-requested sync: folder id, whether it
+    # was applied, and what to tell the user.
+    sync_finished = Signal(int, bool, str)
+
     def __init__(
         self,
         settings: Settings,
@@ -305,6 +337,11 @@ class Bridge(QObject):
         self._progress: dict = {}
         self._start_waiters: dict[str, dict] = {}
         self._start_lock = threading.Lock()
+        # Syncs the desktop asked for, waiting for the panel to show its
+        # preview. Kept in memory: if either app stops, the request is
+        # stale anyway and the user can press Sync again.
+        self._sync_requests: list[dict] = []
+        self._sync_lock = threading.Lock()
 
     # ------------------------------------------------------------- lifecycle
 
@@ -352,6 +389,106 @@ class Bridge(QObject):
     def record_progress(self, data: dict) -> None:
         """Keep the latest pipeline progress for the panel to poll."""
         self._progress = dict(data or {})
+
+    # ------------------------------------------------------ desktop sync requests
+
+    def request_sync(self, folder_id: int) -> dict:
+        """Ask the panel inside Spotify to preview and run a folder sync.
+
+        Playlist writes can only happen inside Spotify. Rather than fake a
+        second implementation on the desktop, the desktop queues the
+        request and the panel runs the same preview it shows for its own
+        Sync button. The desktop must be able to say when Spotify is not
+        listening, so this queues even when the panel is not installed and
+        the action explains what to do.
+        """
+        request = {
+            "id": uuid.uuid4().hex[:12],
+            "folder_id": int(folder_id),
+            "created": time.time(),
+            "last_seen": time.time(),
+        }
+        with self._sync_lock:
+            # A second press while the panel is already showing the
+            # preview must return the same request. Replacing it would
+            # give the open dialog an id the desktop no longer knows, so
+            # confirming it would go unreported, and a duplicate preview
+            # would open afterwards.
+            for item in self._sync_requests:
+                if item["folder_id"] == request["folder_id"]:
+                    return dict(item)
+            self._sync_requests.append(request)
+        self.sync_requested.emit(int(folder_id))
+        return request
+
+    def _touch_sync_requests_locked(self) -> None:
+        """Mark queued requests as still reachable by a live panel."""
+        now = time.time()
+        for item in self._sync_requests:
+            item["last_seen"] = now
+
+    def pending_sync_requests(self) -> list[dict]:
+        """Requests still worth acting on, oldest first.
+
+        Expiry is measured from the last time a live panel saw the
+        request, not from when it was created: a panel busy with a long
+        job keeps the request alive while it is polling, and a closed
+        panel cannot be waiting to answer it. Expired requests are
+        reported to the desktop once.
+        """
+        cutoff = time.time() - SYNC_REQUEST_TTL
+        expired: list[dict] = []
+        with self._sync_lock:
+            keep = []
+            for item in self._sync_requests:
+                last_seen = item.get("last_seen", item.get("created", 0))
+                if last_seen < cutoff:
+                    expired.append(dict(item))
+                else:
+                    keep.append(item)
+            self._sync_requests = keep
+            self._touch_sync_requests_locked()
+        for item in expired:
+            self.sync_finished.emit(
+                int(item["folder_id"]),
+                False,
+                "Spotify did not answer the sync request. Open Spotify and "
+                "try again.",
+            )
+        with self._sync_lock:
+            return [dict(item) for item in self._sync_requests]
+
+    def sync_request_count(self) -> int:
+        """How many requests are queued, without expiring any.
+
+        The health poll runs every few seconds, including while the panel
+        has a preview open or a job running; it keeps the requests alive
+        but must not prune the one the user is deciding about.
+        """
+        with self._sync_lock:
+            self._touch_sync_requests_locked()
+            return len(self._sync_requests)
+
+    def acknowledge_sync(
+        self, request_id: str, folder_id: int, applied: bool, message: str = ""
+    ) -> None:
+        """Finish a desktop-requested sync and tell the window how it went.
+
+        A second acknowledgement for the same request is ignored: the
+        panel keeps its dialog open after a failed apply, and closing it
+        later must not replace the real error with "cancelled".
+        """
+        with self._sync_lock:
+            found = any(
+                item["id"] == request_id for item in self._sync_requests
+            )
+            self._sync_requests = [
+                item for item in self._sync_requests
+                if item["id"] != request_id
+            ]
+        if not found:
+            return
+        self.sync_finished.emit(int(folder_id), bool(applied), str(message or ""))
 
     def _rows_for(self, track_ids: list[int]) -> list[TrackRow]:
         rows = self.db.get_track_rows_by_ids(track_ids)
@@ -452,13 +589,24 @@ class Bridge(QObject):
                 # The panel has no folder picker of its own. Reconnect
                 # starts from the folder the desktop writes songs into.
                 "output_dir": str(self.settings.output_path),
+                # Changes whenever the desktop writes to the library, so
+                # the panel can refresh at once instead of on a timer.
+                "library_version": int(getattr(self.db, "revision", 0)),
+                "sync_request_count": self.sync_request_count(),
             }
 
         if method == "GET" and route == ["status"]:
             return {
                 "pipeline_running": bool(self.pipeline.is_running),
                 "progress": self._progress,
+                "library_version": int(getattr(self.db, "revision", 0)),
             }
+
+        if method == "GET" and route == ["sync", "requests"]:
+            return {"requests": self.pending_sync_requests()}
+
+        if method == "POST" and route == ["sync", "ack"]:
+            return self._ack_sync(body)
 
         if method == "GET" and route == ["folders"]:
             folders = self.db.get_folder_sources()
@@ -651,6 +799,29 @@ class Bridge(QObject):
             "duplicate_tags": plan.duplicate_tags,
             "summary": plan.summary(),
         }
+
+    def _ack_sync(self, body: dict) -> dict:
+        """Record how a desktop-requested sync ended.
+
+        The panel calls this after its preview dialog is closed, whatever
+        the user chose, so the desktop never shows a request as pending
+        forever. ``applied`` is false for Cancel as well as for an error;
+        ``message`` is what the desktop status line should say.
+        """
+        request_id = str(body.get("id") or "")
+        if not request_id:
+            raise BridgeError("id is required")
+        try:
+            folder_id = int(body.get("folder_id") or 0)
+        except (TypeError, ValueError) as exc:
+            raise BridgeError("folder_id must be a number") from exc
+        self.acknowledge_sync(
+            request_id,
+            folder_id,
+            bool(body.get("applied")),
+            str(body.get("message") or ""),
+        )
+        return {"ok": True}
 
     def _cancel(self) -> dict:
         """Stop the pipeline job the panel is watching.

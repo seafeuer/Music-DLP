@@ -187,7 +187,11 @@ def test_rewrite_tags_can_be_limited_to_ticked_songs(tmp_path, monkeypatch):
 
     maintenance.rewrite_tags(db, settings, track_ids=[ids[0]])
 
-    assert seen == ["one.mp3"]
+    # The tag writer is given a temporary copy in the same folder and the
+    # original is only replaced once the write succeeds.
+    assert len(seen) == 1
+    assert seen[0].startswith(".one.")
+    assert seen[0].endswith(".mp3")
     db.close()
 
 

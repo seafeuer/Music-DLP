@@ -244,6 +244,11 @@ class Database:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
         self._closed = False
+        # A cheap, monotonic change counter. The bridge reports it and the
+        # panel refreshes only when it moves, instead of polling every
+        # second or waiting up to 20 seconds for a folder change.
+        self._revision = 0
+        self._revision_lock = threading.Lock()
         try:
             self._init_schema()
         except Exception:
@@ -251,6 +256,17 @@ class Database:
             # would stop startup recovery from moving it aside.
             self.close_current_thread()
             raise
+
+    # -------------------------------------------------------------- revision
+
+    @property
+    def revision(self) -> int:
+        """A number that changes whenever the library changes."""
+        return self._revision
+
+    def bump_revision(self) -> None:
+        with self._revision_lock:
+            self._revision += 1
 
     # ------------------------------------------------------------ connection
 
@@ -375,6 +391,7 @@ class Database:
                     (url, kind, platform, external_id, title, uploader,
                      item_count, thumbnail_url, existing.id),
                 )
+            self.bump_revision()
             return existing.id
 
         with conn:
@@ -400,6 +417,7 @@ class Database:
             row = conn.execute(
                 "SELECT id FROM sources WHERE url = ?", (url,)
             ).fetchone()
+        self.bump_revision()
         return int(row["id"])
 
     def get_source(self, source_id: int) -> Optional[Source]:
@@ -470,6 +488,7 @@ class Database:
                 "SELECT id FROM sources WHERE url = ?", (url,)
             ).fetchone()
         logger.info("Created folder %r", name)
+        self.bump_revision()
         return int(row["id"])
 
     def get_folder_sources(self) -> list[Source]:
@@ -544,6 +563,7 @@ class Database:
             self._prune_and_recount(conn, affected)
 
         logger.info("Moved %d song(s) into folder %s", moved, folder_id)
+        self.bump_revision()
         return moved
 
     def _prune_and_recount(
@@ -585,6 +605,7 @@ class Database:
                 (folder.title,),
             )
             conn.execute("DELETE FROM sources WHERE id = ?", (folder_id,))
+        self.bump_revision()
 
     def get_folders(self) -> list[str]:
         rows = self._conn().execute(
@@ -620,11 +641,13 @@ class Database:
                 f"UPDATE sources SET {assignments} WHERE id = ?",
                 (*values.values(), source_id),
             )
+        self.bump_revision()
 
     def delete_source(self, source_id: int) -> None:
         conn = self._conn()
         with conn:
             conn.execute("DELETE FROM sources WHERE id = ?", (source_id,))
+        self.bump_revision()
 
     # ---------------------------------------------------------------- tracks
 
@@ -677,6 +700,7 @@ class Database:
                 "SELECT id FROM tracks WHERE platform = ? AND media_id = ?",
                 (platform, media_id),
             ).fetchone()
+        self.bump_revision()
         return int(row["id"])
 
     def get_track(self, track_id: int) -> Optional[Track]:
@@ -709,11 +733,13 @@ class Database:
             )
             if cur.rowcount == 0:
                 logger.warning("Track %s disappeared during update", track_id)
+        self.bump_revision()
 
     def delete_track(self, track_id: int) -> None:
         conn = self._conn()
         with conn:
             conn.execute("DELETE FROM tracks WHERE id = ?", (track_id,))
+        self.bump_revision()
 
     # -------------------------------------------------------- source <-> track
 
@@ -741,6 +767,7 @@ class Database:
                 "UPDATE sources SET item_count = ? WHERE id = ?",
                 (len(items), source_id),
             )
+        self.bump_revision()
 
     def get_tracks_for_source(self, source_id: int) -> list[TrackRow]:
         source = self.get_source(source_id)
@@ -958,6 +985,7 @@ class Database:
             self._prune_and_recount(
                 conn, {source_id for source_id, _p in usable}
             )
+        self.bump_revision()
 
     def restore_track(self, track: Track) -> None:
         """Put a deleted track row back, keeping its id.
@@ -994,6 +1022,7 @@ class Database:
                     track.smart_reason, track.cover_source,
                 ),
             )
+        self.bump_revision()
 
     def restore_source(self, source: Source) -> None:
         """Put a deleted source back, keeping its id.
@@ -1020,6 +1049,7 @@ class Database:
                     source.added_at, source.refreshed_at,
                 ),
             )
+        self.bump_revision()
 
     def find_duplicate_groups(self) -> list[list[TrackRow]]:
         """Songs that look like the same recording, grouped together.
@@ -1065,6 +1095,7 @@ class Database:
                 "DELETE FROM source_tracks WHERE track_id = ?", (track_id,)
             )
             self._prune_and_recount(conn, source_ids)
+        self.bump_revision()
 
     # -------------------------------------------------------------- settings
 

@@ -45,7 +45,9 @@ from musicdlp.services.filenames import (
 from musicdlp.services.ffmpeg import FFmpegService
 from musicdlp.services.fingerprint import record_fingerprints
 from musicdlp.services.spotify import SpotifyService
-from musicdlp.services.tagging import embed_tags
+# The pipeline only ever writes tags atomically: a failed write must
+# leave the file it was editing intact.
+from musicdlp.services.tagging import embed_tags_atomic as embed_tags
 from musicdlp.services.thumbnails import ThumbnailService, youtube_fallbacks
 from musicdlp.services.ytdlp import YtDlpService
 

@@ -61,6 +61,8 @@ ROUTES = {
     ("POST", "/api/folders/rename"),
     ("POST", "/api/folders/delete"),
     ("POST", "/api/sync/plan"),
+    ("GET", "/api/sync/requests"),
+    ("POST", "/api/sync/ack"),
     ("POST", "/api/metadata"),
     ("POST", "/api/cover"),
     ("POST", "/api/cover/bulk"),
@@ -91,10 +93,20 @@ SHAPES = {
         "pipeline_running": bool,
         "dlp_folder": str,
         "output_dir": str,
+        "library_version": int,
     },
     "/api/status": {
         "pipeline_running": bool,
         "progress": dict,
+        "library_version": int,
+    },
+    "/api/sync/requests": {
+        "requests": {
+            "<items>": {
+                "id": str,
+                "folder_id": int,
+            },
+        },
     },
     "/api/folders": {
         "<items>": {

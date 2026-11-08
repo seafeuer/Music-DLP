@@ -325,6 +325,11 @@ class Inspector(QWidget):
             self.hint_label.setText(
                 "The file is fine; only the Spotify copy failed. Press Retry."
             )
+        elif status == "synced":
+            self.hint_label.setText(
+                "Sent to Spotify. If it is not under Local Files yet, restart "
+                "Spotify so it rescans the folder (Settings → Spotify)."
+            )
         elif not checked:
             # Highlighting a row and including it are two different
             # actions. Say so where the user is looking, not only in the

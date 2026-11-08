@@ -26,7 +26,8 @@ from musicdlp.services.artwork import (
 from musicdlp.services.filenames import safe_stem
 from musicdlp.services.fingerprint import record_fingerprints
 from musicdlp.services.smart_titles import suggest as smart_suggest
-from musicdlp.services.tagging import replace_cover
+# Cover writes go through the same copy-then-replace rule as tag writes.
+from musicdlp.services.tagging import replace_cover_atomic as replace_cover
 from musicdlp.services.ytdlp import YtDlpService
 
 logger = logging.getLogger("musicdlp.library")

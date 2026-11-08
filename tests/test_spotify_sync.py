@@ -242,3 +242,99 @@ def test_distinct_songs_do_not_raise_the_duplicate_warning():
     ]
     plan = build_plan(folder, local, [], local_files_complete=True)
     assert plan.duplicate_tags == []
+
+
+def test_a_local_uri_encodes_the_parts_so_colons_do_not_split_the_link():
+    from musicdlp.services.spotify_sync import local_uri
+
+    uri = local_uri("Song: Part 2", "An Artist", "An Album", 245)
+
+    assert uri == (
+        "spotify:local:An+Artist:An+Album:Song%3A+Part+2:245"
+    )
+
+
+def test_a_local_uri_is_full_seconds_and_never_negative():
+    from musicdlp.services.spotify_sync import local_uri
+
+    assert local_uri("Song", "A", "B", 245.9).endswith(":245")
+    assert local_uri("Song", "A", "B", None).endswith(":0")
+    assert local_uri("Song", "A", "B", -4).endswith(":0")
+
+
+def test_a_search_uri_is_used_before_the_song_reaches_spotify():
+    from musicdlp.services.spotify_sync import search_uri
+
+    assert search_uri("Song A") == "spotify:search:Song%20A"
+
+
+def test_a_local_uri_uses_the_album_the_file_was_tagged_with():
+    from musicdlp.core.models import Track
+    from musicdlp.services.spotify_sync import track_local_uri
+
+    track = Track(
+        id=1, platform="youtube", media_id="m", url="", source_index=None,
+        title="Song", uploader="Artist", duration=180, thumbnail_url=None,
+        description=None, status="converted", error=None, meta_title="Song",
+        meta_artist="Artist", meta_album=None, meta_track=None, raw_path=None,
+        mp3_path=None, m4a_path=None, cover_path=None, downloaded_at=None,
+        converted_at=None, synced_at=None,
+    )
+
+    class Playlist:
+        kind = "playlist"
+        title = "My Playlist"
+
+    class Video:
+        kind = "item"
+        title = "A video"
+
+    assert track_local_uri(track, Playlist()).endswith(":My+Playlist:Song:180")
+    assert track_local_uri(track, Video()).endswith(":Singles:Song:180")
+    assert track_local_uri(track).endswith(":Singles:Song:180")
+
+
+def test_an_album_read_from_the_file_wins_over_the_current_source():
+    from musicdlp.core.models import Track
+    from musicdlp.services.spotify_sync import track_local_uri
+
+    track = Track(
+        id=1, platform="youtube", media_id="m", url="", source_index=None,
+        title="Song", uploader="Artist", duration=180, thumbnail_url=None,
+        description=None, status="converted", error=None, meta_title="Song",
+        meta_artist="Artist", meta_album=None, meta_track=None, raw_path=None,
+        mp3_path=None, m4a_path=None, cover_path=None, downloaded_at=None,
+        converted_at=None, synced_at=None,
+    )
+
+    class Folder:
+        kind = "folder"
+        title = "A folder"
+
+    assert track_local_uri(track, Folder(), album="Road Trip").endswith(
+        ":Road+Trip:Song:180"
+    )
+
+
+def test_every_uri_part_can_come_from_the_files_own_tags():
+    from musicdlp.core.models import Track
+    from musicdlp.services.spotify_sync import track_local_uri
+
+    track = Track(
+        id=1, platform="youtube", media_id="m", url="", source_index=None,
+        title="Upload title", uploader="Uploader", duration=180,
+        thumbnail_url=None, description=None, status="converted", error=None,
+        meta_title="Edited title", meta_artist="Edited artist",
+        meta_album=None, meta_track=None, raw_path=None, mp3_path=None,
+        m4a_path=None, cover_path=None, downloaded_at=None, converted_at=None,
+        synced_at=None,
+    )
+
+    uri = track_local_uri(
+        track, title="Tag Title", artist="Tag Artist",
+        album="Tag Album", seconds=181,
+    )
+
+    assert uri == (
+        "spotify:local:Tag+Artist:Tag+Album:Tag+Title:181"
+    )

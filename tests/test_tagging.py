@@ -72,3 +72,48 @@ def test_tags_without_cover_are_still_valid(silent_mp3):
     assert tags["title"] == "Bare"
     assert tags["has_cover"] is False
     assert silent_mp3.read_bytes()[3] == 3
+
+
+def test_an_atomic_retag_leaves_no_temp_and_writes_the_tags(silent_mp3):
+    from musicdlp.services.tagging import embed_tags_atomic
+
+    assert embed_tags_atomic(
+        silent_mp3, title="Safe", artist="Artist", album="Album", track=2
+    )
+
+    assert read_tags(silent_mp3)["title"] == "Safe"
+    assert not list(silent_mp3.parent.glob("*.mdlp-tmp*"))
+    assert not list(silent_mp3.parent.glob(".*.mdlp-tmp*"))
+
+
+def test_a_failed_atomic_retag_keeps_the_original_file(monkeypatch, silent_mp3):
+    from musicdlp.services import tagging
+
+    before = silent_mp3.read_bytes()
+
+    def broken(*_args, **_kwargs):
+        return False
+
+    monkeypatch.setattr(tagging, "embed_tags", broken)
+    assert tagging.embed_tags_atomic(silent_mp3, title="Never written") is False
+
+    assert silent_mp3.read_bytes() == before
+    assert not list(silent_mp3.parent.glob(".*.mdlp-tmp*"))
+
+
+def test_a_failed_cover_replacement_keeps_the_original_file(
+    monkeypatch, silent_mp3, cover
+):
+    from musicdlp.services import tagging
+
+    before = silent_mp3.read_bytes()
+    monkeypatch.setattr(tagging, "replace_cover", lambda *_a, **_k: False)
+
+    assert tagging.replace_cover_atomic(silent_mp3, cover) is False
+    assert silent_mp3.read_bytes() == before
+
+
+def test_read_tags_reports_the_files_own_length(silent_mp3):
+    from musicdlp.services.tagging import read_tags
+
+    assert read_tags(silent_mp3)["length"] == 1

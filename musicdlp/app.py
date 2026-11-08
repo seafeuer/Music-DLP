@@ -255,6 +255,7 @@ def main() -> int:
                 thumbnails=ctx.thumbnails,
             )
             bridge.start_pipeline.connect(window.start_pipeline_for_bridge)
+            bridge.sync_finished.connect(window._on_bridge_sync_finished)
             # The window needs the bridge back to answer the request.
             window.bridge = bridge
             ctx.pipeline.progress.connect(bridge.record_progress)

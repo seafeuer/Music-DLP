@@ -17,17 +17,37 @@ REQUIREMENTS
 4. Python 3.10 or newer (only if running from source; the .exe includes it)
 
 
-STEP 0: The easy way (the .exe)
--------------------------------
+QUICK START (the .exe)
+----------------------
 
-Download MusicDLP.exe from the release page and run it. Python and every
-library are inside the single file.
+1. Download MusicDLP-<version>.zip from the latest release page and unzip
+   it anywhere you can write to (for example your user folder, not Program
+   Files). It contains one MusicDLP folder.
+2. Run MusicDLP.exe. If Windows SmartScreen warns, choose "More info" then
+   "Run anyway" - the build is not code-signed.
+3. The first-run wizard opens. Press "Install it for me" to get FFmpeg, or
+   point it at an ffmpeg.exe you already have.
+4. Leave the wizard's Spotify folder as it is, then follow its "Show me how"
+   steps once: Spotify -> Settings -> Show local files -> Add a source ->
+   choose the Music DLP Spotify folder.
+5. Optional, inside Spotify: install Spicetify and Marketplace from
+   https://spicetify.app, start Music DLP once and close it, then run
+   .\spicetify\install-panel.ps1 from this folder. Start Spotify and open
+   Music DLP in the left navigation bar.
 
-Put ffmpeg.exe next to it (or in a "ffmpeg" folder beside it). If you
-downloaded the ZIP instead, FFmpeg is already in its ffmpeg folder - just
-unzip and run MusicDLP.exe.
+Python is not needed for the .exe. The rest of this file explains the
+source install and every step in more detail.
 
-The rest of this file is for running from source.
+
+STEP 0: What the .exe needs
+---------------------------
+
+The folder contains Python and every library the app needs. FFmpeg is the
+only outside helper: either let the first-run wizard install it, put
+ffmpeg.exe in the "ffmpeg" folder beside MusicDLP.exe, or install it with
+winget install Gyan.FFmpeg.
+
+The rest of this file is for running from source or for a manual setup.
 
 
 STEP 1: Install FFmpeg
@@ -144,13 +164,18 @@ Spicetify runs inside the client and can. The "spicetify" folder next to
 this file holds the panel and its installer.
 
   1. Install Spicetify (https://spicetify.app) and Marketplace.
-  2. Start Music DLP once, so it writes its settings.
+  2. Start Music DLP once, so it writes its settings, then close it.
   3. In PowerShell, from this folder:
        .\spicetify\install-panel.ps1
+     The installer finds spicetify.exe on PATH or in the usual install
+     folders. If it cannot find it, add the folder that holds spicetify.exe
+     to PATH and run the script again.
   4. Start Spotify. "Music DLP" appears in the left navigation bar.
 
 The installer closes Spotify while it applies the theme. The panel talks to
-the running Music DLP over 127.0.0.1 only.
+the running Music DLP over 127.0.0.1 only. Desktop changes appear in the
+panel within a few seconds; a folder can also be synced from the desktop
+with Edit -> Sync this folder to its Spotify playlist.
 
 
 EDITING METADATA
@@ -164,6 +189,19 @@ Select a track to see the Details panel (it is visible in both modes):
 
 The filename template is in Settings -> Output. Default: {title}
 Other placeholders: {artist} {album} {track} {id} {media_id} {source}
+
+To change many songs at once: tick them, then Edit -> Edit details for
+ticked songs. It can set an album, an artist, a run of track numbers, or
+replace part of every title (plain text or a regular expression), and write
+the result into the files immediately.
+
+View -> Browse by artist and album groups the whole library and shows cover
+thumbnails. View -> Saved filters stores the current status filter and
+search text under a name.
+
+If something does not work, Settings -> Advanced -> Run diagnostics checks
+FFmpeg, yt-dlp, cookies, the folders, Spotify, the panel, the AI setup and
+free space, and copies one report.
 
 
 TROUBLESHOOTING

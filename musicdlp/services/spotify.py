@@ -188,10 +188,7 @@ class SpotifyService:
                     result.skipped += 1
                     result.done.append(target.name)
                     continue
-                if mode == "move":
-                    shutil.move(str(source), str(target))
-                else:
-                    shutil.copy2(source, target)
+                self._copy_with_retry(source, target, mode)
                 result.copied += 1
                 result.done.append(target.name)
             except OSError as exc:
@@ -199,6 +196,36 @@ class SpotifyService:
                 result.errors.append(f"{source.name}: {exc}")
 
         return result
+
+    @staticmethod
+    def _copy_with_retry(
+        source: Path, target: Path, mode: str, attempts: int = 3
+    ) -> None:
+        """Copy or move, retrying briefly while Windows still holds a file.
+
+        Spotify often has the previous copy open for a second after a
+        rescan, and an antivirus scanner can hold a freshly written file.
+        A single PermissionError used to mark a song failed for the whole
+        run even though the next attempt a moment later would work.
+        """
+        last_error: Optional[OSError] = None
+        for attempt in range(max(1, attempts)):
+            try:
+                if mode == "move":
+                    shutil.move(str(source), str(target))
+                else:
+                    shutil.copy2(source, target)
+                return
+            except PermissionError as exc:
+                last_error = exc
+                if attempt + 1 < attempts:
+                    time.sleep(0.25 * (attempt + 1))
+            except OSError:
+                # A missing drive or a full disk will not improve by
+                # waiting, so those still fail at once.
+                raise
+        if last_error is not None:
+            raise last_error
 
     @staticmethod
     def _same_file(source: Path, target: Path) -> bool:

@@ -30,6 +30,7 @@ from musicdlp.core.models import (
     ALL_SONGS_ID, ERROR, BatchItem, Source, TrackRow, is_converted,
 )
 from musicdlp.core.paths import art_cache_dir, is_writable, pending_job_path
+from musicdlp.services.bridge import panel_installed
 from musicdlp.services.ffmpeg import FFmpegService
 from musicdlp.services.filenames import choose_template, render_template
 from musicdlp.services.ai import AISettings
@@ -41,11 +42,16 @@ from musicdlp.services.ai_export import songs_needing_help, write_prompt
 from musicdlp.services.pipeline import Pipeline
 from musicdlp.services import gdrive
 from musicdlp.services.spotify import SpotifyService
+from musicdlp.services.spotify_sync import search_uri, track_local_uri
+from musicdlp.services.tagging import read_tags
 from musicdlp.services.thumbnails import ThumbnailService
 from musicdlp.services.urls import split_links
 from musicdlp.services.ytdlp import YtDlpService
+from musicdlp.services.bulk_edit import fields_for, order_rows
 from musicdlp.ui.dialogs.ai_import import AIImportDialog
 from musicdlp.ui.dialogs.bulk_add import BulkAddDialog
+from musicdlp.ui.dialogs.bulk_edit import BulkEditDialog
+from musicdlp.ui.dialogs.browse import BrowseDialog
 from musicdlp.ui.dialogs.duplicates import DuplicateDialog
 from musicdlp.ui.dialogs.lookup import LookupDialog
 from musicdlp.ui.dialogs.settings import SettingsDialog
@@ -531,6 +537,15 @@ class MainWindow(QMainWindow):
         self.details_action.triggered.connect(self._edit_highlighted)
         edit_menu.addAction(self.details_action)
 
+        self.bulk_edit_action = QAction("Edit details for ticked songs…", self)
+        self.bulk_edit_action.setShortcut("Ctrl+Shift+E")
+        self.bulk_edit_action.setToolTip(
+            "Set one album, artist, track numbering, or title replacement "
+            "for every ticked song at once"
+        )
+        self.bulk_edit_action.triggered.connect(self._bulk_edit)
+        edit_menu.addAction(self.bulk_edit_action)
+
         edit_menu.addSeparator()
         self.update_files_action = QAction("Update files for ticked songs", self)
         self.update_files_action.setShortcut("Ctrl+Shift+R")
@@ -564,6 +579,17 @@ class MainWindow(QMainWindow):
         self.album_action = QAction("Number ticked songs as an album…", self)
         self.album_action.triggered.connect(self._number_as_album)
         edit_menu.addAction(self.album_action)
+
+        self.sync_folder_action = QAction(
+            "Sync this folder to its Spotify playlist…", self
+        )
+        self.sync_folder_action.setToolTip(
+            "Ask the Music DLP panel inside Spotify to mirror this folder "
+            "into its playlist, with the usual preview before anything "
+            "is removed"
+        )
+        self.sync_folder_action.triggered.connect(self._sync_folder_to_spotify)
+        edit_menu.addAction(self.sync_folder_action)
 
         self.lookup_action = QAction("Look up details online…", self)
         self.lookup_action.triggered.connect(self._look_up_details)
@@ -652,6 +678,17 @@ class MainWindow(QMainWindow):
         mode_menu.addAction(self.pro_mode_action)
 
         view_menu.addSeparator()
+        browse_action = QAction("Browse by artist and album…", self)
+        browse_action.setToolTip(
+            "See the whole library grouped by artist and album, with "
+            "covers, and tick groups to work with"
+        )
+        browse_action.triggered.connect(self._browse_library)
+        view_menu.addAction(browse_action)
+
+        self.saved_filters_menu = view_menu.addMenu("Saved filters")
+        self._rebuild_saved_filters_menu()
+
         find_action = QAction("Search every song", self)
         find_action.setShortcut("Ctrl+F")
         find_action.triggered.connect(self._focus_search)
@@ -715,6 +752,10 @@ class MainWindow(QMainWindow):
             self._clear_every_search
         )
         self.track_table.open_source_requested.connect(self._open_url)
+        self.track_table.open_spotify_requested.connect(self._open_in_spotify)
+        self.track_table.copy_spotify_requested.connect(
+            self._copy_spotify_link
+        )
         self.track_table.table.selectionModel().selectionChanged.connect(
             self._on_selection_changed
         )
@@ -1381,6 +1422,25 @@ class MainWindow(QMainWindow):
         self._reload_current_source()
         self._update_actions()
 
+    def _browse_library(self) -> None:
+        """Browse every song by artist and album, with covers."""
+        rows = self.db.get_all_track_rows()
+        if not rows:
+            self.status.set_idle("Add a link first; there is nothing to browse.")
+            return
+        dialog = BrowseDialog(rows, self.ctx.thumbnails, self)
+        dialog.edit_requested.connect(self._open_details)
+        if dialog.exec() != QDialog.Accepted or not dialog.ticked_ids:
+            return
+        self._checked |= set(dialog.ticked_ids)
+        self._reload_current_source()
+        self._update_actions()
+        self._update_steps()
+        count = len(set(dialog.ticked_ids))
+        self.status.set_idle(
+            f"Ticked {count} song{'' if count == 1 else 's'} from the browse view."
+        )
+
     def _clear_all_checks(self) -> None:
         """Untick every song, in every view.
 
@@ -1772,11 +1832,19 @@ class MainWindow(QMainWindow):
             if self._current_source_id == ALL_SONGS_ID
             else "Translate every song in this link…"
         )
+        self.bulk_edit_action.setEnabled(count > 0 and not busy)
         self.update_files_action.setEnabled(count > 0 and not busy)
         self.relink_action.setEnabled(not busy)
         self.fix_covers_action.setEnabled(count > 0 and not busy)
         self.gdrive_action.setEnabled(count > 0 and not busy)
         self.album_action.setEnabled(count > 0 and not busy)
+        current = (
+            self.db.get_source(self._current_source_id)
+            if self._current_source_id not in (None, ALL_SONGS_ID) else None
+        )
+        self.sync_folder_action.setEnabled(
+            bool(current is not None and current.is_folder) and not busy
+        )
         self.lookup_action.setEnabled(
             (count > 0 or self._current_source_id is not None) and not busy
         )
@@ -2457,10 +2525,18 @@ class MainWindow(QMainWindow):
         dialog = SettingsDialog(
             self.settings, self.ctx.ffmpeg, self.ctx.ytdlp,
             self.ctx.spotify, self, start_tab="AI",
+            bridge=getattr(self, "bridge", None),
         )
         if dialog.exec() == QDialog.Accepted and dialog.result_settings:
             self.ctx.rebuild(dialog.result_settings)
             self.settings = self.ctx.settings
+            bridge = getattr(self, "bridge", None)
+            if bridge is not None:
+                bridge.settings = self.ctx.settings
+                bridge.library = self.ctx.library
+                bridge.pipeline = self.ctx.pipeline
+                bridge.thumbnails = self.ctx.thumbnails
+            self.inspector.thumbnails = self.ctx.thumbnails
             apply_theme(QApplication.instance(), self.settings.theme)
             self._sync_mode_combo()
             self._update_theme_button()
@@ -2741,6 +2817,66 @@ class MainWindow(QMainWindow):
             "File check finished — press Check song files again for details."
         )
 
+    def _sync_folder_to_spotify(self) -> None:
+        """Ask the panel inside Spotify to mirror the open folder.
+
+        Playlist writes can only happen inside Spotify, so the desktop
+        queues the request and the panel runs its usual preview. That
+        keeps one implementation of the matching rules and one place where
+        removing hand-added songs is confirmed.
+        """
+        if self._is_busy():
+            self.status.set_idle("Wait for the current job to finish.")
+            return
+        folder = (
+            self.db.get_source(self._current_source_id)
+            if self._current_source_id not in (None, ALL_SONGS_ID) else None
+        )
+        if folder is None or not folder.is_folder:
+            self.status.set_idle("Open a folder first, then try again.")
+            return
+
+        bridge = getattr(self, "bridge", None)
+        if bridge is None or not getattr(bridge, "running", False):
+            QMessageBox.information(
+                self,
+                "The Spotify panel is off",
+                "Playlists can only be changed from inside Spotify.\n\n"
+                "Switch the Spotify panel on in Settings → Spotify, then "
+                "restart Music DLP and Spotify.",
+            )
+            return
+        if not panel_installed():
+            QMessageBox.information(
+                self,
+                "The Spotify panel is not installed",
+                "Playlists can only be changed from inside Spotify.\n\n"
+                "Install the panel with spicetify\\install-panel.ps1, then "
+                "start Spotify and open Music DLP in its left nav.",
+            )
+            return
+
+        bridge.request_sync(folder.id)
+        self.status.set_idle(
+            f"Asked the Music DLP panel to sync “{folder.title}”. "
+            "Confirm the preview in Spotify."
+        )
+
+    def _on_bridge_sync_finished(
+        self, folder_id: int, applied: bool, message: str
+    ) -> None:
+        """Report the panel's answer to a sync the desktop asked for."""
+        folder = self.db.get_source(folder_id)
+        name = folder.title if folder is not None else "that folder"
+        if message:
+            self.status.set_idle(message)
+        elif applied:
+            self.status.set_idle(f"Playlist “{name}” was updated in Spotify.")
+        else:
+            self.status.set_idle(f"The sync of “{name}” was cancelled.")
+        if applied:
+            self._refresh_sources(self._current_source_id)
+
     def _find_duplicates(self) -> None:
         """Show songs that look like the same recording added twice."""
         groups = self.db.find_duplicate_groups()
@@ -2788,6 +2924,85 @@ class MainWindow(QMainWindow):
         row = self.track_table.current_row()
         if row is not None:
             self._open_details(row.track.id)
+
+    def _bulk_edit(self) -> None:
+        """Apply one album/artist/number/title rule to every ticked song."""
+        if self._is_busy():
+            self.status.set_idle("Wait for the current job to finish.")
+            return
+        rows = order_rows(
+            self._checked_rows(), self.track_table.visible_track_ids()
+        )
+        if not rows:
+            self.status.set_idle("Tick the songs you want to change first.")
+            return
+
+        dialog = BulkEditDialog(rows, self)
+        if dialog.exec() != QDialog.Accepted or dialog.result_edit is None:
+            return
+
+        edit = dialog.result_edit
+        # Snapshot before the writes: undo has to restore the old values,
+        # not the rule that was just applied.
+        self._push_metadata_undo(
+            "Editing several songs", [row.track.id for row in rows]
+        )
+        changed_ids: list[int] = []
+        for index, row in enumerate(rows):
+            fields = fields_for(row.track, edit, index)
+            if not fields:
+                continue
+            self.ctx.library.set_metadata(row.track.id, **fields)
+            changed_ids.append(row.track.id)
+
+        self._refresh_sources(self._current_source_id)
+
+        if dialog.write_files:
+            updated = [
+                self.track_table.model.row_for_id(track_id)
+                or next(
+                    (row for row in rows if row.track.id == track_id), None
+                )
+                for track_id in changed_ids
+            ]
+            updated = [row for row in updated if row is not None]
+            rewritten = [
+                row for row in updated
+                if is_converted(self.db.get_track(row.track.id).status)
+            ]
+            if rewritten:
+                if not self.ctx.ffmpeg.available:
+                    QMessageBox.warning(
+                        self, "FFmpeg required",
+                        "The details were saved, but FFmpeg is needed to "
+                        "write them into the files.",
+                    )
+                else:
+                    stages = ["convert"]
+                    if any(
+                        self.db.get_track(row.track.id).synced_at
+                        for row in rewritten
+                    ):
+                        stages.append("sync")
+                    self._start_pipeline(
+                        rewritten, stages, force=True, only_synced=True,
+                        retag=True,
+                    )
+                    self.status.set_busy(
+                        f"Writing the new details into "
+                        f"{len(rewritten)} file"
+                        f"{'' if len(rewritten) == 1 else 's'}…"
+                    )
+                    return
+
+        self.status.set_idle(
+            f"Changed {len(changed_ids)} song"
+            f"{'' if len(changed_ids) == 1 else 's'}."
+            + (
+                " Open Edit → Update files to write them into the audio files."
+                if changed_ids and not dialog.write_files else ""
+            )
+        )
 
     def _filename_template_for(self, source) -> str:
         """The naming pattern a song in this link will actually use.
@@ -3421,6 +3636,96 @@ class MainWindow(QMainWindow):
     def _open_url(self, url: str) -> None:
         QDesktopServices.openUrl(QUrl(url))
 
+    def _spotify_file_tags(self, track) -> dict[str, object]:
+        """The values Spotify indexed for this file, when a file exists.
+
+        The file's own tags are the ground truth: after a song is moved
+        out of a playlist, or edited in the library without a rewrite, the
+        database and the tags disagree. A link built from the database
+        then does not resolve. Missing or unreadable tags are left out and
+        the caller falls back per field.
+        """
+        for path in track.output_paths:
+            candidate = Path(path)
+            if not candidate.is_file():
+                continue
+            try:
+                tags = read_tags(candidate)
+            except Exception:  # noqa: BLE001 - a bad tag must not block a link
+                continue
+            found = {
+                key: tags[key] for key in ("title", "artist", "album")
+                if tags.get(key)
+            }
+            if tags.get("length"):
+                found["length"] = int(tags["length"])
+            if found:
+                return found
+        return {}
+
+    def _open_in_spotify(self, track_id: int) -> None:
+        """Open the song in Spotify, or search for it until it is indexed."""
+        track = self.db.get_track(track_id)
+        if track is None:
+            return
+        row = self.track_table.model.row_for_id(track_id)
+        source = row.source if row is not None else None
+        if not track.synced_at:
+            # Nothing has been copied into the Spotify folder yet, so a
+            # local link would point at a file Spotify has never seen.
+            query = " ".join(
+                part for part in (track.display_title, track.display_artist)
+                if part
+            )
+            QDesktopServices.openUrl(QUrl(search_uri(query)))
+            self.status.set_idle(
+                "Not in Spotify yet — opened a search instead. Send the song "
+                "to Spotify first to get a local-file link."
+            )
+            return
+        tags = self._spotify_file_tags(track)
+        QDesktopServices.openUrl(
+            QUrl(track_local_uri(
+                track, source,
+                title=tags.get("title"),
+                artist=tags.get("artist"),
+                album=tags.get("album"),
+                seconds=tags.get("length"),
+            ))
+        )
+        if not self.ctx.spotify.is_running():
+            self.status.set_idle(
+                "Spotify is not running, so the link may not open. Start "
+                "Spotify and try again."
+            )
+
+    def _copy_spotify_link(self, track_id: int) -> None:
+        """Copy the link Spotify gives this song's local file."""
+        track = self.db.get_track(track_id)
+        if track is None:
+            return
+        row = self.track_table.model.row_for_id(track_id)
+        source = row.source if row is not None else None
+        tags = self._spotify_file_tags(track)
+        uri = track_local_uri(
+            track, source,
+            title=tags.get("title"),
+            artist=tags.get("artist"),
+            album=tags.get("album"),
+            seconds=tags.get("length"),
+        )
+        QApplication.clipboard().setText(uri)
+        if track.synced_at:
+            self.status.set_idle(
+                "Copied the Spotify local-file link. It works once Spotify "
+                "has indexed the file."
+            )
+        else:
+            self.status.set_idle(
+                "Copied the Spotify link this song will have. Send it to "
+                "Spotify first so the link resolves."
+            )
+
     def _open_folder(self, path: Path) -> None:
         """Open a folder, and say so when the drive is not there.
 
@@ -3588,6 +3893,112 @@ class MainWindow(QMainWindow):
 
         self.setup_banner.clear_prompt()
 
+    def _rebuild_saved_filters_menu(self) -> None:
+        """Show the saved filter combinations under View.
+
+        A saved filter is the pair of controls the list already has: a
+        status and a search text. It is stored in config.json, so it
+        survives a restart without a separate file to lose.
+        """
+        menu = getattr(self, "saved_filters_menu", None)
+        if menu is None:
+            return
+        menu.clear()
+        save_action = menu.addAction("Save the current filter…")
+        save_action.triggered.connect(self._save_current_filter)
+
+        filters = list(self.settings.saved_filters or [])
+        menu.addSeparator()
+        if not filters:
+            empty = menu.addAction("No saved filters yet")
+            empty.setEnabled(False)
+            return
+        for item in filters:
+            status = item.get("status", "all")
+            search = item.get("search", "")
+            label = item.get("name", "Filter")
+            suffix = []
+            if status != "all":
+                index = self.track_table.filter_combo.findData(status)
+                if index >= 0:
+                    suffix.append(self.track_table.filter_combo.itemText(index))
+            if search:
+                suffix.append(f"“{search}”")
+            text = f"{label} ({', '.join(suffix)})" if suffix else label
+            action = menu.addAction(text)
+            action.triggered.connect(
+                lambda _checked=False, name=label: self._apply_saved_filter(name)
+            )
+        menu.addSeparator()
+        delete_action = menu.addAction("Delete a saved filter…")
+        delete_action.triggered.connect(self._delete_saved_filter)
+
+    def _save_current_filter(self) -> None:
+        name, ok = QInputDialog.getText(
+            self, "Save filter", "Name this filter:"
+        )
+        name = (name or "").strip()
+        if not ok or not name:
+            return
+        entry = {
+            "name": name,
+            "status": self.track_table.filter_combo.currentData() or "all",
+            "search": self.track_table.search.text().strip(),
+        }
+        filters = [
+            item for item in (self.settings.saved_filters or [])
+            if str(item.get("name", "")).casefold() != name.casefold()
+        ]
+        filters.append(entry)
+        self.settings.saved_filters = filters
+        try:
+            self.settings.save()
+        except OSError as exc:
+            self.status.set_idle(f"The filter could not be saved: {exc}")
+            return
+        self._rebuild_saved_filters_menu()
+        self.status.set_idle(f"Saved the filter “{name}”.")
+
+    def _apply_saved_filter(self, name: str) -> None:
+        item = next(
+            (
+                entry for entry in (self.settings.saved_filters or [])
+                if str(entry.get("name", "")).casefold() == name.casefold()
+            ),
+            None,
+        )
+        if item is None:
+            self._rebuild_saved_filters_menu()
+            return
+        index = self.track_table.filter_combo.findData(
+            item.get("status", "all")
+        )
+        self.track_table.filter_combo.setCurrentIndex(max(0, index))
+        self.track_table.search.setText(item.get("search", ""))
+        self.status.set_idle(f"Showing the filter “{name}”.")
+
+    def _delete_saved_filter(self) -> None:
+        filters = list(self.settings.saved_filters or [])
+        if not filters:
+            self.status.set_idle("There are no saved filters to delete.")
+            return
+        names = [str(item.get("name", "")) for item in filters]
+        name, ok = QInputDialog.getItem(
+            self, "Delete filter", "Which saved filter?", names, 0, False
+        )
+        if not ok or not name:
+            return
+        self.settings.saved_filters = [
+            item for item in filters if item.get("name") != name
+        ]
+        try:
+            self.settings.save()
+        except OSError as exc:
+            self.status.set_idle(f"The filter could not be saved: {exc}")
+            return
+        self._rebuild_saved_filters_menu()
+        self.status.set_idle(f"Deleted the filter “{name}”.")
+
     def _open_settings(self) -> None:
         if self._is_busy():
             self.status.set_idle("Wait for the current job to finish.")
@@ -3598,12 +4009,22 @@ class MainWindow(QMainWindow):
             self.ctx.ytdlp,
             self.ctx.spotify,
             self,
+            bridge=getattr(self, "bridge", None),
         )
         if dialog.exec() != QDialog.Accepted or dialog.result_settings is None:
             return
 
         self.ctx.rebuild(dialog.result_settings)
         self.settings = self.ctx.settings
+        # The bridge was built with the old settings and the old library
+        # service. After a reset or a folder change it must use the new
+        # ones, or panel edits would be saved with stale paths.
+        bridge = getattr(self, "bridge", None)
+        if bridge is not None:
+            bridge.settings = self.ctx.settings
+            bridge.library = self.ctx.library
+            bridge.pipeline = self.ctx.pipeline
+            bridge.thumbnails = self.ctx.thumbnails
         self.inspector.thumbnails = self.ctx.thumbnails
         apply_theme(QApplication.instance(), self.settings.theme)
         self._sync_mode_combo()
@@ -3612,6 +4033,7 @@ class MainWindow(QMainWindow):
         self._update_spotify_state()
         self._reload_current_source()
         self._update_actions()
+        self._rebuild_saved_filters_menu()
         self.status.set_idle("Settings saved.")
 
     def _sync_mode_combo(self) -> None:

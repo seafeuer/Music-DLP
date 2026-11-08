@@ -102,3 +102,32 @@ def test_an_unreadable_config_is_kept_beside_the_new_one(tmp_path):
     backups = list(tmp_path.glob("config.json.bad-*"))
     assert len(backups) == 1
     assert "not json" in backups[0].read_text(encoding="utf-8")
+
+
+def test_resetting_settings_keeps_the_panel_token():
+    """A reset must not make the installed Spotify panel answer 403."""
+    settings = Settings()
+    settings.bridge_token = "panel-token"
+    settings.theme = "light"
+    settings.filename_template = "{artist} - {title}"
+    settings.first_run_done = True
+
+    fresh = settings.reset_keeping_token()
+
+    assert fresh.bridge_token == "panel-token"
+    assert fresh.theme == "dark"
+    assert fresh.filename_template == "{title}"
+    assert fresh.first_run_done is True
+
+
+def test_saved_filters_from_a_damaged_config_are_cleaned_not_dropped_whole():
+    settings = Settings(saved_filters=[
+        {"name": "  Recent  ", "status": "new", "search": 5},
+        {"name": "", "status": "all"},
+        "not-an-entry",
+        {"status": "all", "search": "x"},
+    ])
+
+    assert settings.saved_filters == [
+        {"name": "Recent", "status": "new", "search": "5"},
+    ]

@@ -19,6 +19,7 @@ SHORTCUTS: tuple[tuple[str, str], ...] = (
     ("Ctrl+Enter", "Run the main action (download, convert, or send)"),
     ("Space", "Tick or untick the highlighted song"),
     ("F2  /  Enter", "Edit the highlighted song's details"),
+    ("Ctrl+Shift+E", "Edit details for every ticked song"),
     ("Delete  /  Backspace", "Remove the highlighted songs from the library"),
     ("Ctrl+Z", "Undo the last rename, move, or removal"),
     ("Ctrl+T", "Translate the ticked songs"),

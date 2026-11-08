@@ -10,7 +10,7 @@ per song before converting.
 
 ## Status
 
-**Version 2.11.0 — working.** The base app is verified end to end against a
+**Version 2.12.0 — working.** The base app is verified end to end against a
 real library: adding and re-adding links, download, convert, Spotify delivery,
 the detail editor, album art, translation, AI naming, catalogue lookup,
 duplicates, folders, undo, and editing every part of a song after it has
@@ -18,7 +18,7 @@ already been sent to Spotify.
 
 Last verified on 2026-11-08:
 
-- Full test suite passes (735 tests, offscreen Qt included), plus 21 headless
+- Full test suite passes (798 tests, offscreen Qt included), plus 25 headless
   tests for the Spotify panel and a contract test that checks every bridge
   field the panel reads.
 - The panel was loaded in Spotify 1.3.8.620 on this machine: it reports the
@@ -58,6 +58,17 @@ Last verified on 2026-11-08:
 - **Edit any song** — title, artist, album, track number, and cover picture,
   with a live preview of the file name. "Write these details into the audio file now" rewrites
   the file and refreshes the Spotify copy in one step.
+- **Edit many songs at once** — **Edit → Edit details for ticked songs…**
+  sets an album, an artist, a track-number run, or a title find/replace
+  (plain text or a regular expression) for the whole selection.
+- **Browse by artist and album** — **View → Browse by artist and album…**
+  groups everything in the library, shows cover thumbnails, and ticks a whole
+  album or artist for the next job.
+- **Saved filters** — save the current status filter and search text under
+  **View → Saved filters**, then bring the pair back with one click.
+- **Spotify links in the desktop** — right-click a song for **Open in
+  Spotify** and **Copy Spotify link**. Before a song has been sent, opening
+  it searches Spotify instead of pointing at a file Spotify has never seen.
 - **Selection across links** — tick songs in one link, switch to another, and
   keep going. One **Download to Spotify (n)** sends everything you ticked.
   **All songs** at the top of the library shows the whole collection, and
@@ -96,6 +107,13 @@ Last verified on 2026-11-08:
   up sharing one file, and files that changed outside Music DLP.
 - **Retry everything that failed** — Edit → Retry everything that failed runs
   every failed song again in one job, with the steps its batch needs.
+- **Diagnostics** — **Settings → Advanced → Run diagnostics…** checks FFmpeg,
+  yt-dlp, cookies, both folders, Spotify's Local Files registration, the
+  bridge, the installed panel, the AI setup and free disk space, then copies
+  the whole report in one press.
+- **Reset settings** — **Settings → Advanced → Reset settings…** restores
+  every default without touching the library, files, or the bridge token, so
+  the Spotify panel keeps working.
 
 ## Requirements
 
@@ -106,11 +124,11 @@ Last verified on 2026-11-08:
 
 ## Install and run
 
-**Easiest:** download the `.exe` from the
-[latest release](https://github.com/seafeuer/Music-DLP/releases/latest) and run
-it. Python and the app's libraries are inside it. Put `ffmpeg.exe` in the
-`ffmpeg\` folder next to it, or install FFmpeg with
-`winget install Gyan.FFmpeg`.
+**Easiest:** download `MusicDLP-<version>.zip` from the
+[latest release](https://github.com/seafeuer/Music-DLP/releases/latest),
+extract it somewhere you can write to, and run `MusicDLP.exe`. Python and
+the app's libraries are inside it. FFmpeg is bundled in the release; the
+first-run wizard can also install it for you.
 
 **From source:**
 
@@ -301,6 +319,7 @@ the same for one song.
 | Escape | Clear a search box, or close a dialog |
 | Space | Tick or untick the highlighted song |
 | F2 / Enter | Edit the highlighted song's details |
+| Ctrl+Shift+E | Edit details for every ticked song |
 | Delete | Remove the highlighted songs, after one confirmation |
 | Ctrl+A / Ctrl+Shift+A | Tick everything shown / everything in the library |
 | Ctrl+Z | Undo the last rename, move, or removal |
@@ -442,13 +461,20 @@ download without leaving Spotify, and mirror a folder into a playlist.
 
 1. Install [Spicetify](https://spicetify.app) and Marketplace first, and
    confirm they work.
-2. From the project folder, run:
+2. **Start Music DLP once** (and close it again). It writes the settings
+   file the panel installer reads.
+3. From the project folder, run:
 
    ```powershell
    .\spicetify\install-panel.ps1
    ```
 
-3. Start Music DLP, then Spotify. **Music DLP** appears in the left nav.
+4. Start Spotify. **Music DLP** appears in the left nav.
+
+The installer finds `spicetify.exe` on `PATH` or in the usual install
+folders. If it says the CLI was not found, add its folder to `PATH` and run
+the script again. It closes Spotify while it applies the theme, so do it
+when you are not listening.
 
 The installer copies the panel into Spicetify's `CustomApps` folder, writes
 the port and token into it, registers it, and applies the theme. Changing the
@@ -473,6 +499,18 @@ of your own that happens to share a folder's name is never touched.
 
 Matching uses the title, the artist, and the length, so a cover or a sped-up
 version of the same song is not mistaken for the original.
+
+### Syncing from the desktop
+
+Open a folder and choose **Edit → Sync this folder to its Spotify
+playlist…**. Music DLP asks the panel to open the same preview, so nothing is
+changed until you confirm it in Spotify. The desktop reports the result in
+its status bar. If the panel is not installed or the bridge is off, the app
+tells you which step is missing instead of silently doing nothing.
+
+The panel refreshes itself when the desktop changes the library: adding,
+renaming, editing, or deleting a song or folder shows up within a few
+seconds, without restarting Spotify.
 
 ### The rest of the panel
 
@@ -512,13 +550,18 @@ off in Settings, or by setting `bridge_enabled` to `false`.
 - **Spotify matches local files by title, artist and length.** Two different
   songs with identical tags appear as one playlist entry; the sync preview
   names them before you sync.
-- **The panel's folder list is polled.** A folder added, renamed or deleted on
-  the desktop can take up to 20 seconds to appear in the panel.
+- **The panel follows desktop changes live.** It polls the library's change
+  counter every few seconds while it is visible; a background tab catches up
+  when you open it. There is no folder-picker or settings page in the panel;
+  use the desktop app for those.
 - **A restore waits for the next start.** Choosing a backup in Settings writes
   a request; close Music DLP and open it again to put the backup in place.
 - **The file check only knows files Music DLP wrote.** Songs converted by an
   older version have no fingerprint until they are rewritten or converted
   again, so they are not checked.
+- **A failed Spotify copy stays visible.** The song keeps its converted file
+  and shows “Spotify copy failed” until the next send succeeds; it is not
+  silently reset by a later run that skipped the delivery.
 - **The packaged build is unsigned.** Windows SmartScreen may warn the first
   time it is run.
 
@@ -530,6 +573,20 @@ python build.py --clean
 ```
 
 Output: `dist/MusicDLP/`. Put `ffmpeg.exe` in `dist/MusicDLP/ffmpeg/`.
+`release.py` also writes `dist/MusicDLP-<version>.zip`, which is the file to
+upload as the release asset.
+
+For a release, use the pipeline instead of the pieces by hand:
+
+```bash
+python release.py --version 2.12.0
+```
+
+It updates the version in the package, `pyproject.toml`, the README and the
+changelog; runs the Python and panel tests; builds; starts the packaged exe
+on a temporary home to prove it launches; and writes
+`dist/MusicDLP/SHA256SUMS.txt`. `dist/` is gitignored, so upload the built
+folder as the GitHub release asset.
 
 ## Development
 

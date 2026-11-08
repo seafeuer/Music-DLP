@@ -420,12 +420,37 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
     return { playlistUri: playlistUri, items: items, plan: plan };
   }
 
-  async function addInChunks(playlistUri, uris) {
-    for (var i = 0; i < uris.length; i += PLAYLIST_CHUNK) {
-      await platform().PlaylistAPI.add(
-        playlistUri, uris.slice(i, i + PLAYLIST_CHUNK), {}
-      );
+  /* Retry a playlist write a few times with a growing pause.
+   *
+   * Spotify rate-limits or briefly refuses a write on a busy client. A
+   * single failure used to abort the whole sync after the additions had
+   * already landed, which left the playlist half-mirrored.
+   */
+  async function retryWrite(work, attempts) {
+    var tries = attempts || 3;
+    var lastError = null;
+    for (var attempt = 0; attempt < tries; attempt++) {
+      try {
+        return await work();
+      } catch (err) {
+        lastError = err;
+        if (attempt + 1 >= tries) break;
+        await sleep(500 * Math.pow(2, attempt));
+      }
     }
+    throw lastError;
+  }
+
+  async function addInChunks(playlistUri, uris) {
+    var chunks = 0;
+    for (var i = 0; i < uris.length; i += PLAYLIST_CHUNK) {
+      var batch = uris.slice(i, i + PLAYLIST_CHUNK);
+      await retryWrite(function () {
+        return platform().PlaylistAPI.add(playlistUri, batch, {});
+      });
+      chunks += 1;
+    }
+    return chunks;
   }
 
   async function removeInChunks(playlistUri, items, uris) {
@@ -434,24 +459,73 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
     var rows = items
       .filter(function (item) { return wanted[item.uri]; })
       .map(function (item) { return { uid: item.uid || "", uri: item.uri }; });
+    var chunks = 0;
     for (var i = 0; i < rows.length; i += PLAYLIST_CHUNK) {
-      await platform().PlaylistAPI.remove(
-        playlistUri, rows.slice(i, i + PLAYLIST_CHUNK)
-      );
+      var batch = rows.slice(i, i + PLAYLIST_CHUNK);
+      await retryWrite(function () {
+        return platform().PlaylistAPI.remove(playlistUri, batch);
+      });
+      chunks += 1;
     }
+    return chunks;
   }
 
   /* Apply a plan the user has approved. Additions are safe; removals are
    * only ever sent after the preview dialog's explicit confirmation.
    */
   async function applySync(playlistUri, plan, items) {
+    var added = 0;
+    var removed = 0;
     if (plan.to_add && plan.to_add.length) {
-      await addInChunks(playlistUri, plan.to_add);
+      added = await addInChunks(playlistUri, plan.to_add);
     }
     if (plan.to_remove && plan.to_remove.length) {
-      await removeInChunks(playlistUri, items, plan.to_remove);
+      removed = await removeInChunks(playlistUri, items, plan.to_remove);
     }
-    return { playlistUri: playlistUri, plan: plan };
+    return {
+      playlistUri: playlistUri,
+      plan: plan,
+      chunks_added: added,
+      chunks_removed: removed
+    };
+  }
+
+  /* Tell the desktop how a sync it asked for ended.
+   *
+   * A desktop-requested sync opens this panel's own preview, so the user
+   * still confirms removals here. The acknowledgement is best-effort: a
+   * stopped app has nothing to update, and a failure must not turn a
+   * successful sync into an error.
+   */
+  // Desktop-requested syncs already acknowledged. A failed apply keeps its
+// dialog open; pressing Cancel afterwards must not overwrite the real error
+// on the desktop with "cancelled".
+  var ACKED_SYNC_REQUESTS = {};
+
+  async function acknowledgeSync(requestId, folderId, applied, message) {
+    if (!requestId || ACKED_SYNC_REQUESTS[requestId]) return;
+    ACKED_SYNC_REQUESTS[requestId] = true;
+    try {
+      await api("POST", "/api/sync/ack", {
+        id: requestId,
+        folder_id: folderId,
+        applied: !!applied,
+        message: message || ""
+      });
+    } catch (err) {
+      // The desktop is gone; the sync itself already happened.
+    }
+  }
+
+  /* The first sync request the desktop queued, if the panel can act now.
+   *
+   * A request is ignored while a dialog is open or another job is busy:
+   * opening a second preview over the first would make the user answer
+   * two questions about the same playlist.
+   */
+  function nextSyncRequest(requests, busy, hasDialog) {
+    if (busy || hasDialog) return null;
+    return (requests || [])[0] || null;
   }
 
   /* Which folder to show after a fresh folder list arrives.
@@ -1434,6 +1508,18 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
     // knows which folder is open without being torn down on every switch.
     var activeRef = React.useRef(null);
     activeRef.current = activeFolder;
+    // The sync-request poll runs for the life of the panel; refs let it
+    // see the current dialog and busy state without restarting the timer.
+    var dialogRef = React.useRef(null);
+    dialogRef.current = dialog;
+    var busyRef = React.useRef("");
+    busyRef.current = busy;
+    // Last library revision the panel saw. A desktop change bumps it, so
+    // the panel refreshes at once instead of waiting for the 20 s poll.
+    var versionRef = React.useRef(null);
+    // The last desktop request this panel accepted. Without this, two
+    // polls 2.5 s apart could open two previews for one request.
+    var handlingRef = React.useRef("");
 
     function notify(text, kind) {
       setToast({ text: text, kind: kind || "ok" });
@@ -1451,18 +1537,34 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
      * desktop deleted or renamed. */
     function adoptFolders(list) {
       var id = activeFolderAfterRefresh(list, activeRef.current);
-      if (id === activeRef.current) return;
+      if (id === activeRef.current) return Promise.resolve(id);
       setActiveFolder(id);
       activeRef.current = id;
-      loadTracks(id).catch(function () {});
+      // Return the load so a caller that refreshes tracks afterwards waits
+      // for this switch instead of racing it with the old folder id.
+      return loadTracks(id).then(function () { return id; })
+        .catch(function () { return id; });
     }
 
-    async function loadTracks(folderId) {
+    async function loadTracks(folderId, keepSelection) {
       // Keep the route itself a literal: the contract test reads these.
       var path = "/api/tracks" + (folderId ? "?folder=" + folderId : "");
       var list = await api("GET", path);
       setTracks(list);
-      setSelected(new Set());
+      if (keepSelection) {
+        // A live refresh during a desktop job must not erase the songs the
+        // user ticked for the panel's own next action.
+        setSelected(function (previous) {
+          var available = new Set(list.map(function (track) { return track.id; }));
+          var kept = new Set();
+          previous.forEach(function (id) {
+            if (available.has(id)) kept.add(id);
+          });
+          return kept;
+        });
+      } else {
+        setSelected(new Set());
+      }
     }
 
     React.useEffect(function () {
@@ -1499,12 +1601,27 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
             setHealth(info);
             setConnection("online");
             setReason("");
-            if (wasOffline) {
-              // The app was restarted while the panel was open: its
-              // folders and songs may be different now.
+            var version = info.library_version;
+            var previous = versionRef.current;
+            var changed = previous !== null && version !== previous
+              && version !== undefined && version !== null;
+            if (previous === null || version === undefined || version === null) {
+              versionRef.current = version;
+            }
+            // Do not pull the list out from under a selection or an open
+            // dialog while the panel is doing something. Leave the old
+            // version in the ref so the next poll tries again; advancing
+            // it here would lose the change permanently.
+            if ((wasOffline || changed) && !busyRef.current
+                && !dialogRef.current) {
               wasOffline = false;
-              refreshFolders().catch(function () {});
-              loadTracks(activeRef.current).catch(function () {});
+              versionRef.current = version;
+              refreshFolders()
+                .then(adoptFolders)
+                .then(function () {
+                  return loadTracks(activeRef.current, true);
+                })
+                .catch(function () {});
             }
           })
           .catch(function (err) {
@@ -1548,6 +1665,46 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
           document.removeEventListener("visibilitychange", onVisible);
         }
       };
+    }, []);
+
+    // A sync started from the desktop app becomes a request here. The
+    // panel shows its normal preview, so removals still need the same
+    // explicit confirmation, and acknowledges the request when it ends.
+    React.useEffect(function () {
+      var alive = true;
+
+      async function poll() {
+        if (typeof document !== "undefined" && document.visibilityState
+            && document.visibilityState !== "visible") {
+          return;
+        }
+        // While a dialog is open, do not even ask: the request poll is what
+        // expires old requests, and expiring the one the user is looking
+        // at would lose their confirmation. A running job still polls, so
+        // a request queued meanwhile is not considered abandoned; the
+        // busy check below only prevents opening the preview early.
+        if (dialogRef.current) return;
+        try {
+          var data = await api("GET", "/api/sync/requests");
+          if (!alive) return;
+          var pending = (data && data.requests) || [];
+          if (!pending.length) handlingRef.current = "";
+          var request = nextSyncRequest(
+            pending, busyRef.current, dialogRef.current
+          );
+          if (request && handlingRef.current !== request.id) {
+            handlingRef.current = request.id;
+            setBusy("Opening the sync the desktop asked for…");
+            doSync(request.id, request.folder_id);
+          }
+        } catch (err) {
+          // Offline or refused: the health poll already explains that.
+        }
+      }
+
+      poll();
+      var timer = setInterval(poll, 2500);
+      return function () { alive = false; clearInterval(timer); };
     }, []);
 
     // A toast left on screen forever hid the panel and stacked errors.
@@ -1674,8 +1831,9 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
       }
     }
 
-    async function doSync() {
-      var folderId = activeRef.current;
+    async function doSync(requestId, requestedFolderId) {
+      var folderId = requestedFolderId === undefined
+        ? activeRef.current : requestedFolderId;
       setBusy("Checking the playlist…");
       try {
         // The desktop may have renamed or deleted the folder since the
@@ -1685,7 +1843,9 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
         var folder = list.filter(function (f) { return f.id === folderId; })[0];
         if (!folder) {
           setBusy("");
-          notify("That folder no longer exists. Choose a folder and try again.", "error");
+          var missing = "That folder no longer exists. Choose a folder and try again.";
+          notify(missing, "error");
+          acknowledgeSync(requestId, folderId, false, missing);
           return;
         }
 
@@ -1694,8 +1854,10 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
         setBusy("");
 
         if (!plan.to_add.length && !plan.to_remove.length) {
-          notify(describePlan(plan));
+          var text = describePlan(plan);
+          notify(text);
           if (plan.reason && !plan.safe_to_remove) notify(plan.reason, "error");
+          acknowledgeSync(requestId, folderId, true, text);
           return;
         }
 
@@ -1704,6 +1866,8 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
         setDialog({
           type: "sync",
           folderTitle: folder.title,
+          folderId: folder.id,
+          requestId: requestId || "",
           playlistUri: result.playlistUri,
           items: result.items,
           plan: plan
@@ -1711,6 +1875,7 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
       } catch (err) {
         setBusy("");
         notify(err.message, "error");
+        acknowledgeSync(requestId, folderId, false, err.message);
       }
     }
 
@@ -2177,9 +2342,21 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
             playlistUri: dialog.playlistUri,
             items: dialog.items,
             plan: dialog.plan,
-            onClose: closeDialog,
-            onError: function (text) { notify(text, "error"); },
-            onDone: function (text) { finish(text); }
+            onClose: function () {
+              acknowledgeSync(
+                dialog.requestId, dialog.folderId, false,
+                "The sync was cancelled in Spotify. Nothing was changed."
+              );
+              closeDialog();
+            },
+            onError: function (text) {
+              notify(text, "error");
+              acknowledgeSync(dialog.requestId, dialog.folderId, false, text);
+            },
+            onDone: function (text) {
+              acknowledgeSync(dialog.requestId, dialog.folderId, true, text);
+              finish(text);
+            }
           })
         : null,
 
