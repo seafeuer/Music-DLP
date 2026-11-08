@@ -367,3 +367,16 @@ test("a file check says what it found", () => {
   assert.match(names[1], /Changed: Three/);
   assert.deepEqual(Array.from(context.integrityNames(clean)), []);
 });
+
+test("a folder name is refused when it is empty or already used", () => {
+  const { context } = loadPanel();
+  const folders = [{ id: 1, title: "Rap" }, { id: 2, title: "Remixes" }];
+
+  assert.match(context.folderNameError("  ", folders), /needs a name/);
+  assert.match(context.folderNameError("rap", folders), /Rap/);
+  assert.match(context.folderNameError("REMIXES", folders), /Remixes/);
+  assert.equal(context.folderNameError("Live", folders), "");
+  // A rename may keep its own name, whatever the case.
+  assert.equal(context.folderNameError("rap", folders, 1), "");
+  assert.match(context.folderNameError("Remixes", folders, 1), /Remixes/);
+});

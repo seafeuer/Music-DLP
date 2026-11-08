@@ -19,7 +19,12 @@ _UNSET = object()
 
 
 class FakePipeline:
-    is_running = False
+    def __init__(self):
+        self.is_running = False
+        self.cancelled = False
+
+    def cancel(self):
+        self.cancelled = True
 
 
 class FakeLibrary:
@@ -959,3 +964,142 @@ def test_the_panel_can_check_the_song_files(env, tmp_path):
 
     assert status == 200
     assert [item["track_id"] for item in payload["changed"]] == [track_id]
+
+
+# ------------------------------------------------- panel: cancel and folders
+
+
+def test_the_panel_can_cancel_a_running_job(env):
+    bridge, _db, _library, _folder_id, _track_id = env
+    bridge.pipeline.is_running = True
+
+    status, payload = _call(bridge, "/api/cancel", method="POST", body={})
+
+    assert status == 200
+    assert payload["cancelling"] is True
+    assert bridge.pipeline.cancelled is True
+
+
+def test_cancelling_when_nothing_runs_is_a_conflict(env):
+    bridge, *_ = env
+
+    status, payload = _call(bridge, "/api/cancel", method="POST", body={})
+
+    assert status == 409
+    assert bridge.pipeline.cancelled is False
+
+
+def test_the_panel_can_create_a_folder(env):
+    bridge, _db, _library, _folder_id, _track_id = env
+
+    status, payload = _call(
+        bridge, "/api/folders", method="POST", body={"title": "Remixes"}
+    )
+
+    assert status == 200
+    assert payload["created"] is True
+    assert payload["folder"]["title"] == "Remixes"
+    assert payload["folder"]["tracks"] == 0
+    titles = [item["title"] for item in _call(bridge, "/api/folders")[1]]
+    assert "Remixes" in titles
+
+
+def test_creating_a_folder_that_exists_returns_it(env):
+    bridge, _db, _library, folder_id, _track_id = env
+
+    status, payload = _call(
+        bridge, "/api/folders", method="POST", body={"title": "rap"}
+    )
+
+    assert status == 200
+    assert payload["created"] is False
+    assert payload["folder"]["id"] == folder_id
+
+
+def test_a_folder_with_no_name_is_refused(env):
+    bridge, *_ = env
+
+    status, payload = _call(
+        bridge, "/api/folders", method="POST", body={"title": "   "}
+    )
+
+    assert status == 400
+    assert "name" in payload["error"].lower()
+
+
+def test_renaming_a_folder_moves_its_links_with_it(env):
+    bridge, db, _library, folder_id, _track_id = env
+    other = db.add_source(
+        url="https://youtu.be/xyz", kind="video", platform="youtube",
+        external_id="xyz", title="A song link", uploader="",
+        item_count=1, thumbnail_url=None,
+    )
+    db.set_source_folder(other, "Rap")
+
+    status, payload = _call(
+        bridge,
+        "/api/folders/rename",
+        method="POST",
+        body={"folder_id": folder_id, "title": "Hip hop"},
+    )
+
+    assert status == 200
+    assert payload["folder"]["title"] == "Hip hop"
+    assert db.get_source(folder_id).title == "Hip hop"
+    assert db.get_source(other).folder == "Hip hop"
+
+
+def test_renaming_onto_another_folders_name_is_refused(env):
+    bridge, db, _library, folder_id, _track_id = env
+    db.add_folder("Remixes")
+
+    status, payload = _call(
+        bridge,
+        "/api/folders/rename",
+        method="POST",
+        body={"folder_id": folder_id, "title": "remixes"},
+    )
+
+    assert status == 400
+    assert "already exists" in payload["error"]
+    assert db.get_source(folder_id).title == "Rap"
+
+
+def test_renaming_an_unknown_folder_is_a_404(env):
+    bridge, *_ = env
+
+    status, _ = _call(
+        bridge,
+        "/api/folders/rename",
+        method="POST",
+        body={"folder_id": 999, "title": "X"},
+    )
+
+    assert status == 404
+
+
+def test_deleting_a_folder_keeps_its_songs(env):
+    bridge, db, _library, folder_id, track_id = env
+
+    status, payload = _call(
+        bridge,
+        "/api/folders/delete",
+        method="POST",
+        body={"folder_id": folder_id},
+    )
+
+    assert status == 200
+    assert payload["deleted"] == folder_id
+    assert db.get_source(folder_id) is None
+    assert db.get_track(track_id) is not None
+    assert _call(bridge, f"/api/tracks?folder={folder_id}")[1] == []
+
+
+def test_deleting_an_unknown_folder_is_a_404(env):
+    bridge, *_ = env
+
+    status, _ = _call(
+        bridge, "/api/folders/delete", method="POST", body={"folder_id": 999}
+    )
+
+    assert status == 404

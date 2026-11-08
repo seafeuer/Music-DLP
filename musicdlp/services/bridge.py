@@ -530,6 +530,18 @@ class Bridge(QObject):
 
             return check_library(self.db)
 
+        if method == "POST" and route == ["cancel"]:
+            return self._cancel()
+
+        if method == "POST" and route == ["folders"]:
+            return self._create_folder(body)
+
+        if method == "POST" and route == ["folders", "rename"]:
+            return self._rename_folder(body)
+
+        if method == "POST" and route == ["folders", "delete"]:
+            return self._delete_folder(body)
+
         if method == "GET" and route == ["duplicates"]:
             return self._duplicates()
 
@@ -639,6 +651,90 @@ class Bridge(QObject):
             "duplicate_tags": plan.duplicate_tags,
             "summary": plan.summary(),
         }
+
+    def _cancel(self) -> dict:
+        """Stop the pipeline job the panel is watching.
+
+        Only the pipeline is cancellable: bridge jobs (a cover fix, a
+        translation) run inside the request the panel is already waiting
+        on, so there is no separate handle to stop them.
+        """
+        if not self.pipeline.is_running:
+            raise BridgeError(
+                "Nothing is running.", HTTPStatus.CONFLICT
+            )
+        self.pipeline.cancel()
+        return {"ok": True, "cancelling": True}
+
+    def _folder_dict(self, folder) -> dict:
+        return {
+            **_source_dict(folder),
+            "tracks": len(self.db.get_tracks_for_folder(folder.id)),
+        }
+
+    def _folder_name_problem(
+        self, title: str, *, except_id: Optional[int] = None
+    ) -> str:
+        if not title:
+            return "A folder needs a name."
+        for source in self.db.get_folder_sources():
+            if source.id != except_id and \
+                    source.title.casefold() == title.casefold():
+                return f"A folder called “{source.title}” already exists."
+        return ""
+
+    def _create_folder(self, body: dict) -> dict:
+        self._guard_idle()
+        title = str(body.get("title") or "").strip()
+        existing = self.db.get_folder_by_name(title) if title else None
+        if existing is not None:
+            # Creating a folder that exists opens it, the same as the
+            # desktop's New folder.
+            return {"created": False, "folder": self._folder_dict(existing)}
+        problem = self._folder_name_problem(title)
+        if problem:
+            raise BridgeError(problem)
+        folder_id = self.db.add_folder(title)
+        folder = self.db.get_source(folder_id)
+        return {"created": True, "folder": self._folder_dict(folder)}
+
+    def _rename_folder(self, body: dict) -> dict:
+        self._guard_idle()
+        try:
+            folder_id = int(body.get("folder_id"))
+        except (TypeError, ValueError) as exc:
+            raise BridgeError("folder_id is required") from exc
+        folder = self.db.get_source(folder_id)
+        if folder is None or not folder.is_folder:
+            raise BridgeError("Unknown folder", HTTPStatus.NOT_FOUND)
+        title = str(body.get("title") or "").strip()
+        problem = self._folder_name_problem(title, except_id=folder_id)
+        if problem:
+            raise BridgeError(problem)
+
+        old_title = folder.title
+        self.db.update_source(folder_id, title=title)
+        # Links filed under the old name follow the rename, exactly as the
+        # desktop's Rename folder does.
+        for source in self.db.get_sources():
+            if (source.folder or "") == old_title:
+                self.db.set_source_folder(source.id, title)
+        renamed = self.db.get_source(folder_id)
+        return {"folder": self._folder_dict(renamed)}
+
+    def _delete_folder(self, body: dict) -> dict:
+        self._guard_idle()
+        try:
+            folder_id = int(body.get("folder_id"))
+        except (TypeError, ValueError) as exc:
+            raise BridgeError("folder_id is required") from exc
+        folder = self.db.get_source(folder_id)
+        if folder is None or not folder.is_folder:
+            raise BridgeError("Unknown folder", HTTPStatus.NOT_FOUND)
+        # The songs stay in the library; only the folder row and the
+        # links' membership of it go away.
+        self.db.delete_folder(folder_id)
+        return {"deleted": folder_id, "title": folder.title}
 
     def _duplicates(self) -> dict:
         """Songs that look like the same recording added twice.

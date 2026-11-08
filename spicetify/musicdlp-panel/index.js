@@ -261,6 +261,20 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
     return lines;
   }
 
+  /* Why a folder name cannot be used, or "" when it can.
+   Mirrors the desktop: names ignore case, and a rename may keep its own
+   name. */
+  function folderNameError(name, folders, exceptId) {
+    var title = (name || "").trim();
+    if (!title) return "A folder needs a name.";
+    var clash = (folders || []).filter(function (folder) {
+      return folder.id !== exceptId
+        && String(folder.title).toLowerCase() === title.toLowerCase();
+    })[0];
+    if (clash) return "A folder called “" + clash.title + "” already exists.";
+    return "";
+  }
+
   function copyText(text) {
     if (typeof navigator !== "undefined" && navigator.clipboard
         && navigator.clipboard.writeText) {
@@ -1148,6 +1162,168 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
     );
   }
 
+  /* Create, rename and delete library folders without leaving Spotify.
+   Deleting keeps the songs: only the folder and its filing are removed,
+   the same as the desktop. */
+  function FolderDialog(props) {
+    var React = React_();
+    var folders = props.folders || [];
+    var nameState = React.useState("");
+    var busyState = React.useState("");
+    var editState = React.useState(null);      // { id, text }
+    var confirmState = React.useState(null);   // id
+    var name = nameState[0], setName = nameState[1];
+    var busy = busyState[0], setBusy = busyState[1];
+    var editing = editState[0], setEditing = editState[1];
+    var confirming = confirmState[0], setConfirming = confirmState[1];
+
+    async function create() {
+      var problem = folderNameError(name, folders);
+      if (problem) return props.onError(problem);
+      setBusy("create");
+      try {
+        var result = await api("POST", "/api/folders", { title: name.trim() });
+        setName("");
+        props.onInfo(result.created
+          ? "Created “" + result.folder.title + "”."
+          : "“" + result.folder.title + "” already exists.");
+        props.onChanged();
+      } catch (err) {
+        props.onError(err.message);
+      } finally {
+        setBusy("");
+      }
+    }
+
+    async function rename() {
+      if (!editing) return;
+      var problem = folderNameError(editing.text, folders, editing.id);
+      if (problem) return props.onError(problem);
+      setBusy("rename");
+      try {
+        var result = await api("POST", "/api/folders/rename", {
+          folder_id: editing.id,
+          title: editing.text.trim()
+        });
+        setEditing(null);
+        props.onInfo("Renamed the folder to “" + result.folder.title + "”.");
+        props.onChanged();
+      } catch (err) {
+        props.onError(err.message);
+      } finally {
+        setBusy("");
+      }
+    }
+
+    async function remove(id, title) {
+      setBusy("delete");
+      try {
+        await api("POST", "/api/folders/delete", { folder_id: id });
+        setConfirming(null);
+        props.onInfo("Deleted “" + title + "”. Its songs are still in the library.");
+        props.onChanged();
+      } catch (err) {
+        props.onError(err.message);
+      } finally {
+        setBusy("");
+      }
+    }
+
+    return h(Modal, { title: "Folders", onClose: props.onClose },
+      h("p", { className: "mdlp-hint" },
+        "Folders group links in the Music DLP library. Deleting a folder "
+        + "keeps its songs."),
+      h("div", { className: "mdlp-row", style: { marginBottom: "14px" } },
+        h("input", {
+          className: "mdlp-input",
+          placeholder: "Name for a new folder",
+          value: name,
+          onChange: function (e) { setName(e.target.value); },
+          onKeyDown: function (e) { if (e.key === "Enter") create(); }
+        }),
+        h("button", {
+          className: "mdlp-btn primary",
+          disabled: !!busy || !name.trim(),
+          onClick: create
+        }, busy === "create" ? "Creating…" : "Create")),
+      h("table", { className: "mdlp-review-table" },
+        h("thead", null,
+          h("tr", null,
+            h("th", null, "Folder"),
+            h("th", { style: { width: "70px" } }, "Songs"),
+            h("th", { style: { width: "150px" } }, ""))),
+        h("tbody", null,
+          folders.map(function (folder) {
+            if (editing && editing.id === folder.id) {
+              return h("tr", { key: folder.id },
+                h("td", null,
+                  h("input", {
+                    className: "mdlp-input",
+                    value: editing.text,
+                    onChange: function (e) {
+                      setEditing({ id: folder.id, text: e.target.value });
+                    },
+                    onKeyDown: function (e) {
+                      if (e.key === "Enter") rename();
+                    }
+                  })),
+                h("td", null, folder.tracks),
+                h("td", null,
+                  h("button", {
+                    className: "mdlp-btn primary",
+                    disabled: !!busy,
+                    onClick: rename
+                  }, "Save"),
+                  " ",
+                  h("button", {
+                    className: "mdlp-btn",
+                    onClick: function () { setEditing(null); }
+                  }, "Cancel")));
+            }
+            if (confirming === folder.id) {
+              return h("tr", { key: folder.id },
+                h("td", { colSpan: 2 },
+                  "Delete “" + folder.title + "”? Its songs stay in the library."),
+                h("td", null,
+                  h("button", {
+                    className: "mdlp-btn danger",
+                    disabled: !!busy,
+                    onClick: function () { remove(folder.id, folder.title); }
+                  }, "Delete"),
+                  " ",
+                  h("button", {
+                    className: "mdlp-btn",
+                    onClick: function () { setConfirming(null); }
+                  }, "Cancel")));
+            }
+            return h("tr", { key: folder.id },
+              h("td", null, folder.title),
+              h("td", null, folder.tracks),
+              h("td", null,
+                h("button", {
+                  className: "mdlp-btn",
+                  disabled: !!busy,
+                  onClick: function () {
+                    setConfirming(null);
+                    setEditing({ id: folder.id, text: folder.title });
+                  }
+                }, "Rename"),
+                " ",
+                h("button", {
+                  className: "mdlp-btn",
+                  disabled: !!busy,
+                  onClick: function () {
+                    setEditing(null);
+                    setConfirming(folder.id);
+                  }
+                }, "Delete")));
+          }))),
+      h("div", { className: "mdlp-actions" },
+        h("button", { className: "mdlp-btn primary", onClick: props.onClose },
+          "Close"))
+    );
+  }
+
   function LookupDialog(props) {
     // Album and track number come from MusicBrainz; title and artist stay
     // as they are unless the catalogue disagreed.
@@ -1639,6 +1815,19 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
       }
     }
 
+    async function cancelJob() {
+      try {
+        await api("POST", "/api/cancel", {});
+        notify("Cancelling… this stops after the current song.");
+      } catch (err) {
+        notify(err.message, "error");
+      }
+    }
+
+    function manageFolders() {
+      setDialog({ type: "folders" });
+    }
+
     async function checkFiles() {
       setBusy("Checking the song files…");
       try {
@@ -1844,6 +2033,8 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
           "Fix covers"),
         h("button", { className: "mdlp-btn", disabled: !!busy, onClick: rewriteFiles },
           "Rewrite files"),
+        h("button", { className: "mdlp-btn", disabled: !!busy, onClick: manageFolders },
+          "Folders"),
         h("button", { className: "mdlp-btn", disabled: !!busy, onClick: findDuplicates },
           "Find duplicates"),
         h("button", { className: "mdlp-btn", disabled: !!busy, onClick: checkFiles },
@@ -1876,7 +2067,15 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
       ),
 
       busy ? h("div", { className: "mdlp-progress" },
-        h("div", null, busy + (progress && progress.label ? " · " + progress.label : "")),
+        h("div", { className: "mdlp-progress-row" },
+          h("span", null,
+            busy + (progress && progress.label ? " · " + progress.label : "")),
+          // Only a pipeline job can be stopped from here; a bridge job is
+          // the request the panel is already waiting on.
+          watching
+            ? h("button", { className: "mdlp-btn", onClick: cancelJob },
+                "Cancel")
+            : null),
         progress && progress.total
           ? h("div", { className: "mdlp-bar" }, h("div", { style: { width: percent + "%" } }))
           : null
@@ -1930,6 +2129,18 @@ var MUSICDLP_CONFIG = __MUSICDLP_CONFIG__;
             onClose: closeDialog,
             onError: function (text) { notify(text, "error"); },
             onDone: function (text) { finish(text); }
+          })
+        : null,
+
+      dialog && dialog.type === "folders"
+        ? h(FolderDialog, {
+            folders: folders,
+            onClose: closeDialog,
+            onInfo: function (text) { notify(text); },
+            onError: function (text) { notify(text, "error"); },
+            onChanged: function () {
+              refreshFolders().then(adoptFolders).catch(function () {});
+            }
           })
         : null,
 

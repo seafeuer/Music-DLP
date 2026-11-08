@@ -203,6 +203,13 @@
   min-height: 18px;
 }
 
+.mdlp-progress-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .mdlp-bar {
   height: 4px;
   background: var(--spice-card, rgba(255, 255, 255, 0.12));
