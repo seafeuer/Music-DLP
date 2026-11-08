@@ -261,3 +261,38 @@ def test_quitting_from_the_tray_does_not_offer_the_tray_again(
     finally:
         main._add_running = False
         main._quitting = False
+
+
+def test_a_tray_that_cannot_be_created_does_not_cancel_without_asking(
+    window, monkeypatch
+):
+    """Choosing "keep working in the tray" must never silently stop the
+    job just because the icon could not be made."""
+    main, _db, _ids = window
+    main._add_running = True
+    asked = []
+
+    def question(*args, **kwargs):
+        asked.append(args)
+        return QMessageBox.No
+
+    try:
+        monkeypatch.setattr(
+            QSystemTrayIcon, "isSystemTrayAvailable", staticmethod(lambda: True)
+        )
+        monkeypatch.setattr(main, "_ask_close_action", lambda: "tray")
+        monkeypatch.setattr(main, "_ensure_window_tray", lambda: False)
+        monkeypatch.setattr(QMessageBox, "question", question)
+        monkeypatch.setattr(
+            main, "_cancel",
+            lambda: (_ for _ in ()).throw(AssertionError("job was cancelled")),
+        )
+
+        event = QCloseEvent()
+        main.closeEvent(event)
+
+        assert asked, "the user should have been asked before cancelling"
+        assert event.isAccepted() is False
+        assert main.isHidden() is False
+    finally:
+        main._add_running = False

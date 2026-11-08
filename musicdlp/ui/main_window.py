@@ -3887,7 +3887,23 @@ class MainWindow(QMainWindow):
                 if action == "back":
                     event.ignore()
                     return
-                # "cancel", or a tray that could not be created after all.
+                if action == "tray":
+                    # The tray said it was available but the icon could not
+                    # be created. Cancelling here would throw the job away
+                    # without a word, which is exactly what the tray choice
+                    # asked not to do, so ask the plain question instead.
+                    reply = QMessageBox.question(
+                        self,
+                        "Job running",
+                        "Music DLP could not add its tray icon. "
+                        "Cancel the job and exit?",
+                        QMessageBox.Yes | QMessageBox.No,
+                        QMessageBox.No,
+                    )
+                    if reply != QMessageBox.Yes:
+                        event.ignore()
+                        return
+                # "cancel"
             else:
                 reply = QMessageBox.question(
                     self,
