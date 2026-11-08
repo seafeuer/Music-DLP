@@ -10,16 +10,20 @@ per song before converting.
 
 ## Status
 
-**Version 2.10.0 — working.** The base app is verified end to end against a
+**Version 2.11.0 — working.** The base app is verified end to end against a
 real library: adding and re-adding links, download, convert, Spotify delivery,
 the detail editor, album art, translation, AI naming, catalogue lookup,
 duplicates, folders, undo, and editing every part of a song after it has
 already been sent to Spotify.
 
-Last verified on 2026-11-05:
+Last verified on 2026-11-08:
 
-- Full test suite passes (665 tests, offscreen Qt included), plus 16 headless
-  tests for the Spotify panel.
+- Full test suite passes (718 tests, offscreen Qt included), plus 20 headless
+  tests for the Spotify panel and a contract test that checks every bridge
+  field the panel reads.
+- The panel was loaded in Spotify 1.3.8.620 on this machine: it reports the
+  bridge as online, lists the real folders and songs, and its new **Check
+  files** action completed against the real library.
 - Editing title, artist, album, track number, and cover rewrites the tags and
   the file name, replaces the Spotify copy, and removes the stale one. The
   audio is not decoded or re-encoded: its stream is byte-for-byte the same
@@ -533,7 +537,21 @@ python -m pytest
 The test suite covers link parsing, filenames, the database, pipeline
 orchestration (with fake services), Spotify copying, legacy import, artwork
 and cover replacement, catalogue lookup, translation, the bridge the Spotify
-panel talks to, and an offscreen Qt smoke test of the main window and dialogs.
+panel talks to, backups and restore, the file fingerprints, and an offscreen
+Qt smoke test of the main window and dialogs.
+
+The Spotify panel has its own headless tests:
+
+```bash
+node --test spicetify/musicdlp-panel/test/panel.test.mjs
+```
+
+**Screenshot baselines** (`tests/baselines/`) compare the main window pixel by
+pixel at three sizes in both themes. They are rendered on the machine that
+created them, so a different Windows font setup or Qt version will differ:
+regenerate them on your own machine with
+`MUSICDLP_UPDATE_BASELINES=1 python -m pytest tests/test_screenshots.py`
+before treating a failure as a regression.
 
 ```
 musicdlp/

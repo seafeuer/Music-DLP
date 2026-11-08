@@ -3,10 +3,9 @@
 Earlier releases were not recorded here. This file starts with the audit
 release.
 
-## Unreleased
+## 2.11.0 — 2026-11-08
 
-Additions from §4 of the 2026-11-05 audit. The version number and the
-packaged build are unchanged until the next release.
+Additions from §4 of the 2026-11-05 audit.
 
 ### Panel
 
