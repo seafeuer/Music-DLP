@@ -48,3 +48,8 @@ Spotify_Local_Files/
 .coverage
 htmlcov/
 test_data/
+
+# Secrets: API keys live here, never in the repo
+.env
+.env.*
+!.env.example
