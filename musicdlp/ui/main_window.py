@@ -27,7 +27,7 @@ from musicdlp.core.db import Database
 from musicdlp.core.errors import AppError, Cancelled
 from musicdlp.core.logging import LogEmitter, QtLogHandler
 from musicdlp.core.models import (
-    ALL_SONGS_ID, BatchItem, Source, TrackRow, is_converted,
+    ALL_SONGS_ID, ERROR, BatchItem, Source, TrackRow, is_converted,
 )
 from musicdlp.core.paths import art_cache_dir, is_writable, pending_job_path
 from musicdlp.services.ffmpeg import FFmpegService
@@ -581,6 +581,13 @@ class MainWindow(QMainWindow):
         )
         self.check_files_action.triggered.connect(self._check_files)
         edit_menu.addAction(self.check_files_action)
+
+        self.retry_failed_action = QAction("Retry everything that failed", self)
+        self.retry_failed_action.setToolTip(
+            "Run the failed songs again, whatever their last step was"
+        )
+        self.retry_failed_action.triggered.connect(self._retry_failed)
+        edit_menu.addAction(self.retry_failed_action)
 
         ai_menu = self.menuBar().addMenu("&AI")
         ask_action = QAction("Name songs with AI…", self)
@@ -1775,6 +1782,7 @@ class MainWindow(QMainWindow):
         )
         self.duplicates_action.setEnabled(not busy)
         self.check_files_action.setEnabled(not busy)
+        self.retry_failed_action.setEnabled(not busy)
         self.sidebar.set_busy(busy)
 
         # New buttons are appended to the tab chain after the status bar.
@@ -3153,6 +3161,47 @@ class MainWindow(QMainWindow):
                 self, "Some files were not sent",
                 "\n".join(errors[:8]),
             )
+
+    def _failed_rows(self) -> list[TrackRow]:
+        """Songs whose last run failed, from any folder or link."""
+        return [
+            row for row in self.db.get_all_track_rows()
+            if row.track.status == ERROR or row.track.sync_error
+        ]
+
+    def _retry_failed(self) -> None:
+        """Run every failed song again in one job.
+
+        The steps are chosen for the batch, not per song: a missing output
+        needs the download and the conversion, while songs that already
+        have their audio only need it rebuilt and sent. The download stage
+        skips a song whose kept download is still usable, so the wider set
+        does not fetch anything twice.
+        """
+        if self._blocked_by_job():
+            return
+        rows = self._failed_rows()
+        if not rows:
+            self.status.set_idle("Nothing has failed — there is nothing to retry.")
+            return
+
+        def has_output(row: TrackRow) -> bool:
+            return any(Path(path).exists() for path in row.track.output_paths)
+
+        missing_audio = any(not has_output(row) for row in rows)
+        if self.ctx.ffmpeg.available:
+            stages = (
+                ["download", "convert", "sync"] if missing_audio
+                else ["convert", "sync"]
+            )
+        else:
+            stages = ["download", "sync"] if missing_audio else ["sync"]
+
+        started, reason = self._start_pipeline(rows, stages, force=True)
+        if not started:
+            self.status.set_idle(reason or "The retry could not be started.")
+            return
+        self.status.set_busy(f"Retrying {counted(len(rows), 'song')}…")
 
     def _retry_track(self, track_id: int) -> None:
         row = self.track_table.model.row_for_id(track_id)

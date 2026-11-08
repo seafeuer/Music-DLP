@@ -296,3 +296,55 @@ def test_a_tray_that_cannot_be_created_does_not_cancel_without_asking(
         assert main.isHidden() is False
     finally:
         main._add_running = False
+
+
+# ------------------------------------------------------- retry everything
+
+
+def test_retrying_everything_reruns_all_failed_songs(window, tmp_path):
+    main, db, ids = window
+    fake = FakePipeline()
+    main.ctx.pipeline = fake
+    for track_id in ids:
+        db.update_track(track_id, status="error", error="nope")
+
+    main._retry_failed()
+
+    assert len(fake.starts) == 1
+    assert [item.track.id for item in fake.starts[0]["items"]] == ids
+    assert fake.starts[0]["force"] is True
+    expected = (
+        ["download", "convert", "sync"]
+        if main.ctx.ffmpeg.available else ["download", "sync"]
+    )
+    assert fake.starts[0]["stages"] == expected
+
+
+def test_a_failed_song_with_its_file_only_needs_a_rebuild_and_send(
+    window, tmp_path
+):
+    main, db, ids = window
+    fake = FakePipeline()
+    main.ctx.pipeline = fake
+    path = tmp_path / "song.mp3"
+    path.write_bytes(b"audio")
+    db.update_track(ids[0], status="error", mp3_path=str(path))
+
+    main._retry_failed()
+
+    expected = (
+        ["convert", "sync"] if main.ctx.ffmpeg.available else ["sync"]
+    )
+    assert fake.starts[0]["stages"] == expected
+    assert [item.track.id for item in fake.starts[0]["items"]] == [ids[0]]
+
+
+def test_retrying_when_nothing_failed_says_so(window):
+    main, db, _ids = window
+    fake = FakePipeline()
+    main.ctx.pipeline = fake
+
+    main._retry_failed()
+
+    assert fake.starts == []
+    assert "nothing to retry" in main.status.status_label.text().lower()
