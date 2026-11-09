@@ -18,7 +18,7 @@ already been sent to Spotify.
 
 Last verified on 2026-11-08:
 
-- Full test suite passes (798 tests, offscreen Qt included), plus 25 headless
+- Full test suite passes (799 tests, offscreen Qt included), plus 25 headless
   tests for the Spotify panel and a contract test that checks every bridge
   field the panel reads.
 - The panel was loaded in Spotify 1.3.8.620 on this machine: it reports the
