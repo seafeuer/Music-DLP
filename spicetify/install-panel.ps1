@@ -67,7 +67,22 @@ function Find-Spicetify {
 
 $spicetify = Find-Spicetify
 if (-not $spicetify) {
-    throw "spicetify.exe was not found. Install Spicetify from https://spicetify.app, then run this again. If it is installed somewhere unusual, add its folder to PATH."
+    Write-Host ''
+    Write-Host 'Spicetify is not installed yet.' -ForegroundColor Yellow
+    Write-Host ''
+    Write-Host 'Spicetify is a separate, free program that lets Spotify load add-ons.'
+    Write-Host 'Music DLP does not include it and cannot install it for you.'
+    Write-Host ''
+    Write-Host 'To put the Music DLP panel inside Spotify:'
+    Write-Host ''
+    Write-Host '  1. Open https://spicetify.app and follow its install steps.'
+    Write-Host '  2. Install Marketplace when Spicetify asks - the panel is a custom app.'
+    Write-Host '  3. Start Spotify once so Spicetify finishes setting itself up.'
+    Write-Host '  4. Run this script again:  .\spicetify\install-panel.ps1'
+    Write-Host ''
+    Write-Host 'Music DLP works without this. The only thing the panel adds is'
+    Write-Host 'mirroring a folder into a Spotify playlist.'
+    exit 1
 }
 
 # ---------------------------------------------------------------- find config
@@ -86,7 +101,14 @@ function Find-MusicDlpConfig {
 
 $configPath = Find-MusicDlpConfig
 if (-not $configPath) {
-    throw "Music DLP's config.json was not found. Run the Music DLP app once first, then run this again."
+    Write-Host ''
+    Write-Host 'Music DLP has not been started yet.' -ForegroundColor Yellow
+    Write-Host ''
+    Write-Host 'It writes the port and token the panel needs the first time it runs.'
+    Write-Host ''
+    Write-Host '  1. Start MusicDLP.exe (or python main.py), then close it.'
+    Write-Host '  2. Run this script again:  .\spicetify\install-panel.ps1'
+    exit 1
 }
 
 Write-Host "Reading settings from $configPath"
@@ -139,7 +161,17 @@ Write-Host "Installed the panel to $dest"
 # ------------------------------------------------------- register custom app
 
 $iniPath = Join-Path $spicetifyRoot 'config-xpui.ini'
-if (-not (Test-Path $iniPath)) { throw "Spicetify config not found at $iniPath" }
+if (-not (Test-Path $iniPath)) {
+    Write-Host ''
+    Write-Host 'Spicetify is installed but has not finished setting itself up.' -ForegroundColor Yellow
+    Write-Host ''
+    Write-Host "Its settings file is missing: $iniPath"
+    Write-Host ''
+    Write-Host '  1. Start Spotify once and let Spicetify prepare the client.'
+    Write-Host '     If it still does not appear, run:  spicetify backup apply'
+    Write-Host '  2. Run this script again:  .\spicetify\install-panel.ps1'
+    exit 1
+}
 
 $ini = Get-Content $iniPath -Raw
 $match = [regex]::Match($ini, '(?m)^custom_apps\s*=\s*(.*)$')

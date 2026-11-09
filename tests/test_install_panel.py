@@ -122,5 +122,49 @@ def test_the_installer_explains_a_missing_config_instead_of_installing(tmp_path)
     )
 
     assert result.returncode != 0
-    assert "config.json" in (result.stderr + result.stdout)
-    assert "Run the Music DLP app once" in (result.stderr + result.stdout)
+    output = result.stderr + result.stdout
+    assert "has not been started yet" in output
+    assert "MusicDLP.exe" in output
+    assert "Run this script again" in output
+
+
+@pytest.mark.skipif(os.name != "nt", reason="the installer is PowerShell")
+def test_the_installer_explains_that_spicetify_is_a_separate_download(tmp_path):
+    powershell = _powershell()
+    if powershell is None:
+        pytest.skip("PowerShell is not available")
+
+    home = tmp_path / "home"
+    (home / "data").mkdir(parents=True)
+    (home / "data" / "config.json").write_text(
+        json.dumps({"first_run_done": True}), encoding="utf-8"
+    )
+
+    # No spicetify.exe anywhere Find-Spicetify looks.
+    env = os.environ.copy()
+    env["APPDATA"] = str(tmp_path / "appdata")
+    env["LOCALAPPDATA"] = str(tmp_path / "localappdata")
+    env["USERPROFILE"] = str(tmp_path / "profile")
+    env["MUSICDLP_HOME"] = str(home)
+    env["PATH"] = r"C:\Windows\System32;C:\Windows"
+    env.pop("PROGRAMFILES", None)
+    env.pop("PROGRAMFILES(X86)", None)
+
+    result = subprocess.run(
+        [
+            powershell, "-NoProfile", "-ExecutionPolicy", "Bypass",
+            "-File", str(SCRIPT), "-SkipApply",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    output = result.stderr + result.stdout
+    assert result.returncode != 0
+    assert "Spicetify is not installed yet" in output
+    assert "https://spicetify.app" in output
+    assert "Music DLP works without this" in output
+    # Nothing was written: no panel was installed without Spicetify.
+    assert not (tmp_path / "appdata" / "spicetify" / "CustomApps").exists()

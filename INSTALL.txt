@@ -12,9 +12,12 @@ REQUIREMENTS
 ------------
 
 1. Windows 10 or 11
-2. FFmpeg (required for conversion)
+2. FFmpeg (required for conversion; already inside the release ZIP)
 3. Optional: Spotify Desktop, for Local Files delivery
-4. Python 3.10 or newer (only if running from source; the .exe includes it)
+4. Optional: Spicetify and Marketplace, only for the panel inside Spotify.
+   Spicetify is a separate program from spicetify.app and is NOT included
+   in this download.
+5. Python 3.10 or newer (only if running from source; the .exe includes it)
 
 
 QUICK START (the .exe)
@@ -31,9 +34,9 @@ QUICK START (the .exe)
    steps once: Spotify -> Settings -> Show local files -> Add a source ->
    choose the Music DLP Spotify folder.
 5. Optional, inside Spotify: install Spicetify and Marketplace from
-   https://spicetify.app, start Music DLP once and close it, then run
-   .\spicetify\install-panel.ps1 from this folder. Start Spotify and open
-   Music DLP in the left navigation bar.
+   https://spicetify.app (a separate program, not included here), start
+   Music DLP once and close it, then run .\spicetify\install-panel.ps1 from
+   this folder. Start Spotify and open Music DLP in the left navigation bar.
 
 Python is not needed for the .exe. The rest of this file explains the
 source install and every step in more detail.
@@ -161,15 +164,16 @@ THE PANEL INSIDE SPOTIFY (optional)
 
 Spotify will not let another program add local files to a playlist, but
 Spicetify runs inside the client and can. The "spicetify" folder next to
-this file holds the panel and its installer.
+this file holds the panel and its installer. It does not hold Spicetify
+itself: install that from https://spicetify.app first, together with
+Marketplace. Music DLP installs neither of them for you.
 
   1. Install Spicetify (https://spicetify.app) and Marketplace.
   2. Start Music DLP once, so it writes its settings, then close it.
   3. In PowerShell, from this folder:
        .\spicetify\install-panel.ps1
-     The installer finds spicetify.exe on PATH or in the usual install
-     folders. If it cannot find it, add the folder that holds spicetify.exe
-     to PATH and run the script again.
+     If Spicetify or Music DLP is missing, the script says which step is
+     left instead of failing quietly.
   4. Start Spotify. "Music DLP" appears in the left navigation bar.
 
 The installer closes Spotify while it applies the theme. The panel talks to

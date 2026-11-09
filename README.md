@@ -119,8 +119,11 @@ Last verified on 2026-11-08:
 
 - Windows 10/11
 - Python 3.10+ (for running from source)
-- **FFmpeg** — needed for conversion and tagging
+- **FFmpeg** — needed for conversion and tagging (included in the release zip)
 - Optional: Spotify Desktop, for Local Files delivery
+- Optional: [Spicetify](https://spicetify.app) and Marketplace, only for the
+  panel inside Spotify. They are a separate download and are **not**
+  included in Music DLP.
 
 ## Install and run
 
@@ -129,6 +132,10 @@ Last verified on 2026-11-08:
 extract it somewhere you can write to, and run `MusicDLP.exe`. Python and
 the app's libraries are inside it. FFmpeg is bundled in the release; the
 first-run wizard can also install it for you.
+
+The zip contains the app, FFmpeg, the panel sources and the panel installer.
+It does not contain Spotify or Spicetify, and it does not change Spotify or
+any other program by itself.
 
 **From source:**
 
@@ -459,11 +466,15 @@ download without leaving Spotify, and mirror a folder into a playlist.
 
 ### Installing it
 
+The panel is optional. Music DLP already does everything except writing to a
+Spotify playlist; the panel adds that from inside the client.
+
 1. Install [Spicetify](https://spicetify.app) and Marketplace first, and
-   confirm they work.
+   confirm they work. **Spicetify is a separate program.** It is not bundled
+   with Music DLP, and Music DLP does not install it.
 2. **Start Music DLP once** (and close it again). It writes the settings
    file the panel installer reads.
-3. From the project folder, run:
+3. From the folder you extracted, run:
 
    ```powershell
    .\spicetify\install-panel.ps1
@@ -471,10 +482,10 @@ download without leaving Spotify, and mirror a folder into a playlist.
 
 4. Start Spotify. **Music DLP** appears in the left nav.
 
-The installer finds `spicetify.exe` on `PATH` or in the usual install
-folders. If it says the CLI was not found, add its folder to `PATH` and run
-the script again. It closes Spotify while it applies the theme, so do it
-when you are not listening.
+If Spicetify or Music DLP has not been run yet, the installer stops and
+prints the steps that are missing instead of failing silently. It finds
+`spicetify.exe` on `PATH` or in the usual install folders. It closes Spotify
+while it applies the theme, so do it when you are not listening.
 
 The installer copies the panel into Spicetify's `CustomApps` folder, writes
 the port and token into it, registers it, and applies the theme. Changing the
